@@ -34,6 +34,7 @@
 //!   classes, `group_sets`, modifier types, comparison operator names) was
 //!   verified directly against this crate's pinned DuckDB build, not guessed.
 
+use crate::sql::SYS_STATS_FUNCTIONS;
 use anyhow::{Context, Result};
 use arrow::record_batch::RecordBatch;
 use serde_json::Value;
@@ -87,9 +88,7 @@ pub(crate) fn resolve_edges(cli_edges: &[String]) -> Result<Vec<Edge>> {
         "no edges resolved for the federated query: no --edge/SIGIRO_EDGES override was \
          given, and tailnet discovery found no peer tagged tag:sigiro-edge. Refusing to run \
          a federated query against zero edges — pass --edge name=host:port, set SIGIRO_EDGES, \
-         or tag a tailnet peer tag:sigiro-edge. `sigiro query` only federates self-hosted \
-         edges; to query hosted sigiro.com or one local server, use `sigiro mcp` or POST \
-         the SQL to /v1/query (see https://sigiro.com/docs/reference/cli#query)."
+         or tag a tailnet peer tag:sigiro-edge."
     );
 
     // ponytail: best-effort textual normalization only (lowercase +
@@ -269,9 +268,15 @@ impl NullOrder {
     }
 }
 
+// The `sys_*` surface this module pushes to each edge is
+// `crate::sql::SYS_STATS_FUNCTIONS`, imported at the top of this file. It is
+// defined next to the firewall that enforces it so the coordinator's push list
+// and the gate's allowlist cannot drift apart.
+
 /// The FROM relation of a federatable query.
 ///
-/// The relation is rendered into the SQL pushed to each edge (see
+/// The two variants differ in exactly one way that matters downstream: how
+/// the relation is rendered into the SQL pushed to each edge (see
 /// [`FromRelation::render`]). Everything else in the pipeline — projection,
 /// WHERE, GROUP BY, aggregate partial/fold — is relation-agnostic and works
 /// off column names alone.
@@ -279,6 +284,8 @@ impl NullOrder {
 pub enum FromRelation {
     /// A `sigiro_*` DuckLake table, e.g. `sigiro_spans`.
     Table(String),
+    /// A `sys_*` host-statistics table function, e.g. `sys_disk_info`.
+    SysStats(String),
 }
 
 impl FromRelation {
@@ -289,20 +296,32 @@ impl FromRelation {
     /// default catalog, so an unqualified name fails there ("Table
     /// sigiro_spans does not exist! Did you mean lake.sigiro_spans?").
     ///
+    /// A `sys_*` table function is NOT in the `lake` catalog — it is not in
+    /// any catalog — so qualifying it that way fails at the edge for the
+    /// mirror-image reason. It renders as a bare call instead.
     fn render(&self) -> String {
         match self {
             Self::Table(table) => format!("{}.{}", quote_ident("lake"), quote_ident(table)),
+            Self::SysStats(func) => format!("{}()", quote_ident(func)),
         }
     }
 
     /// The name a column qualifier may legitimately use for this relation
-    /// (`sigiro_spans.service`). Used by
+    /// (`sigiro_spans.service` / `sys_disk_info.mount_point`). Used by
     /// `column_ref_name` to tell a real table qualifier apart from struct
     /// field access.
     fn qualifier_name(&self) -> &str {
         match self {
             Self::Table(table) => table,
+            Self::SysStats(func) => func,
         }
+    }
+
+    /// True when this relation is stored telemetry with a `timestamp` column,
+    /// and therefore subject to the time-bound requirement. Host statistics
+    /// are instantaneous and have no timestamp to bound.
+    fn is_time_series(&self) -> bool {
+        matches!(self, Self::Table(_))
     }
 }
 
@@ -337,7 +356,7 @@ impl ParsedQuery {
 /// that shape — never silently degrades (e.g. never falls back to
 /// avg-of-avgs for an unsupported case).
 fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
-    let escaped = sigiro_core::sql::escape_sql_string(sql);
+    let escaped = crate::sql::escape_sql_string(sql);
     let json_text: String = conn
         .query_row(
             &format!("SELECT json_serialize_sql('{escaped}')"),
@@ -403,8 +422,8 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
     let from_table = field(node, "from_table")?;
     let from_type = field_str(from_table, "type")?;
     anyhow::ensure!(
-        from_type == "BASE_TABLE",
-        "federated queries support exactly one base table in FROM \
+        matches!(from_type, "BASE_TABLE" | "TABLE_FUNCTION"),
+        "federated queries support exactly one base table or sys_* table function in FROM \
          (no JOIN, subquery, or CTE reference); got a {from_type} relation"
     );
     anyhow::ensure!(
@@ -439,7 +458,71 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
             );
             FromRelation::Table(table)
         }
-        _ => unreachable!("from_type was checked above"),
+        // A table function's name lives at `from_table.function.function_name`
+        // — NOT at `table_name`, which does not exist on this node shape (AST
+        // shape verified directly against this crate's pinned DuckDB build via
+        // `json_serialize_sql`, same as the rest of this module).
+        _ => {
+            let function = field(from_table, "function")?;
+            let catalog = field_str(function, "catalog")?;
+            anyhow::ensure!(
+                catalog.is_empty(),
+                "cross-catalog function references are not supported in a federated query; \
+                 got catalog {catalog:?}"
+            );
+            let schema = field_str(function, "schema")?;
+            anyhow::ensure!(
+                schema.is_empty() || schema.eq_ignore_ascii_case("main"),
+                "unexpected schema qualifier {schema:?} on the FROM function — expected unqualified or main."
+            );
+            let func = field_str(function, "function_name")?.to_string();
+            anyhow::ensure!(
+                SYS_STATS_FUNCTIONS.contains(&func.to_uppercase().as_str()),
+                "federated queries may only target sigiro_* tables or the sys_* host-statistics \
+                 functions ({}); got {func:?}",
+                SYS_STATS_FUNCTIONS.join(", ").to_lowercase()
+            );
+            // These functions take no arguments. Accepting arguments here
+            // would push an unvalidated expression to every edge, so a call
+            // that has any is rejected outright rather than silently ignored.
+            //
+            // Every field read below is REQUIRED, never defaulted: each one is
+            // a guard on what gets pushed to every edge, so a missing or
+            // wrong-typed field means this build's AST is not the shape these
+            // checks were written against. Defaulting to the permitted value
+            // (`children` absent => 0 args, `distinct` absent => false,
+            // `with_ordinality` absent => WITHOUT_ORDINALITY) would turn a
+            // DuckDB parser change into a SILENTLY WEAKENED guard rather than
+            // a loud failure — the same name-only-allowlist hole this arm
+            // exists to close. Fail loud instead; `field`/`field_str` already
+            // name the missing key.
+            let arg_count = field(function, "children")?
+                .as_array()
+                .context("TABLE_FUNCTION children is not an array")?
+                .len();
+            anyhow::ensure!(
+                arg_count == 0,
+                "{func}() takes no arguments in a federated query; got {arg_count}"
+            );
+            anyhow::ensure!(
+                field(function, "filter")?.is_null(),
+                "FILTER is not supported on a federated {func}() call"
+            );
+            anyhow::ensure!(
+                !field(function, "distinct")?
+                    .as_bool()
+                    .context("TABLE_FUNCTION distinct is not a boolean")?,
+                "DISTINCT is not supported on a federated {func}() call"
+            );
+            // `WITH ORDINALITY` adds a synthetic column the coordinator's
+            // fold has never seen; reject rather than mis-project it.
+            anyhow::ensure!(
+                field_str(from_table, "with_ordinality")?
+                    .eq_ignore_ascii_case("WITHOUT_ORDINALITY"),
+                "WITH ORDINALITY is not supported in a federated query"
+            );
+            FromRelation::SysStats(func)
+        }
     };
     let table = from.qualifier_name().to_string();
     let table_alias = from_table
@@ -478,9 +561,7 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
     for expr in &group_expressions {
         anyhow::ensure!(
             field_str(expr, "class")? == "COLUMN_REF",
-            "GROUP BY keys must be plain columns in a federated query — an expression key \
-             (date_trunc(...), time_bucket(...), epoch(...)/N) is not reconstructed for the \
-             per-edge push. Query a single edge directly (POST the SQL to /v1/query)."
+            "GROUP BY keys must be plain columns in a federated query"
         );
         group_keys.push(column_ref_name(expr, &table, &table_alias)?);
     }
@@ -539,13 +620,10 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
                     field_str(limit_expr, "class")? == "CONSTANT",
                     "LIMIT must be a literal integer in a federated query"
                 );
-                let literal = field(limit_expr, "literal")?;
-                anyhow::ensure!(
-                    field_str(literal, "kind")? == "INTEGER",
-                    "LIMIT literal is not an integer"
-                );
-                let n = field_str(literal, "text")?
-                    .parse::<i64>()
+                let n = limit_expr
+                    .get("value")
+                    .and_then(|v| v.get("value"))
+                    .and_then(Value::as_i64)
                     .context("LIMIT literal is not an integer")?;
                 limit = Some(n);
             }
@@ -595,22 +673,14 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
                     .is_some_and(|o| !o.is_empty());
                 anyhow::ensure!(!has_order_bys, "ordered aggregates are not federatable");
                 let function_name = field_str(item, "function_name")?.to_lowercase();
-                // DuckDB v2 represents each function argument as a named
-                // wrapper around its expression. Federated aggregates accept
-                // positional expressions only.
-                let arguments = field(item, "arguments")?
+                // Required, not defaulted: `single_column_arg` enforces
+                // "exactly one plain column" against this list, so an absent
+                // `children` read as empty would turn a real argument list
+                // into a length-0 check and mis-push the aggregate.
+                let children = field(item, "children")?
                     .as_array()
-                    .context("aggregate arguments is not an array")?;
-                let children = arguments
-                    .iter()
-                    .map(|argument| {
-                        anyhow::ensure!(
-                            field_str(argument, "name")?.is_empty(),
-                            "named aggregate arguments are not federatable"
-                        );
-                        Ok(field(argument, "expression")?.clone())
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                    .context("aggregate children is not an array")?
+                    .clone();
                 let (kind, arg) = match function_name.as_str() {
                     "count_star" => (AggKind::Count, None),
                     "count" => (
@@ -633,20 +703,9 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
                         AggKind::Avg,
                         Some(single_column_arg(&children, &table, &table_alias)?),
                     ),
-                    // Do NOT call this an aggregate: we parse with
-                    // json_serialize_sql, which is parse-only, and aggregate-ness
-                    // is resolved at BIND time — so a scalar call like
-                    // round(...) or json_extract_string(...) arrives as the same
-                    // "FUNCTION" class as sum(...). Claiming "aggregate round(...)"
-                    // sent a real debugging session looking for an aggregate that
-                    // was never there. Name both possibilities and the way out.
                     other => anyhow::bail!(
-                        "{other}(...) cannot be federated across edges. Foldable aggregates are \
-                         limited to count/sum/min/max/avg, and scalar functions (round, \
-                         json_extract_string, date_trunc, casts, arithmetic) are not \
-                         reconstructed for the per-edge push at all. Query a single edge \
-                         directly (POST the SQL to /v1/query), or reduce this to a plain \
-                         column/foldable-aggregate SELECT."
+                        "aggregate {other}(...) is not federatable across edges; only \
+                         count/sum/min/max/avg are foldable. Run per-edge or narrow the query."
                     ),
                 };
                 let alias = item
@@ -818,7 +877,7 @@ fn is_null_field(v: &Value, key: &str) -> bool {
 fn deparse_expr(v: &Value, table: &str, table_alias: &str) -> Result<String> {
     match field_str(v, "class")? {
         "COLUMN_REF" => Ok(quote_ident(&column_ref_name(v, table, table_alias)?)),
-        "CONSTANT" => deparse_constant(field(v, "literal")?),
+        "CONSTANT" => deparse_constant(field(v, "value")?),
         "COMPARISON" => {
             let op = comparison_op(field_str(v, "type")?)?;
             let left = deparse_expr(field(v, "left")?, table, table_alias)?;
@@ -862,29 +921,98 @@ fn comparison_op(t: &str) -> Result<&'static str> {
     })
 }
 
-fn deparse_constant(literal: &Value) -> Result<String> {
-    let kind = field_str(literal, "kind")?;
-    let text = field_str(literal, "text")?;
-    match kind {
-        "NULL_LITERAL" => Ok("NULL".to_string()),
-        "STRING" => Ok(format!("'{}'", sigiro_core::sql::escape_sql_string(text))),
-        "BOOLEAN" => match text {
-            "true" => Ok("TRUE".to_string()),
-            "false" => Ok("FALSE".to_string()),
-            _ => anyhow::bail!("invalid BOOLEAN literal text: {text:?}"),
-        },
-        "INTEGER" => {
-            text.parse::<i128>()
-                .with_context(|| format!("invalid INTEGER literal text: {text:?}"))?;
-            Ok(text.to_string())
-        }
-        "NUMERIC" => {
-            text.parse::<f64>()
-                .with_context(|| format!("invalid NUMERIC literal text: {text:?}"))?;
-            Ok(text.to_string())
-        }
-        other => anyhow::bail!("unsupported WHERE literal kind: {other}"),
+fn deparse_constant(value: &Value) -> Result<String> {
+    // `is_null` is checked FIRST and is required: a NULL constant carries no
+    // `value` key at all (verified against this crate's pinned DuckDB build),
+    // so the read below would fail on it. Order matters here.
+    if field(value, "is_null")?
+        .as_bool()
+        .context("CONSTANT is_null is not a boolean")?
+    {
+        return Ok("NULL".to_string());
     }
+    let type_obj = value.get("type").context("CONSTANT missing type")?;
+    // Required, not defaulted: a placeholder id would fall through this match
+    // to the "unsupported constant type" bail, reporting a fabricated type
+    // name instead of the real "the AST has no id field" cause.
+    let type_id = field_str(type_obj, "id")?;
+    let raw = value.get("value").context("CONSTANT missing value")?;
+    match type_id {
+        "VARCHAR" => {
+            let s = raw.as_str().context("VARCHAR constant is not a string")?;
+            Ok(format!("'{}'", crate::sql::escape_sql_string(s)))
+        }
+        // Required, not defaulted: a non-boolean here silently deparsed to
+        // FALSE, pushing a WHERE clause that means something the user never
+        // wrote.
+        "BOOLEAN" => Ok(
+            if raw.as_bool().context("BOOLEAN constant is not a boolean")? {
+                "TRUE"
+            } else {
+                "FALSE"
+            }
+            .to_string(),
+        ),
+        "TINYINT" | "SMALLINT" | "INTEGER" | "BIGINT" | "UTINYINT" | "USMALLINT" | "UINTEGER"
+        | "UBIGINT" | "DOUBLE" | "FLOAT" => Ok(raw.to_string()),
+        // DECIMAL is serialized as an unscaled mantissa (`value`) + a separate
+        // `type_info.scale` — e.g. the literal `1.5` comes back as
+        // `{"type_info":{"scale":1,...},"value":15}`. Emitting the raw
+        // mantissa (as the old code did) reproduces `15`, ten times too big.
+        // Reconstruct the actual decimal text from mantissa + scale using
+        // integer string manipulation only (no float involved, so no
+        // rounding risk).
+        "DECIMAL" => {
+            let type_info = type_obj
+                .get("type_info")
+                .context("DECIMAL constant missing type_info")?;
+            deparse_decimal(raw, type_info)
+        }
+        // HUGEINT/UHUGEINT (128-bit) constants are serialized as a
+        // `{"upper":..,"lower":..}` object, not a JSON number — splicing that
+        // object's Display/to_string() into SQL text (as the old code did via
+        // the shared `raw.to_string()` arm) produces garbage SQL, not a wrong
+        // number. Fail loud instead of ever doing that.
+        "HUGEINT" | "UHUGEINT" => anyhow::bail!(
+            "unsupported WHERE literal type {type_id}: 128-bit integer literals are serialized \
+             by DuckDB as a {{upper,lower}} object rather than a plain number and cannot be \
+             safely deparsed into SQL text by this planner — narrow the literal to fit a 64-bit \
+             integer"
+        ),
+        other => anyhow::bail!("unsupported WHERE literal type: {other}"),
+    }
+}
+
+/// Reconstruct a DECIMAL literal's exact text from its unscaled mantissa and
+/// scale (e.g. mantissa `155`, scale `1` -> `"15.5"`). Pure integer/string
+/// arithmetic — never round-trips through a float, so it cannot introduce the
+/// rounding error a `mantissa as f64 / 10f64.powi(scale)` approach could.
+fn deparse_decimal(raw: &Value, type_info: &Value) -> Result<String> {
+    let scale = type_info
+        .get("scale")
+        .and_then(Value::as_i64)
+        .context("DECIMAL type_info missing scale")?;
+    anyhow::ensure!(
+        scale >= 0,
+        "DECIMAL literal has an unsupported negative scale {scale}"
+    );
+    let mantissa = raw.as_i64().with_context(|| {
+        format!(
+            "DECIMAL literal mantissa {raw:?} does not fit in a 64-bit integer — not federatable"
+        )
+    })?;
+    if scale == 0 {
+        return Ok(mantissa.to_string());
+    }
+    let scale = scale as usize;
+    let negative = mantissa < 0;
+    let digits = mantissa.unsigned_abs().to_string();
+    let digits = format!("{digits:0>width$}", width = scale + 1);
+    let (int_part, frac_part) = digits.split_at(digits.len() - scale);
+    Ok(format!(
+        "{}{int_part}.{frac_part}",
+        if negative { "-" } else { "" }
+    ))
 }
 
 /// Generic recursive scan of the (already-validated) WHERE AST for any
@@ -1089,7 +1217,9 @@ fn build_partial_sql(parsed: &ParsedQuery, row_cap: usize) -> String {
     for col in passthrough_extra_order_cols(parsed) {
         select_parts.push(quote_ident(&col));
     }
-    // The FROM relation renders itself as a DuckLake catalog-qualified table.
+    // The FROM relation renders itself — a DuckLake table catalog-qualified
+    // as `lake.<table>`, a `sys_*` function as a bare call (see
+    // `FromRelation::render` for why each form is required at the edge). The
     // final fold (build_final_sql) runs on local materialized tables, so it
     // is never qualified.
     let mut inner = format!(
@@ -1169,53 +1299,20 @@ fn build_final_sql(parsed: &ParsedQuery, part_tables: &[String]) -> String {
 // Scatter / gather orchestration.
 // ---------------------------------------------------------------------------
 
-// Keep the coordinator's fanout bounded even when edge discovery returns a
-// large tailnet. These are deliberately simple process-wide limits: the
-// query timeout still bounds each individual edge request.
-const MAX_FEDERATED_EDGES: usize = 64;
-const MAX_IN_FLIGHT_EDGE_FETCHES: usize = 8;
-
-fn check_edge_count(edges: &[Edge]) -> Result<()> {
-    anyhow::ensure!(
-        edges.len() <= MAX_FEDERATED_EDGES,
-        "federated query resolved {} edges, exceeding the maximum of {}; refusing to spawn edge fetches",
-        edges.len(),
-        MAX_FEDERATED_EDGES
-    );
-    Ok(())
-}
-
-fn add_edge_rows(total_rows: &mut usize, edge_rows: usize, row_cap: usize) -> Result<()> {
-    *total_rows = total_rows
-        .checked_add(edge_rows)
-        .context("aggregate federated row count overflowed usize")?;
-    anyhow::ensure!(
-        *total_rows <= row_cap,
-        "federated query returned {} rows across edge batches, exceeding the aggregate row cap of {}; narrow the query or raise SIGIRO_QUERY_ROW_CAP",
-        *total_rows,
-        row_cap
-    );
-    Ok(())
-}
-
 /// Wrap `inner_sql` in the `quack_query(...)` remote-exec call for `edge`.
 /// Mirrors `tests/quack_query_surface_test.rs`'s `wrap_quack_query` — the
 /// documented client pattern (`quack_query`, not `ATTACH`; see module docs).
-fn wrap_quack_query(
-    edge: &Edge,
-    inner_sql: &str,
-    token: Option<&crate::quack::QuackToken>,
-) -> String {
+fn wrap_quack_query(edge: &Edge, inner_sql: &str, token: Option<&str>) -> String {
     let mut sql = format!(
         "SELECT * FROM quack_query('quack://{}:{}', '{}'",
         edge.host,
         edge.port,
-        sigiro_core::sql::escape_sql_string(inner_sql)
+        crate::sql::escape_sql_string(inner_sql)
     );
     if let Some(t) = token {
         sql.push_str(&format!(
             ", token := '{}'",
-            sigiro_core::sql::escape_sql_string(t.as_ref())
+            crate::sql::escape_sql_string(t)
         ));
     }
     sql.push_str(", disable_ssl := true);");
@@ -1231,17 +1328,17 @@ fn wrap_quack_query(
 async fn fetch_edge(
     edge: Edge,
     partial_sql: String,
-    token: Option<crate::quack::QuackToken>,
+    token: Option<String>,
     timeout: Duration,
     effective_cap: i64,
 ) -> Result<(String, Option<RecordBatch>), (String, String)> {
-    let wrapped = wrap_quack_query(&edge, &partial_sql, token.as_ref());
+    let wrapped = wrap_quack_query(&edge, &partial_sql, token.as_deref());
     let edge_name = edge.name;
     let log_name = edge_name.clone();
     let (handle_tx, handle_rx) = tokio::sync::oneshot::channel::<Arc<duckdb::InterruptHandle>>();
 
     let mut task = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<RecordBatch>> {
-        let conn = crate::pool::open_duckdb()
+        let conn = duckdb::Connection::open_in_memory()
             .context("failed to open embedded DuckDB connection for edge fetch")?;
         conn.execute_batch("LOAD quack;")
             .context("failed to load the quack extension for the edge fetch connection")?;
@@ -1317,23 +1414,25 @@ pub async fn run_federated_query(
     allow_full_scan: bool,
 ) -> Result<Vec<Value>> {
     let edges = resolve_edges(cli_edges)?;
-    check_edge_count(&edges)?;
     tracing::info!(
         edges = ?edges.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
         "resolved federated query edges"
     );
 
-    let coord =
-        crate::pool::open_duckdb().context("failed to open the embedded coordinator connection")?;
+    let coord = duckdb::Connection::open_in_memory()
+        .context("failed to open the embedded coordinator connection")?;
     coord
         .execute_batch("INSTALL json; LOAD json;")
         .context("failed to load the json extension needed to plan the federated query")?;
 
     let parsed = plan_query(&coord, sql)?;
-    // The time-bound requirement stops an un-prunable scan of stored telemetry
-    // across every edge.
+    // The time-bound requirement exists to stop an un-prunable scan of stored
+    // telemetry across every edge. A `sys_*` host-statistics call is a live
+    // point-in-time reading with no timestamp column and a handful of rows per
+    // edge, so there is nothing to bound and nothing to blow up — requiring
+    // `--full-scan` there would be a demand the user cannot satisfy.
     anyhow::ensure!(
-        parsed.has_time_bound || allow_full_scan,
+        !parsed.from.is_time_series() || parsed.has_time_bound || allow_full_scan,
         "federated query has no bound on the timestamp column in its WHERE clause — this is the \
          un-prunable cross-edge blowup case. Add a WHERE timestamp filter, or pass --full-scan \
          to run anyway."
@@ -1343,14 +1442,15 @@ pub async fn run_federated_query(
     check_limit_within_cap(&parsed, row_cap)?;
     let effective_cap = effective_edge_cap(&parsed, row_cap);
     let timeout = Duration::from_secs(crate::config::query_timeout_secs()?);
-    let token = crate::config::quack_token()?;
+    let raw_token = crate::config::QUACK_TOKEN
+        .value()
+        .context("failed to read SIGIRO_QUACK_TOKEN")?;
+    let token = (!raw_token.is_empty()).then_some(raw_token);
     let partial_sql = build_partial_sql(&parsed, row_cap);
     tracing::debug!(partial_sql, "federated query per-edge partial");
 
     let mut set = tokio::task::JoinSet::new();
-    let mut next_edge = 0;
-    while next_edge < edges.len() && next_edge < MAX_IN_FLIGHT_EDGE_FETCHES {
-        let edge = &edges[next_edge];
+    for edge in &edges {
         set.spawn(fetch_edge(
             edge.clone(),
             partial_sql.clone(),
@@ -1358,22 +1458,13 @@ pub async fn run_federated_query(
             timeout,
             effective_cap,
         ));
-        next_edge += 1;
     }
 
     let mut edge_batches: Vec<(String, RecordBatch)> = Vec::new();
     let mut failures: Vec<(String, String)> = Vec::new();
-    let mut aggregate_rows = 0;
-    let mut aggregate_limit_error = None;
     while let Some(joined) = set.join_next().await {
         match joined {
-            Ok(Ok((name, Some(batch)))) => {
-                if let Err(error) = add_edge_rows(&mut aggregate_rows, batch.num_rows(), row_cap) {
-                    aggregate_limit_error = Some(error.to_string());
-                } else {
-                    edge_batches.push((name, batch));
-                }
-            }
+            Ok(Ok((name, Some(batch)))) => edge_batches.push((name, batch)),
             Ok(Ok((_name, None))) => {}
             Ok(Err((name, msg))) => failures.push((name, msg)),
             Err(join_err) => failures.push((
@@ -1381,25 +1472,6 @@ pub async fn run_federated_query(
                 format!("task panicked: {join_err}"),
             )),
         }
-        if aggregate_limit_error.is_some() {
-            set.abort_all();
-            break;
-        }
-        if next_edge < edges.len() {
-            let edge = &edges[next_edge];
-            set.spawn(fetch_edge(
-                edge.clone(),
-                partial_sql.clone(),
-                token.clone(),
-                timeout,
-                effective_cap,
-            ));
-            next_edge += 1;
-        }
-    }
-
-    if let Some(error) = aggregate_limit_error {
-        anyhow::bail!("{error}");
     }
 
     anyhow::ensure!(
@@ -1428,14 +1500,14 @@ pub async fn run_federated_query(
     let mut part_tables = Vec::new();
     for (idx, (edge_name, batch)) in edge_batches.into_iter().enumerate() {
         let table = format!("part_{idx}_{}", sanitize_ident(&edge_name));
-        let registration = duckdb::vtab::arrow::ArrowBatchRegistration::new(batch);
+        let params = duckdb::vtab::arrow::arrow_recordbatch_to_query_params(batch);
         coord
             .execute(
                 &format!(
-                    "CREATE TEMP TABLE {} AS SELECT * FROM arrow(?)",
+                    "CREATE TEMP TABLE {} AS SELECT * FROM arrow(?, ?)",
                     quote_ident(&table)
                 ),
-                [&registration],
+                params,
             )
             .with_context(|| {
                 format!("failed to materialize edge {edge_name}'s result into the coordinator")
@@ -1455,14 +1527,6 @@ pub async fn run_federated_query(
         .as_ref()
         .map(duckdb::Statement::column_names)
         .unwrap_or_default();
-    let column_types = rows
-        .as_ref()
-        .map(|statement| {
-            (0..statement.column_count())
-                .map(|idx| statement.column_type(idx))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
     let mut results = Vec::new();
     while let Some(row) = rows
         .next()
@@ -1470,11 +1534,50 @@ pub async fn run_federated_query(
     {
         let mut obj = serde_json::Map::new();
         for (i, name) in column_names.iter().enumerate() {
-            let val = crate::duckdb_json::duckdb_row_value_to_json(row, i, &column_types[i])
+            let val = row
+                .get_ref(i)
                 .context("failed to read a coordinator fold result column")?;
-            obj.insert(name.clone(), val);
+            obj.insert(name.clone(), crate::sql::duckdb_value_to_json(val));
         }
         results.push(Value::Object(obj));
     }
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn type_info(scale: i64) -> Value {
+        json!({ "scale": scale })
+    }
+
+    /// `deparse_decimal` reconstructs the exact literal text from DuckDB's
+    /// unscaled-mantissa + scale serialization. The E2E's `duration > 15.5`
+    /// assertion only proves the boundary lands somewhere between 15 and 16
+    /// — it can't tell "15.5" from a truncated "15" (a 10x-scale bug that
+    /// coincidentally still excludes 15 for other reasons). This asserts the
+    /// produced SQL literal text directly.
+    #[test]
+    fn deparse_decimal_reconstructs_exact_literal() {
+        assert_eq!(deparse_decimal(&json!(15), &type_info(1)).unwrap(), "1.5");
+        assert_eq!(deparse_decimal(&json!(5), &type_info(2)).unwrap(), "0.05");
+        assert_eq!(deparse_decimal(&json!(-15), &type_info(1)).unwrap(), "-1.5");
+        assert_eq!(deparse_decimal(&json!(150), &type_info(2)).unwrap(), "1.50");
+        assert_eq!(deparse_decimal(&json!(42), &type_info(0)).unwrap(), "42");
+    }
+
+    /// A mantissa that doesn't fit in a 64-bit integer (e.g. a
+    /// HUGEINT-backed DECIMAL) must fail loud, never silently
+    /// truncate/wrap/misrender.
+    #[test]
+    fn deparse_decimal_bails_on_oversized_mantissa() {
+        let oversized = json!(u64::MAX);
+        let err = deparse_decimal(&oversized, &type_info(2)).unwrap_err();
+        assert!(
+            err.to_string().contains("does not fit"),
+            "expected a 'does not fit' error, got: {err}"
+        );
+    }
 }

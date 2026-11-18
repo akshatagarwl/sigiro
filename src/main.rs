@@ -7,10 +7,6 @@ use sigiro::responses::HealthResponse;
 use sigiro::{data_dir, inserter::MsgRouter, pool::ProjectPool, profiling::start_profiling};
 use std::sync::atomic::AtomicBool;
 
-#[cfg(not(target_os = "android"))]
-#[global_allocator]
-static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Cyan.on_default().bold())
     .usage(styling::AnsiColor::Cyan.on_default().bold())
@@ -18,14 +14,13 @@ const STYLES: styling::Styles = styling::Styles::styled()
     .placeholder(styling::AnsiColor::Yellow.on_default());
 
 #[derive(Parser)]
-#[command(name = "sigiro", version = env!("SIGIRO_VERSION"), about = "Observability for AI agents", styles = STYLES)]
+#[command(name = "sigiro", version, about = "Observability for AI agents", styles = STYLES)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
-    /// Bearer token to send instead of the stored `sigiro auth login` session
-    /// (overrides SIGIRO_ACCESS_TOKEN).
+    /// Client bearer token for a hosted endpoint (overrides SIGIRO_API_KEY).
     #[arg(long, global = true)]
-    token: Option<String>,
+    key: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -45,11 +40,7 @@ enum Command {
         #[arg(long)]
         otlp_grpc_port: Option<u16>,
     },
-
-    /// Run a federated SQL query across one or more self-hosted sigiro edges.
-    ///
-    /// Not for hosted sigiro.com: there, query with `sigiro mcp` (its
-    /// `run_query` tool) or POST SQL to /v1/query with `sigiro auth token`.
+    /// Run a federated SQL query across one or more sigiro edges.
     ///
     /// This is a coordinator: an embedded DuckDB plans the query, pushes a
     /// per-edge partial to each resolved edge over the `quack` wire protocol
@@ -58,7 +49,10 @@ enum Command {
     /// the tailnet (peers tagged tag:sigiro-edge) unless overridden.
     Query {
         /// SQL statement to execute
-        sql: String,
+        sql: Option<String>,
+        /// Path to a .sql file to execute (use - for stdin)
+        #[arg(long, value_name = "PATH")]
+        sql_file: Option<String>,
         /// Edge override: name=host:port. Repeatable. Also settable via
         /// SIGIRO_EDGES (comma-separated). When either is given, tailnet
         /// discovery is skipped entirely.
@@ -69,82 +63,53 @@ enum Command {
         #[arg(long)]
         full_scan: bool,
     },
-    /// Show the health of the server the client commands use, and recent ingest.
-    ///
-    /// That server is sigiro.com after `sigiro auth login`, otherwise
-    /// http://localhost:9999; SIGIRO_ENDPOINT overrides both. The output names
-    /// the endpoint it probed.
+    /// Show server health
     Status,
+    /// Diagnose a service — returns structured metrics, spans, logs, linked traces
+    Diagnose {
+        /// Service name to diagnose
+        service: String,
+        /// Start of range in epoch seconds. Defaults to 15 minutes ago if omitted.
+        #[arg(long)]
+        from: Option<i64>,
+        /// End of range in epoch seconds. Defaults to now if omitted.
+        #[arg(long)]
+        to: Option<i64>,
+    },
+    /// Validate an A/A + A/B/B/A inference experiment against Sigiro evidence.
+    CompareExperiment {
+        /// AIPerf comparison request JSON file.
+        #[arg(long, value_name = "PATH")]
+        file: String,
+    },
+    /// List detected anomalies (the precomputed anomaly table, all signals,
+    /// ranked biggest shift first, cross-signal `incident_id` grouping). The
+    /// entry point for a detect→diagnose→fix loop: poll this, act on new
+    /// incidents.
+    Anomalies {
+        /// Filter to one service.
+        #[arg(long)]
+        service: Option<String>,
+        /// Only shifts at or after this time (epoch seconds).
+        #[arg(long)]
+        from: Option<i64>,
+        /// Only shifts at or before this time (epoch seconds).
+        #[arg(long)]
+        to: Option<i64>,
+    },
+    /// Pre-download DuckDB extensions into the data dir so the first
+    /// `sigiro serve` doesn't hang on a 30-90s blocking download (F-01).
+    /// Use this once after installing sigiro, or before an offline deploy.
+    FetchExtensions,
     /// Probe the local /health endpoint and exit 0 if ready, non-zero
     /// otherwise. This is the container HEALTHCHECK for the distroless image,
     /// which has no shell or curl for the usual `curl -f /health` probe.
     Healthcheck,
-    /// Authenticate this CLI with Sigiro Cloud.
-    Auth {
-        #[command(subcommand)]
-        command: AuthCommand,
-    },
-    /// Create, list and revoke ingest keys: fixed keys a long-running service
-    /// sends telemetry with, instead of a 15-minute `sigiro auth token`.
-    ///
-    /// A key belongs to the workspace your login is bound to, can only send
-    /// telemetry (it cannot query), and is shown once, when it is created.
-    #[command(name = "ingest-keys")]
-    IngestKeys {
-        #[command(subcommand)]
-        command: IngestKeysCommand,
-    },
-    /// Create a hosted account, verify email, and securely store OAuth credentials.
-    Signup {
-        /// Name for the hosted account.
-        #[arg(long)]
-        name: String,
-        /// Email address that receives the one-time verification code.
-        #[arg(long)]
-        email: String,
-    },
     /// Serve the MCP (Model Context Protocol) tool surface over stdio, so any
-    /// MCP client can list services and query raw telemetry.
-    ///
-    /// It talks to the same server as every other client command: sigiro.com
-    /// after `sigiro auth login` or `sigiro signup`, otherwise a local
-    /// `sigiro serve` on http://localhost:9999. SIGIRO_ENDPOINT overrides both.
-    /// Register it with an agent as a stdio server, for example
-    /// `claude mcp add sigiro -- sigiro mcp`.
+    /// MCP client (Claude Desktop, Cursor, a benchmark harness) can drive the
+    /// detect→diagnose→drill loop. Talks to a running `sigiro serve` over
+    /// HTTP, so point SIGIRO_ENDPOINT at it if it is not on localhost.
     Mcp,
-}
-
-#[derive(Subcommand)]
-enum AuthCommand {
-    /// Open a browser and sign in with an email one-time code.
-    Login {
-        /// Print the verification URL instead of opening a browser.
-        #[arg(long)]
-        no_browser: bool,
-    },
-    /// Show whether an OAuth login is stored, without revealing credentials.
-    Status,
-    /// Print the current access token for explicit OTLP/CI configuration.
-    Token,
-    /// Revoke the refresh token and remove local credentials.
-    Logout,
-}
-
-#[derive(Subcommand)]
-enum IngestKeysCommand {
-    /// Create a key and print it. Store it now: it is never shown again.
-    Create {
-        /// A label to tell keys apart, such as the service that will use it.
-        #[arg(long, default_value = "ingest key")]
-        name: String,
-    },
-    /// List the workspace's keys (ids and names, never the secrets).
-    List,
-    /// Revoke a key by its id; senders using it get 401 from then on.
-    Revoke {
-        /// The key id, the middle part of `sigiro_<id>_<secret>`.
-        id: String,
-    },
 }
 
 /// Every command prints pretty JSON. One format, so a pipeline and a human read
@@ -190,28 +155,28 @@ async fn main() -> Result<()> {
         }
     }));
 
+    // OTel self-instrumentation: read config at startup, pass to init_telemetry()
+    let telemetry_config = sigiro::otel::TelemetryConfig::from_env()?;
+    let _telemetry_guard = match sigiro::otel::init_telemetry(telemetry_config) {
+        Ok(Some(guard)) => Some(guard),
+        Ok(None) => {
+            init_basic_subscriber();
+            None
+        }
+        Err(e) => {
+            init_basic_subscriber();
+            tracing::warn!("OTel self-instrumentation failed to initialize: {e:#}");
+            None
+        }
+    };
+
     let cli = Cli::parse();
 
-    // OTel self-instrumentation belongs to the server only. A user who points
-    // OTEL_EXPORTER_OTLP_ENDPOINT at Sigiro to instrument their own app must
-    // not have every `sigiro auth status` or `sigiro query` try to export the
-    // CLI's own spans, or warn that SIGIRO_OTEL_AUTH_KEY is missing.
-    let serves = matches!(cli.command, None | Some(Command::Serve { .. }));
-    let _telemetry_guard = if serves {
-        init_self_telemetry()?
-    } else {
-        init_basic_subscriber();
-        None
-    };
-    let _runtime_metrics_guard = _telemetry_guard
-        .as_ref()
-        .map(|_| sigiro::runtime_metrics::spawn());
-
     // This is client-only configuration. Apply it before any command resolves
-    // endpoint configuration, so `--token` has the same behavior as
-    // SIGIRO_ACCESS_TOKEN without changing server authentication.
-    if let Some(token) = &cli.token {
-        unsafe { std::env::set_var("SIGIRO_ACCESS_TOKEN", token) };
+    // endpoint configuration, so `--key` has the same behavior as
+    // SIGIRO_API_KEY without changing server authentication.
+    if let Some(key) = &cli.key {
+        unsafe { std::env::set_var("SIGIRO_API_KEY", key) };
     }
 
     match cli.command {
@@ -245,80 +210,42 @@ async fn main() -> Result<()> {
         None => {
             run_serve().await?;
         }
-
         Some(Command::Query {
-            sql: sql_arg,
+            sql,
+            sql_file,
             edge,
             full_scan,
         }) => {
-            let sql = if sql_arg == "-" {
-                use std::io::Read;
-                let mut sql = String::new();
-                std::io::stdin()
-                    .read_to_string(&mut sql)
-                    .context("failed to read SQL from stdin")?;
-                sql
-            } else {
-                sql_arg
+            // F-14: support --sql-file for long queries, reuse file across runs,
+            // or piping `cat foo.sql | sigiro query --sql-file -`
+            let sql = match (sql, sql_file) {
+                (Some(s), _) => s,
+                (None, Some(path)) if path == "-" => {
+                    use std::io::Read;
+                    let mut s = String::new();
+                    std::io::stdin().read_to_string(&mut s)?;
+                    s
+                }
+                (None, Some(path)) => std::fs::read_to_string(&path)
+                    .with_context(|| format!("failed to read SQL file {path}"))?,
+                (None, None) => anyhow::bail!("provide SQL as argument or via --sql-file"),
             };
             let result = sigiro::federate::run_federated_query(&sql, &edge, full_scan).await?;
             let value = serde_json::to_value(&result)?;
             println!("{}", format_output(&value)?);
         }
         Some(Command::Status) => {
-            // Health is public, but it must come from the server the other
-            // client commands use. Resolving the endpoint separately (always
-            // localhost unless SIGIRO_ENDPOINT was set) made a signed-in hosted
-            // user read the health of whatever happened to listen on :9999,
-            // next to ingest counts fetched from sigiro.com. The /health
-            // endpoint is the single source of truth for "ready" vs "starting"
-            // vs "degraded"; the CLI does not read the .ready file directly.
-            let client = sigiro::client::try_build_client().await;
-            let base_url = client.as_ref().map_or_else(
-                |_| {
-                    let configured = sigiro::config::ENDPOINT.value().unwrap_or_default();
-                    if configured.is_empty() {
-                        "http://localhost:9999".to_string()
-                    } else {
-                        configured
-                    }
-                },
-                |client| client.base_url().to_string(),
-            );
+            // Health is public — no auth needed. The /health endpoint is the
+            // single source of truth for "ready" vs "starting" vs "degraded";
+            // the CLI does not read the .ready file directly (would be a
+            // second path that can drift from the server's view).
+            let base_url = sigiro::config::ENDPOINT
+                .value()
+                .unwrap_or_else(|_| "http://localhost:9999".to_string());
             let health_client =
                 sigiro::client::SigiroClient::new(&base_url, sigiro::client::ClientAuth::Open);
             let (state, detail) = match health_client.health().await {
-                Ok(HealthResponse::Ready {
-                    alert_webhooks,
-                    disk_gate,
-                    rows_dropped_total,
-                }) => {
-                    let mut notes = Vec::new();
-                    if let Some(rows) = rows_dropped_total {
-                        notes.push(format!(
-                            "{rows} buffered row(s) dropped after a failed append"
-                        ));
-                    }
-                    if let Some(gate) = disk_gate {
-                        notes.push(format!(
-                            "disk gate {:?}: ingest rejected at {} of {} bytes",
-                            gate.state, gate.sampled_bytes, gate.cap_bytes
-                        ));
-                    }
-                    if let Some(webhooks) = alert_webhooks.filter(|webhooks| webhooks.dead > 0) {
-                        notes.push(format!(
-                            "{} alert webhook(s) dead (last error {}), replay with POST /v1/alerts/replay",
-                            webhooks.dead,
-                            webhooks.last_dead_error.as_deref().unwrap_or("unknown")
-                        ));
-                    }
-                    let detail = if notes.is_empty() {
-                        "ok".to_string()
-                    } else {
-                        format!("ok; {}", notes.join("; "))
-                    };
-                    ("ready".to_string(), detail)
-                }
+                Ok(HealthResponse::Ready) => ("ready".to_string(), "ok".to_string()),
                 Ok(HealthResponse::Starting) => (
                     "starting".to_string(),
                     "http up, init not complete".to_string(),
@@ -331,7 +258,7 @@ async fn main() -> Result<()> {
             // query setup fails, report the exact failure instead of silently
             // collapsing it to null.
             let recent_ingest = if matches!(state.as_str(), "ready" | "starting") {
-                match &client {
+                match sigiro::client::try_build_client() {
                     Ok(client) => match client.query(
                         "SELECT (SELECT count(*) FROM lake.sigiro_spans WHERE timestamp > CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - interval 5 minute) AS spans_5m, (SELECT count(*) FROM lake.sigiro_logs WHERE timestamp > CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - interval 5 minute) AS logs_5m, CAST((SELECT max(timestamp) FROM lake.sigiro_spans) AS VARCHAR) AS last_span_ts, CAST((SELECT max(timestamp) FROM lake.sigiro_logs) AS VARCHAR) AS last_log_ts",
                     ).await {
@@ -360,76 +287,73 @@ async fn main() -> Result<()> {
                 None
             };
             let value = serde_json::json!({
-                "endpoint": base_url,
                 "status": state,
                 "detail": detail,
                 "recent_ingest": recent_ingest,
             });
             println!("{}", format_output(&value)?);
         }
+        Some(Command::Diagnose { service, from, to }) => {
+            let client = require_client()?;
+            // Epoch-seconds args → µs, matching the API. `None` stays `None`:
+            // the 15-minute default lives in `DiagnoseRequest::window()` and
+            // nowhere else, so the CLI and the API cannot disagree about what
+            // "no window given" means. See roadmap #72.
+            let from_ts = from.map(|s| s * 1_000_000);
+            let to_ts = to.map(|s| s * 1_000_000);
+            let block = client.diagnose(&service, from_ts, to_ts).await?;
+            // No ad-hoc trace hint anymore: every span carries its own
+            // `drill_down_sql` (the full trace) and each sampled section its
+            // `drill_all_sql`, so the response is self-describing.
+            let value = serde_json::to_value(&block)?;
+            println!("{}", format_output(&value)?);
+        }
+        Some(Command::CompareExperiment { file }) => {
+            let raw = std::fs::read_to_string(&file)
+                .with_context(|| format!("failed to read experiment request {file}"))?;
+            let request: sigiro::experiment::ExperimentComparisonRequest =
+                serde_json::from_str(&raw)
+                    .with_context(|| format!("failed to parse experiment request {file}"))?;
+            let client = require_client()?;
+            let response = client.compare_experiment(&request).await?;
+            let value = serde_json::to_value(&response)?;
+            println!("{}", format_output(&value)?);
+        }
+        Some(Command::Anomalies { service, from, to }) => {
+            let client = require_client()?;
+            // Epoch-seconds args → µs, matching the API (Option = no filter).
+            let from_ts = from.map(|s| s * 1_000_000);
+            let to_ts = to.map(|s| s * 1_000_000);
+            let resp = client.anomalies(service.as_deref(), from_ts, to_ts).await?;
+            let value = serde_json::to_value(&resp)?;
+            println!("{}", format_output(&value)?);
+        }
+        Some(Command::FetchExtensions) => {
+            let dir = data_dir()?;
+            std::fs::create_dir_all(&dir)
+                .with_context(|| format!("failed to create data directory {dir}"))?;
+            sigiro::storage::prewarm_extensions(&dir)?;
+            println!(
+                "DuckDB extensions pre-warmed into {}",
+                sigiro::storage::resolve_extension_dir(&dir)
+            );
+        }
         Some(Command::Healthcheck) => {
             // Shell-free liveness probe for the distroless container HEALTHCHECK.
             // /health is public (no auth). Exit 0 only when fully Ready so the
             // orchestrator doesn't route to a still-initializing instance.
-            let configured_endpoint = sigiro::config::ENDPOINT.value().unwrap_or_default();
-            let base_url = if configured_endpoint.is_empty() {
-                "http://localhost:9999"
-            } else {
-                &configured_endpoint
-            };
+            let base_url = sigiro::config::ENDPOINT
+                .value()
+                .unwrap_or_else(|_| "http://localhost:9999".to_string());
             let client =
-                sigiro::client::SigiroClient::new(base_url, sigiro::client::ClientAuth::Open);
+                sigiro::client::SigiroClient::new(&base_url, sigiro::client::ClientAuth::Open);
             match client.health().await {
-                Ok(HealthResponse::Ready { .. }) => {}
+                Ok(HealthResponse::Ready) => {}
                 other => {
                     eprintln!("healthcheck: not ready: {other:?}");
                     std::process::exit(1);
                 }
             }
-        }
-        Some(Command::Auth { command }) => match command {
-            AuthCommand::Login { no_browser } => {
-                let status = sigiro::oauth::login(no_browser).await?;
-                println!("{}", format_output(&serde_json::to_value(status)?)?);
-            }
-            AuthCommand::Status => {
-                let status = sigiro::oauth::status().await?;
-                println!("{}", format_output(&serde_json::to_value(status)?)?);
-            }
-            AuthCommand::Token => println!("{}", sigiro::oauth::access_token().await?),
-            AuthCommand::Logout => {
-                let deleted = sigiro::oauth::logout().await?;
-                println!(
-                    "{}",
-                    format_output(
-                        &serde_json::json!({ "authenticated": false, "deleted": deleted })
-                    )?
-                );
-            }
-        },
-        Some(Command::IngestKeys { command }) => {
-            let client = sigiro::client::try_build_client().await?;
-            let value = match command {
-                IngestKeysCommand::Create { name } => {
-                    let mut created = client.create_ingest_key(&name).await?;
-                    if let Some(key) = created.get("key").and_then(|k| k.as_str()) {
-                        let headers = format!("Authorization=Bearer {key}");
-                        created["otel_exporter_otlp_headers"] = serde_json::Value::String(headers);
-                    }
-                    eprintln!("Store this key now: it is shown only once.");
-                    created
-                }
-                IngestKeysCommand::List => client.list_ingest_keys().await?,
-                IngestKeysCommand::Revoke { id } => {
-                    client.revoke_ingest_key(&id).await?;
-                    serde_json::json!({ "id": id, "revoked": true })
-                }
-            };
-            println!("{}", format_output(&value)?);
-        }
-        Some(Command::Signup { name, email }) => {
-            let status = sigiro::oauth::signup(name, email).await?;
-            println!("{}", format_output(&serde_json::to_value(status)?)?);
         }
         Some(Command::Mcp) => {
             // stdio transport: the client owns the process lifetime, so this
@@ -437,31 +361,9 @@ async fn main() -> Result<()> {
             // stdout is the JSON-RPC channel and any stray byte corrupts the
             // stream (see init_basic_subscriber, which writes to stderr).
             use rmcp::ServiceExt;
-            let client = sigiro::client::try_build_client().await?;
+            let client = sigiro::client::try_build_client()?;
             tracing::info!(endpoint = client.base_url(), "starting sigiro MCP server");
-            let mut service = sigiro::mcp::SigiroMcp::new(client);
-            // The hosted docs MCP when it answers; the docs built into this
-            // binary when it does not (offline, timeout, error).
-            let offline = sigiro::docs_mcp::OfflineDocs::embedded();
-            match (sigiro::mcp::connect_docs().await, offline) {
-                (Ok((docs, tools)), offline) => {
-                    tracing::info!(count = tools.len(), "connected to documentation MCP");
-                    service = service.with_hosted_docs(&docs, tools, offline.as_ref())?;
-                }
-                (Err(error), Some(offline)) => {
-                    tracing::warn!(
-                        "documentation MCP unavailable; answering from the built-in docs: {error:#}"
-                    );
-                    service = service.with_offline_docs(&offline)?;
-                }
-                (Err(error), None) => {
-                    tracing::warn!(
-                        "documentation MCP unavailable and this binary has no built-in docs; \
-                         operational tools remain available: {error:#}"
-                    );
-                }
-            }
-            let service = service
+            let service = sigiro::mcp::SigiroMcp::new(client)
                 .serve((tokio::io::stdin(), tokio::io::stdout()))
                 .await
                 .context("failed to start MCP server on stdio")?;
@@ -488,19 +390,36 @@ fn probe_kernel_release() -> String {
     }
 }
 
+/// Effective (CAP_BPF, CAP_NET_ADMIN). Always (false, false) off Linux, where
+/// the capability model does not exist and the eBPF path cannot run anyway.
+fn probe_capabilities() -> (bool, bool) {
+    #[cfg(target_os = "linux")]
+    {
+        (
+            caps::has_cap(None, caps::CapSet::Effective, caps::Capability::CAP_BPF)
+                .unwrap_or(false),
+            caps::has_cap(
+                None,
+                caps::CapSet::Effective,
+                caps::Capability::CAP_NET_ADMIN,
+            )
+            .unwrap_or(false),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        (false, false)
+    }
+}
+
 async fn run_serve() -> Result<()> {
-    // Hosted mode has an explicit persistent filesystem contract. Do not let
-    // an inherited SIGIRO_DATA_DIR silently put hosted telemetry/admin state in
-    // a developer's home directory.
-    let storage_mode = sigiro::storage::StorageMode::from_env()?;
-    let dir = if storage_mode.is_distributed() {
-        sigiro::config::hosted_data_dir()?
-    } else {
-        data_dir()?
-    };
+    let dir = data_dir()?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create data directory {dir}"))?;
-    tracing::info!(%dir, "sigiro starting");
+    tracing::info!(
+        "sigiro starting — data_dir={}, first-run extension download may take 30-90s",
+        dir
+    );
 
     // Init-complete flag — flipped at the tail of init so /health reports
     // Ready only after the server is actually serving traffic. Owned by
@@ -511,14 +430,59 @@ async fn run_serve() -> Result<()> {
     // coherent axis (fail-loud on incoherence, e.g. S3 bucket without a catalog
     // URL). Threaded into the pool so every per-project attach uses this single
     // decision instead of re-reading the environment.
-    let admin_conn = match storage_mode.distributed_config() {
-        Some(config) => sigiro::admin::open_hosted_admin_db(config.catalog_url()).await?,
-        None => sigiro::admin::open_local_admin_db(&dir)?,
-    };
+    let storage_mode = sigiro::storage::StorageMode::from_env()?;
+
     // MsgRouter: handlers send directly to per-project flusher tasks.
     let pool = Arc::new(ProjectPool::new(dir.clone(), 100, storage_mode));
+    let admin_conn = sigiro::admin::open_admin_db(&dir)?;
+
+    // Pyroscope continuous profiling: enabled when SIGIRO_PYROSCOPE_ENDPOINT is set.
+    // Sends CPU + memory allocation profiles to the Pyroscope server.
+    // The smoke-test script fetches these profiles and includes them in diagnose blocks.
+    //
+    // Started HERE, at the head of boot, not at the tail. The expensive part of
+    // startup is everything below this line — DuckDB extension load and the
+    // `default` project pre-create — so an agent started after it profiles an
+    // idle server and cannot answer "why does boot take ~6s". `start_profiling`
+    // takes no arguments and depends on nothing boot builds; only the
+    // `write_instance_status` calls need `admin_conn`, which exists above.
+    //
+    // The pyroscope-rs SDK's flush timer is hardcoded to 10s
+    // (pyroscope-2.0.0/src/pyroscope.rs:296), so boot samples upload AFTER boot
+    // finishes. The delay is in delivery, not collection: the samples carry the
+    // boot window as long as the process outlives the first flush.
+    let (_profiling, pyroscope_status) = match start_profiling() {
+        Ok(Some(handle)) => (Some(handle), "active"),
+        Ok(None) => (None, "disabled"),
+        Err(e) => {
+            tracing::warn!("Pyroscope profiling failed to start: {e:#}");
+            (None, "error")
+        }
+    };
 
     let kernel = probe_kernel_release();
+    let (has_bpf, has_net_admin) = probe_capabilities();
+
+    // Write instance status at startup — one transaction, not 13 autocommits.
+    sigiro::admin::write_instance_status_batch(
+        &admin_conn,
+        &[
+            ("pyroscope_status", pyroscope_status),
+            ("version", env!("CARGO_PKG_VERSION")),
+            ("mode", "otlp"),
+            ("platform_os", std::env::consts::OS),
+            ("platform_arch", std::env::consts::ARCH),
+            ("platform_kernel", &kernel),
+            ("capability_bpf", if has_bpf { "true" } else { "false" }),
+            (
+                "capability_net_admin",
+                if has_net_admin { "true" } else { "false" },
+            ),
+        ],
+    )?;
+
+    // Extension probe is deferred to first project connection (pool.create_project).
+    // Use `sigiro fetch-extensions` to pre-download for offline deployments.
 
     // Pre-create the "default" project.
     //
@@ -583,32 +547,17 @@ async fn run_serve() -> Result<()> {
         }
     }
 
-    // backtrace snapshots the loaded shared-library list once. Start profiling
-    // only after DuckDB has loaded its extensions so their native frames resolve.
-    let (_profiling, self_profiling_status) = match start_profiling()? {
-        Some(handle) => (Some(handle), "active"),
-        None => (None, "disabled"),
-    };
-
-    // Runs on a blocking thread: the sync postgres client aborts the process if
-    // its internal block_on is reached from a runtime thread.
-    let kernel_owned = kernel.clone();
-    let version = env!("CARGO_PKG_VERSION");
-    let (returned_conn, ()) = sigiro::admin::with_admin_blocking(admin_conn, move |conn| {
-        sigiro::admin::write_instance_status_batch(
-            conn,
-            &[
-                ("self_profiling_status", self_profiling_status),
-                ("version", version),
-                ("mode", "otlp"),
-                ("platform_os", std::env::consts::OS),
-                ("platform_arch", std::env::consts::ARCH),
-                ("platform_kernel", &kernel_owned),
-            ],
-        )
-    })
-    .await?;
-    let admin_conn = returned_conn;
+    // eBPF capability probe: read-only "could this host run eBPF
+    // auto-instrumentation" check, recorded to instance_status. The launcher
+    // itself is a future feature — there is nothing to start here yet.
+    let ebpf_status = sigiro::ebpf::ebpf_status("obi");
+    sigiro::ebpf::write_ebpf_status(&admin_conn, &ebpf_status)?;
+    if ebpf_status.status != "ready" {
+        tracing::info!(
+            "eBPF unavailable: {} — running in OTLP-only mode",
+            ebpf_status.reason
+        );
+    }
 
     tracing::info!("sigiro init complete — data_dir={}", dir);
     // The init-complete flag is NOT flipped here. It used to be, and that made
@@ -628,32 +577,9 @@ async fn run_serve() -> Result<()> {
 
     let shared_admin = Arc::new(Mutex::new(admin_conn));
 
-    // Alert control state is injected into both ingest and query surfaces.
-    // Ingest fails when lifecycle state cannot be persisted, forcing OTLP retry.
-    //
-    // `AlertStore::new` runs DDL through the sync postgres client, which aborts
-    // the process from a runtime thread, so it must be constructed off the async
-    // worker like every other sync admin call.
-    let alert_store = {
-        let admin = Arc::clone(&shared_admin);
-        tokio::task::spawn_blocking(move || sigiro::alerts::AlertStore::new(admin))
-            .await
-            .context("alert store initialisation task panicked")??
-    };
-    if let Some(delivery) = sigiro::alerts::DeliveryConfig::from_env()? {
-        tokio::spawn(sigiro::alerts::run_delivery(alert_store.clone(), delivery));
-        tracing::info!("alert webhook delivery enabled");
-    } else {
-        tracing::info!("alert webhook delivery disabled");
-    }
-
     let disk_cap = sigiro::config::max_disk_bytes()?;
     let disk_state = sigiro::inserter::DiskCapacityState::new(disk_cap);
-    let router = Arc::new(MsgRouter::new_with_disk_and_alerts(
-        Arc::clone(&pool),
-        disk_state,
-        alert_store.clone(),
-    ));
+    let router = Arc::new(MsgRouter::new_with_disk(Arc::clone(&pool), disk_state));
     router.start();
 
     // Evict idle connections every 2 minutes
@@ -665,17 +591,7 @@ async fn run_serve() -> Result<()> {
         MAX_IDLE_SECS,
     ));
 
-    // Log the failure here, before it unwinds. Everything between this frame
-    // and `main` drops the boot state on the way out, and a panic in any of
-    // those drops replaces the error with the panic — which is exactly how the
-    // real cause of a production boot failure went unrecorded. The error is
-    // still returned; this only guarantees it is written down first.
-    if let Err(error) =
-        sigiro::server::run_servers(pool, alert_store, router, dir.clone(), init_complete).await
-    {
-        tracing::error!("sigiro serve failed: {error:#}");
-        return Err(error);
-    }
+    sigiro::server::run_servers(pool, shared_admin, router, dir.clone(), init_complete).await?;
     Ok(())
 }
 
@@ -684,33 +600,13 @@ async fn run_evictor(pool: Arc<ProjectPool>, interval_secs: u64, max_idle_secs: 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
     loop {
         interval.tick().await;
-        let pool = Arc::clone(&pool);
-        if let Err(error) = tokio::task::spawn_blocking(move || {
-            pool.evict_idle(std::time::Duration::from_secs(max_idle_secs));
-        })
-        .await
-        {
-            tracing::error!("idle eviction task failed: {error}");
-        }
+        pool.evict_idle(std::time::Duration::from_secs(max_idle_secs));
     }
 }
 
-/// The server's own traces, logs and metrics, exported only when
-/// OTEL_EXPORTER_OTLP_ENDPOINT is set; otherwise plain stderr logging.
-fn init_self_telemetry() -> Result<Option<sigiro::otel::TelemetryGuard>> {
-    let telemetry_config = sigiro::otel::TelemetryConfig::from_env()?;
-    Ok(match sigiro::otel::init_telemetry(telemetry_config) {
-        Ok(Some(guard)) => Some(guard),
-        Ok(None) => {
-            init_basic_subscriber();
-            None
-        }
-        Err(e) => {
-            init_basic_subscriber();
-            tracing::warn!("OTel self-instrumentation failed to initialize: {e:#}");
-            None
-        }
-    })
+/// Build HTTP client from config. Fails fast if API key or endpoint is not configured.
+fn require_client() -> Result<sigiro::client::SigiroClient> {
+    sigiro::client::try_build_client()
 }
 
 fn init_basic_subscriber() {

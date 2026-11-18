@@ -4,11 +4,6 @@
  * becomes markup. Escaping `<` covers that and the `<!--` case, and is still valid
  * JSON, so parsers read it unchanged.
  */
-export type JsonLdDocument = {
-  readonly "@context": string;
-  readonly "@graph": readonly object[];
-};
-
-export function jsonLd(data: JsonLdDocument): string {
-  return JSON.stringify(data).replace(/</g, "\\u003c");
+export function jsonLd(data: unknown): string {
+  return JSON.stringify(data).replace(/</g, '\\u003c');
 }
