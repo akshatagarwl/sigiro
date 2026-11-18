@@ -1,14 +1,11 @@
 ---
-title: 已退役的诊断部署检测设计
+title: 关于部署检测，以及你的 span 必须携带的信息
 description: >-
-  sigiro 只读取一个属性来判断部署——span
-  资源上的 service.version。本页说明版本号如何变成部署事件，以及服务不发送版本号时会得到什么。
+  sigiro 只读取一个属性来判断部署——span 资源上的 service.version。本页说明一个版本号如何变成部署事件、sigiro
+  如何挑选可疑部署，以及当某个服务完全不发送版本号时你会得到什么。
 sidebar:
   order: 4
 ---
-
-> **历史设计文档：**诊断 API 中的自动部署检测已退役。Span 的 `service.version` 资源属性仍可通过 `POST /v1/query` 查询原始遥测数据。
-
 诊断结果可以点出一个可疑部署：_incident ~14:30 on service 'checkout':
 … ; suspect deploy: version 1.4.2 first seen at 14:29_。这是一个很强的论断，
 读者有理由追问它的依据从何而来。
@@ -23,13 +20,13 @@ sigiro 从 **span 的资源属性** 中读取 `service.version`。
 
 这就是全部来源。sigiro 不会为部署读取任何其他字段：
 
-| 不用于部署判断的字段                        | 为什么不用                            |
-| ------------------------------------------- | ------------------------------------- |
-| `deployment.environment`、`deployment.*`    | 没有任何查询读取它们                  |
-| `git.commit.sha`、`vcs.*`                   | 没有任何查询读取它们                  |
-| 日志、指标或 profile 上的 `service.version` | sigiro 只扫描 `sigiro_spans`          |
-| CI webhook、部署 API、发布信息流            | 除 OTLP 之外，sigiro 没有任何接入通道 |
-| Kubernetes API server                       | sigiro 从不连接它                     |
+| 不用于部署判断的字段 | 为什么不用 |
+| --- | --- |
+| `deployment.environment`、`deployment.*` | 没有任何查询读取它们 |
+| `git.commit.sha`、`vcs.*` | 没有任何查询读取它们 |
+| 日志、指标或 profile 上的 `service.version` | sigiro 只扫描 `sigiro_spans` |
+| CI webhook、部署 API、发布信息流 | 除 OTLP 之外，sigiro 没有任何接入通道 |
+| Kubernetes API server | sigiro 从不连接它 |
 
 资源属性通过 OTLP 到达，并原样落入 `sigiro_spans` 表的 `resource_attributes` 列，
 存为一个 JSON 字符串。有三个资源属性在写入时拥有各自独立的列——`service.name`、

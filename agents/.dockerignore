@@ -1,0 +1,15 @@
+node_modules
+.eve
+.output
+dist
+.celld
+.celld-receipts
+**/.claude
+**/.env*
+**/*.token
+**/.celld
+demo
+test
+workspaces
+artifacts
+state

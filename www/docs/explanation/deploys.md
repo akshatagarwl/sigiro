@@ -1,13 +1,9 @@
 ---
-title: Retired deploy diagnosis design
-description: sigiro reads one attribute for deploys — service.version on a span's resource. How a version becomes a deploy event, and what happens without one.
+title: About deploy detection, and what your spans must carry
+description: sigiro reads one attribute for deploys — service.version on the resource of a span. This page explains how a version becomes a deploy event, how sigiro picks the suspect deploy, and what you get when a service sends no version at all.
 sidebar:
   order: 4
 ---
-
-> **Historical design only.** Automatic deploy detection as part of the
-> diagnosis endpoint has been removed. The `service.version` span resource
-> attribute is still queryable in raw telemetry via `POST /v1/query`.
 
 A diagnosis can name a suspect deploy: _incident ~14:30 on service 'checkout':
 … ; suspect deploy: version 1.4.2 first seen at 14:29_. That is a strong claim,
@@ -24,13 +20,13 @@ sigiro reads `service.version` from the **resource attributes of a span**.
 
 That is the whole source. sigiro reads no other field for a deploy:
 
-| Not read for deploys                              | Why not                               |
-| ------------------------------------------------- | ------------------------------------- |
-| `deployment.environment`, `deployment.*`          | No query reads them                   |
-| `git.commit.sha`, `vcs.*`                         | No query reads them                   |
-| `service.version` on a log, a metric or a profile | sigiro scans `sigiro_spans` alone     |
-| A CI webhook, a deploy API, a release feed        | sigiro has no ingest path except OTLP |
-| The Kubernetes API server                         | sigiro never connects to it           |
+| Not read for deploys | Why not |
+| --- | --- |
+| `deployment.environment`, `deployment.*` | No query reads them |
+| `git.commit.sha`, `vcs.*` | No query reads them |
+| `service.version` on a log, a metric or a profile | sigiro scans `sigiro_spans` alone |
+| A CI webhook, a deploy API, a release feed | sigiro has no ingest path except OTLP |
+| The Kubernetes API server | sigiro never connects to it |
 
 Resource attributes arrive over OTLP and land verbatim as a JSON string in the
 `resource_attributes` column of `sigiro_spans`. Three resource attributes get a

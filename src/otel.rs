@@ -1,35 +1,15 @@
 use anyhow::{Context, Result};
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_otlp::{
-    LogExporter, MetricExporter, SpanExporter, WithExportConfig, WithHttpConfig,
-};
-use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
+use opentelemetry_otlp::{LogExporter, SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::trace::{BatchSpanProcessor, SdkTracerProvider};
 use tracing_subscriber::prelude::*;
 
-/// Non-empty bearer credential used by Sigiro's own telemetry exporters.
-///
-/// Deliberately omits `Debug`, `Display`, and Serde traits so configuration
-/// logging and generic serialization cannot disclose the credential.
-#[nutype::nutype(validate(not_empty), derive(Clone, AsRef))]
-pub struct OtelAuthKey(String);
-
 /// OTel configuration — read once at startup, passed to init_telemetry()
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TelemetryConfig {
     pub(crate) endpoint: String,
     pub(crate) service_name: String,
-    pub auth_key: Option<OtelAuthKey>,
-}
-
-pub(crate) fn otel_auth_key_from_env() -> Result<Option<OtelAuthKey>> {
-    let raw = crate::config::OTEL_AUTH_KEY
-        .value()
-        .map_err(anyhow::Error::from)?;
-    if raw.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(OtelAuthKey::try_new(raw)?))
+    pub auth_key: Option<String>,
 }
 
 impl TelemetryConfig {
@@ -43,7 +23,10 @@ impl TelemetryConfig {
         let service_name = crate::config::OTEL_SERVICE_NAME
             .value()
             .map_err(anyhow::Error::from)?;
-        let auth_key = otel_auth_key_from_env()?;
+        let auth_key = crate::config::OTEL_AUTH_KEY
+            .value()
+            .ok()
+            .filter(|k| !k.is_empty());
         Ok(Self {
             endpoint,
             service_name,
@@ -55,7 +38,6 @@ impl TelemetryConfig {
 pub struct TelemetryGuard {
     tracer_provider: Option<SdkTracerProvider>,
     logger_provider: Option<opentelemetry_sdk::logs::SdkLoggerProvider>,
-    meter_provider: Option<SdkMeterProvider>,
 }
 
 impl Drop for TelemetryGuard {
@@ -70,11 +52,6 @@ impl Drop for TelemetryGuard {
             && let Err(e) = provider.shutdown()
         {
             eprintln!("OTel logger provider shutdown failed: {e}");
-        }
-        if let Some(provider) = self.meter_provider.take()
-            && let Err(e) = provider.shutdown()
-        {
-            eprintln!("OTel meter provider shutdown failed: {e}");
         }
     }
 }
@@ -98,8 +75,8 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>>
     // Auth headers for self-ingestion — auth_key read at app entry, not at runtime.
     // Require auth key when endpoint is configured; do not fall back to a hardcoded default.
     let auth_key = match config.auth_key {
-        Some(ref key) => key.as_ref(),
-        None => {
+        Some(ref k) if !k.is_empty() => k.as_str(),
+        _ => {
             anyhow::bail!(
                 "SIGIRO_OTEL_AUTH_KEY is required when OTEL_EXPORTER_OTLP_ENDPOINT is set. \
                  Set it to a strong random value or unset OTEL_EXPORTER_OTLP_ENDPOINT to disable self-telemetry."
@@ -112,7 +89,6 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>>
     // Note: with_endpoint() does NOT auto-append signal paths — must include full path
     let traces_url = format!("{}/v1/traces", config.endpoint.trim_end_matches('/'));
     let logs_url = format!("{}/v1/logs", config.endpoint.trim_end_matches('/'));
-    let metrics_url = format!("{}/v1/metrics", config.endpoint.trim_end_matches('/'));
 
     let span_exporter = SpanExporter::builder()
         .with_http()
@@ -141,29 +117,14 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>>
     let log_exporter = LogExporter::builder()
         .with_http()
         .with_endpoint(&logs_url)
-        .with_headers(headers.clone())
+        .with_headers(headers)
         .build()
         .context("failed to build OTLP HTTP log exporter")?;
 
     let logger_provider = opentelemetry_sdk::logs::SdkLoggerProvider::builder()
-        .with_resource(resource.clone())
+        .with_resource(resource)
         .with_batch_exporter(log_exporter)
         .build();
-
-    let metric_exporter = MetricExporter::builder()
-        .with_http()
-        .with_endpoint(&metrics_url)
-        .with_headers(headers)
-        .build()
-        .context("failed to build OTLP HTTP metric exporter")?;
-    let metric_reader = PeriodicReader::builder(metric_exporter)
-        .with_interval(std::time::Duration::from_secs(30))
-        .build();
-    let meter_provider = SdkMeterProvider::builder()
-        .with_resource(resource)
-        .with_reader(metric_reader)
-        .build();
-    opentelemetry::global::set_meter_provider(meter_provider.clone());
 
     let otel_trace_layer = tracing_opentelemetry::layer().with_tracer(tracer);
     let otel_log_layer =
@@ -182,13 +143,12 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>>
         .init();
 
     tracing::info!(
-        "OTel self-instrumentation enabled — exporting to {} (traces + logs + metrics)",
+        "OTel self-instrumentation enabled — exporting to {} (traces + logs)",
         config.endpoint
     );
 
     Ok(Some(TelemetryGuard {
         tracer_provider: Some(tracer_provider),
         logger_provider: Some(logger_provider),
-        meter_provider: Some(meter_provider),
     }))
 }
