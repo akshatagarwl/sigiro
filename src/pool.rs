@@ -165,69 +165,24 @@ impl Drop for ProjectInitialization<'_> {
     }
 }
 
-/// Opaque `duckdb_extension_descriptor` from `duckdb_static_extension.h`.
-#[repr(C)]
-struct ExtensionDescriptor {
-    _opaque: [u8; 0],
-}
-
-type DescribeExtension = unsafe extern "C" fn(*mut ExtensionDescriptor) -> i32;
-
-unsafe extern "C" {
-    fn duckdb_register_static_extension(describe: DescribeExtension) -> i32;
-    fn duckdb_extension_loadable_extensions_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-    fn duckdb_extension_httplib_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-    fn duckdb_extension_core_functions_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-    fn duckdb_extension_parquet_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-    fn duckdb_extension_json_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-    fn duckdb_extension_icu_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-    // DuckDB serves no android_arm64 extensions; the Android bundle links ducklake.
-    #[cfg(target_os = "android")]
-    fn duckdb_extension_ducklake_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-}
-
-/// Open an in-memory DuckDB. The only way to open one: clippy bans
-/// `Connection::open_in_memory` everywhere else.
+/// Open an in-memory DuckDB, honouring `SIGIRO_ALLOW_UNSIGNED_EXTENSIONS`.
 ///
-/// DuckDB 2.0's static bundle registers nothing by itself. Every statically
-/// linked extension, `httplib` (extension downloads) and `loadable_extensions`
-/// (any `INSTALL`/`LOAD` at all) must be registered before the first database
-/// opens, or `INSTALL ducklake` fails with "this build does not link the
-/// loadable_extensions library".
-pub fn open_duckdb() -> Result<Connection> {
-    static REGISTERED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
-    REGISTERED
-        .get_or_init(|| {
-            #[allow(unused_mut)]
-            let mut extensions: Vec<(&str, DescribeExtension)> = vec![
-                (
-                    "loadable_extensions",
-                    duckdb_extension_loadable_extensions_describe,
-                ),
-                ("httplib", duckdb_extension_httplib_describe),
-                ("core_functions", duckdb_extension_core_functions_describe),
-                ("parquet", duckdb_extension_parquet_describe),
-                ("json", duckdb_extension_json_describe),
-                ("icu", duckdb_extension_icu_describe),
-            ];
-            #[cfg(target_os = "android")]
-            extensions.push(("ducklake", duckdb_extension_ducklake_describe));
-            for (name, describe) in extensions {
-                // SAFETY: each describe function is DuckDB's own, linked from
-                // the static bundle, with the signature duckdb_static_extension.h
-                // declares; registration copies what it describes.
-                let status = unsafe { duckdb_register_static_extension(describe) };
-                if status != 0 {
-                    return Err(format!(
-                        "failed to register DuckDB static extension {name}: status {status}"
-                    ));
-                }
-            }
-            Ok(())
-        })
-        .clone()
-        .map_err(anyhow::Error::msg)?;
-    #[allow(clippy::disallowed_methods)]
+/// `allow_unsigned_extensions` is a Config-time flag: DuckDB rejects it once the
+/// database is open, so every connection that must load a locally built
+/// extension has to be created through here rather than
+/// `Connection::open_in_memory()`.
+pub fn open_duckdb_connection() -> Result<Connection> {
+    if crate::config::ALLOW_UNSIGNED_EXTENSIONS.value()? {
+        tracing::warn!(
+            "SIGIRO_ALLOW_UNSIGNED_EXTENSIONS is set — DuckDB will load extensions \
+             without verifying their signature"
+        );
+        let config = duckdb::Config::default()
+            .allow_unsigned_extensions()
+            .context("failed to enable unsigned DuckDB extensions")?;
+        return Connection::open_in_memory_with_flags(config)
+            .context("failed to open DuckDB with unsigned extensions allowed");
+    }
     Connection::open_in_memory().context("failed to open in-memory DuckDB")
 }
 
@@ -770,7 +725,8 @@ impl ProjectPool {
         project_id: &str,
         project_dir: &camino::Utf8Path,
     ) -> Result<OpenedProject> {
-        let base = open_duckdb()?;
+        let base = open_duckdb_connection()
+            .with_context(|| "failed to open in-memory DuckDB".to_string())?;
         tracing::info!("DuckDB: loading extensions during project initialization");
         self.attach_ducklake(&base, project_id, project_dir)?;
         // Ensure DuckLake tables are discoverable without schema prefix.
@@ -782,14 +738,8 @@ impl ProjectPool {
         writer
             .execute_batch("USE lake;")
             .context("failed to set writer default schema")?;
-        // At least one reader per admitted query, so a tenant's queries run
-        // side by side instead of queueing again for a connection.
-        let reader_count = crate::config::duckdb_threads()?.max(
-            NonZeroUsize::new(crate::workload::QUERIES_PER_TENANT)
-                .expect("per-tenant query capacity is non-zero"),
-        );
-        let readers =
-            ReaderPool::new(&base, reader_count).context("failed to create DuckDB reader pool")?;
+        let readers = ReaderPool::new(&base, crate::config::duckdb_threads()?)
+            .context("failed to create DuckDB reader pool")?;
         Ok(OpenedProject { writer, readers })
     }
 
@@ -899,3 +849,96 @@ const ATTACH_ATTEMPTS: u32 = 30;
 /// Backoff between DuckLake attach attempts. 1s matches typical Postgres
 /// initdb time on a small data directory.
 const ATTACH_BACKOFF: Duration = Duration::from_secs(1);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::{DataLocation, S3BucketName, S3Config, S3Region, StorageConfig};
+
+    fn s3_config(bucket: &str) -> StorageConfig {
+        let data = if bucket.is_empty() {
+            DataLocation::LocalFilesystem
+        } else {
+            DataLocation::S3(
+                S3Config::new(
+                    S3BucketName::try_new(bucket.to_string()).unwrap(),
+                    S3Region::try_new("us-east-1".to_string()).unwrap(),
+                    "https://example.r2.cloudflarestorage.com".parse().unwrap(),
+                    "key".to_string(),
+                    "secret".to_string(),
+                )
+                .unwrap(),
+            )
+        };
+        StorageConfig::new("postgresql://u:***@localhost:5432/db".to_string(), data).unwrap()
+    }
+
+    /// M-B: mirrors the `lock_local` gate in `attach_ducklake` — local-SQLite
+    /// mode (`None`) and distributed-with-local-data mode (empty bucket) both
+    /// take the lockdown path; only distributed-with-S3-data skips it.
+    #[test]
+    fn lock_local_gate_locks_unless_s3_bucket_configured() {
+        let lock_local = |storage_config: Option<&StorageConfig>| {
+            storage_config.is_none_or(|config| !config.uses_s3())
+        };
+
+        assert!(lock_local(None), "local SQLite mode must stay locked");
+        assert!(
+            lock_local(Some(&s3_config(""))),
+            "distributed catalog + local per-tenant data must lock down"
+        );
+        assert!(
+            !lock_local(Some(&s3_config("sigiro-tenant-data"))),
+            "distributed catalog + S3 data must NOT lock down (needs network)"
+        );
+    }
+
+    /// Every extension `lock_filesystem` preloads is satisfiable on THIS build,
+    /// either statically linked or present as a cached file.
+    ///
+    /// Regression guard: production project initialization must install any
+    /// lockdown extensions that are not statically linked before the lockdown.
+    #[test]
+    fn project_initialization_loads_extensions_before_lockdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = camino::Utf8Path::from_path(dir.path()).unwrap().to_owned();
+        let pool = ProjectPool::new(data_dir, 10, crate::storage::StorageMode::LocalFile);
+        pool.create_project("default")
+            .expect("production initialization must load extensions before lockdown");
+    }
+
+    /// M-B (asserted-SQL): `lock_filesystem` actually sets
+    /// `enable_external_access = false` and restricts `allowed_directories`
+    /// on the connection it locks — not just the gate boolean above.
+    #[test]
+    fn lock_filesystem_disables_external_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = camino::Utf8Path::from_path(dir.path()).unwrap().to_owned();
+        let ext_dir = data_dir.join("extensions");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+
+        let pool = ProjectPool::new(data_dir, 10, crate::storage::StorageMode::LocalFile);
+        let conn = Connection::open_in_memory().unwrap();
+        pool.lock_filesystem(&conn, &ext_dir).unwrap();
+
+        let locked: bool = conn
+            .query_row(
+                "SELECT current_setting('enable_external_access')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!locked, "enable_external_access must be false after lock");
+
+        // A path outside allowed_directories must now be rejected.
+        let err = conn
+            .execute_batch("SELECT * FROM read_text('/etc/hostname');")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("external")
+                || err.to_string().contains("disabled")
+                || err.to_string().contains("not allowed"),
+            "expected an external-access error, got: {err}"
+        );
+    }
+}

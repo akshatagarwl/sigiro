@@ -1,4 +1,3 @@
-import { is } from "drizzle-orm";
 /**
  * Emits the D1 schema as SQL.
  *
@@ -12,10 +11,11 @@ import { is } from "drizzle-orm";
  *   wrangler d1 execute sigiro-auth --file=schema.sql [--local|--remote]
  */
 import { getTableConfig } from "drizzle-orm/sqlite-core";
+import { is } from "drizzle-orm";
 import { SQLiteTable } from "drizzle-orm/sqlite-core";
 
-import { D1_SECONDARY_STORAGE_DDL } from "../src/d1/secondary-storage.js";
 import * as schema from "../src/schema/auth-schema.js";
+import { D1_SECONDARY_STORAGE_DDL } from "../src/d1/secondary-storage.js";
 
 const quote = (identifier: string) => `"${identifier.replace(/"/g, '""')}"`;
 
@@ -34,24 +34,14 @@ for (const value of Object.values(schema)) {
 
   for (const fk of table.foreignKeys) {
     const reference = fk.reference();
-    const from = reference.columns
-      .map((column) => quote(column.name))
-      .join(", ");
-    const to = reference.foreignColumns
-      .map((column) => quote(column.name))
-      .join(", ");
+    const from = reference.columns.map((column) => quote(column.name)).join(", ");
+    const to = reference.foreignColumns.map((column) => quote(column.name)).join(", ");
     const target = getTableConfig(reference.foreignTable).name;
-    const onDelete = fk.onDelete
-      ? ` ON DELETE ${fk.onDelete.toUpperCase()}`
-      : "";
-    columns.push(
-      `  FOREIGN KEY (${from}) REFERENCES ${quote(target)} (${to})${onDelete}`
-    );
+    const onDelete = fk.onDelete ? ` ON DELETE ${fk.onDelete.toUpperCase()}` : "";
+    columns.push(`  FOREIGN KEY (${from}) REFERENCES ${quote(target)} (${to})${onDelete}`);
   }
 
-  statements.push(
-    `CREATE TABLE IF NOT EXISTS ${quote(table.name)} (\n${columns.join(",\n")}\n);`
-  );
+  statements.push(`CREATE TABLE IF NOT EXISTS ${quote(table.name)} (\n${columns.join(",\n")}\n);`);
 
   for (const index of table.indexes) {
     const config = index.config;
@@ -61,7 +51,7 @@ for (const value of Object.values(schema)) {
       .join(", ");
     if (!indexColumns) continue;
     statements.push(
-      `CREATE ${config.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${quote(config.name)} ON ${quote(table.name)} (${indexColumns});`
+      `CREATE ${config.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${quote(config.name)} ON ${quote(table.name)} (${indexColumns});`,
     );
   }
 }

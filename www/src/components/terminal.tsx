@@ -1,18 +1,18 @@
-"use client";
+'use client';
 
-import { useMemo, useState, useSyncExternalStore } from "react";
-
-import { StageList } from "@/components/stage-list";
-import type { SessionLine } from "@/lib/highlight";
+import {
+  motion,
+  useMotionTemplate,
+  useMotionValueEvent,
+  useScroll,
+  useTransform,
+} from 'motion/react';
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { StageList } from '@/components/stage-list';
+import type { SessionLine } from '@/lib/highlight';
 
 /**
- * One terminal per step, with a task list beside it. Clicking a step shows it.
- *
- * It used to be stepped by scroll: a pinned frame on a track of one viewport
- * plus 30vh per step. Readers saw a screen and a half of empty page while the
- * frame stayed put (and a full-page screenshot showed exactly that gap), so the
- * pin is gone and the rail drives the frame directly, like the hero's loop.
- * The notes below are the history of the scroll-driven version.
+ * One terminal per step, stepped by scroll, with a task list beside it.
  *
  * An earlier version typed the transcript out character by character, bound to
  * scroll position. It was a good demo of scrubbing and a bad terminal: real
@@ -42,24 +42,30 @@ import type { SessionLine } from "@/lib/highlight";
  * a button: `goToStage` below turns a click into a scroll position, so the rail
  * navigates the sequence instead of only reporting on it.
  *
- * Design constraints:
- * - React does not re-render at 60fps. The step index is React state; the
+ * It renders the vendored `useTaskSteps` hook's rows with our own markup. The
+ * vendored `TaskSteps` view could not take a click handler and is kept verbatim
+ * under §1b, so the hook/view split is where this parts company from it — see the
+ * note in `stage-list.tsx`.
+ *
+ * Design constraints, from DESIGN.md (now vendored at www/DESIGN.md):
+ * - §5h  React does not re-render at 60fps. The step index is React state; the
  *        handoff is MotionValues off `scrollYProgress` and never touches React at
  *        all. A previous version quantised progress to two decimals and drove the
- *        fade from state, leaving the handoff ~6 frames long.
- * - `setShown` is called on every scroll frame and passed the same index most
+ *        fade from state, leaving the handoff ~6 frames long — §6a: "quantising
+ *        the sweep would make the fill look like it was stuttering".
+ * - §6a  `setShown` is called on every scroll frame and passed the same index most
  *        of them. React compares with `Object.is` and bails out, so the listener
  *        can fire at frame rate and this still renders once per step. No guard is
  *        written for it because the guard is the hook's own behaviour.
- * - the handoff uses the specified displacements — out at `y 6, blur(3px)`,
+ * - §5   the handoff uses the specified displacements — out at `y 6, blur(3px)`,
  *        in at `y 10, blur(6px)`.
- * - no `rounded-full`, so no traffic-light chrome. This is the same
- *        muted area inside a card as every code block on the site —
+ * - §3   no `rounded-full`, so no traffic-light chrome. This is the same
+ *        `mat-well` cut into a `mat-panel` as every code block on the site —
  *        and, since `highlightSession`, wearing the same Shiki colours. The
  *        markup arrives already highlighted: this component is a client
  *        component and Shiki is a server-side dependency, so what crosses is
  *        one string of HTML per line, never a highlighter.
- * - a scroll-driven component needs no reduced-motion branch — every value
+ * - §5h  a scroll-driven component needs no reduced-motion branch — every value
  *        resolves on the frame it is scrolled to. The no-JS fallback is a
  *        `<noscript>` in the calling `.astro` file, deliberately outside this
  *        component: it used to be a `fallback` prop, which meant the whole stacked
@@ -97,11 +103,7 @@ export type TerminalStep = {
    * highlighter must not. When present, `lines` is whichever the reader picked
    * and this is the pair the picker offers.
    */
-  choices?: readonly {
-    id: string;
-    label: string;
-    lines: readonly SessionLine[];
-  }[];
+  choices?: readonly { id: string; label: string; lines: readonly SessionLine[] }[];
 };
 
 /**
@@ -117,7 +119,7 @@ export type TerminalStep = {
  * `localStorage` can throw — Safari in private mode, storage blocked. A missing
  * preference is just the default, so failing soft is right.
  */
-const PREF = "sigiro-install";
+const PREF = 'sigiro-install';
 
 function readPref(): string | null {
   try {
@@ -146,10 +148,10 @@ function subscribe(notify: () => void) {
   watchers.add(notify);
   // Another tab changing the preference. Free, and correct: the reader set it
   // once and means it everywhere.
-  window.addEventListener("storage", notify);
+  window.addEventListener('storage', notify);
   return () => {
     watchers.delete(notify);
-    window.removeEventListener("storage", notify);
+    window.removeEventListener('storage', notify);
   };
 }
 
@@ -178,6 +180,13 @@ const LINE = 22;
 const PAD = 24;
 
 /**
+ * Fraction of a step's scroll spent holding still before the handoff begins.
+ * The remainder is the handoff: frame out over the first half, in over the
+ * second.
+ */
+const HOLD = 0.72;
+
+/**
  * The transcript a step shows, given what the reader picked.
  *
  * `pick` is read from storage and so can be anything at all — a stale id, a
@@ -200,6 +209,15 @@ function plan(steps: readonly TerminalStep[], pick: string | null) {
   });
 }
 
+/** Where a scroll position falls: which step, and how far into its handoff. */
+function locate(v: number, count: number) {
+  const scaled = Math.min(Math.max(v, 0), 0.9999) * count;
+  const index = Math.floor(scaled);
+  const frac = scaled - index;
+  const handoff = index >= count - 1 || frac <= HOLD ? 0 : (frac - HOLD) / (1 - HOLD);
+  return { index, handoff };
+}
+
 /*
  * An XState machine stood here. It had two states, `running` and `ready`, a 300ms
  * delayed transition between them, and a `STEP` event that re-entered `running` so
@@ -208,13 +226,14 @@ function plan(steps: readonly TerminalStep[], pick: string | null) {
  *
  * What is left of the discrete half is one number: which frame is mounted. That is
  * `useState` below. Everything continuous — opacity, y, blur, height — is a
- * MotionValue and never was state.
+ * MotionValue and never was state (§5h).
  */
 
 export function SteppedTerminal({
   steps,
   label,
   heading,
+  track,
 }: {
   steps: readonly TerminalStep[];
   /**
@@ -246,49 +265,128 @@ export function SteppedTerminal({
    * of a 720px viewport; the header adds roughly 130px more. See the note at the
    * sticky container for what gives way, and where it stops fitting.
    */
-  heading?: {
-    id: string;
-    label: string;
-    title: string;
-    tail?: string;
-    lede?: string;
-  };
+  heading?: { id: string; label: string; title: string; tail?: string; lede?: string };
+  /**
+   * Scroll distance the whole sequence occupies. Defaults to one viewport for
+   * the pin plus 45vh of travel per step.
+   *
+   * It was 55vh while the transcript typed itself, because the reader was
+   * waiting on the machine. Nothing waits now beyond the run beat, so the only
+   * thing the travel has to cover is reading, which the reader paces by
+   * stopping.
+   */
+  track?: string;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
+
   const pick = useInstallPref();
   const frames = useMemo(() => plan(steps, pick), [steps, pick]);
+  const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end end'] });
 
-  // Which frame is shown. The rail sets it; nothing else does.
+  // The discrete half: which frame's text is mounted. One render per step —
+  // `setShown` is handed the same index on most scroll frames and React bails out.
   const [shown, setShown] = useState(0);
+
+  useMotionValueEvent(scrollYProgress, 'change', (v) => {
+    const { index, handoff } = locate(v, steps.length);
+    setShown(handoff >= 0.5 ? index + 1 : index);
+  });
+
+  // The continuous half: never React state, so it runs at frame rate.
+  const opacity = useTransform(scrollYProgress, (v) => {
+    const { handoff: h } = locate(v, steps.length);
+    if (!h) return 1;
+    return h < 0.5 ? 1 - h / 0.5 : (h - 0.5) / 0.5;
+  });
+  const y = useTransform(scrollYProgress, (v) => {
+    const { handoff: h } = locate(v, steps.length);
+    if (!h) return 0;
+    return h < 0.5 ? -6 * (h / 0.5) : 10 * (1 - (h - 0.5) / 0.5);
+  });
+  const blur = useTransform(scrollYProgress, (v) => {
+    const { handoff: h } = locate(v, steps.length);
+    if (!h) return 0;
+    return h < 0.5 ? 3 * (h / 0.5) : 6 * (1 - (h - 0.5) / 0.5);
+  });
+  const filter = useMotionTemplate`blur(${blur}px)`;
+
+  // Resizing rides the handoff too, where the content it would jump is faded.
+  const height = useTransform(scrollYProgress, (v) => {
+    const { index, handoff: h } = locate(v, steps.length);
+    const a = frames[index].height;
+    const b = frames[Math.min(index + 1, frames.length - 1)].height;
+    return a + (b - a) * h;
+  });
 
   const step = steps[shown];
   const frame = frames[shown];
 
   const tasks = useMemo(
-    () =>
-      steps.map((s) => ({
-        id: s.label,
-        label: s.label,
-        meta: s.badgeShort ?? s.badge,
-      })),
-    [steps]
+    () => steps.map((s) => ({ id: s.label, label: s.label, meta: s.badgeShort ?? s.badge })),
+    [steps],
+  );
+
+  /**
+   * Jump to a stage, by scrolling to where that stage is at rest.
+   *
+   * The rail cannot set the step directly, and that is not a limitation to work
+   * around — scroll position IS the state here (§5h). Setting `shown` would put the
+   * frame out of agreement with the scrollbar, and the next scroll event would
+   * snap it back. So the click moves the page and the existing listener does the
+   * rest, which means clicking and scrolling can never disagree.
+   *
+   * The arithmetic inverts `locate()`. `useScroll` with `offset: ['start start',
+   * 'end end']` runs progress 0 → 1 as the track's top reaches the viewport top
+   * and its bottom reaches the viewport bottom, so the scrollable span is
+   * `trackHeight - viewportHeight`. Step `i` holds still while its fraction is
+   * below HOLD, so `HOLD / 2` lands mid-hold — clear of the handoff at either end,
+   * where the frame is mid-fade.
+   */
+  const goToStage = useCallback(
+    (index: number) => {
+      const track = ref.current;
+      if (!track) return;
+      const top = track.getBoundingClientRect().top + window.scrollY;
+      const span = Math.max(0, track.offsetHeight - window.innerHeight);
+      const progress = (index + HOLD / 2) / steps.length;
+      window.scrollTo({
+        top: top + span * progress,
+        // A jump this long is disorienting without the sweep, but "smooth" is
+        // exactly what a reduced-motion preference is asking us not to do.
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      });
+    },
+    [steps.length],
   );
 
   return (
     <>
-      <div className="relative">
-        {/* Not pinned any more, so the section takes its own padding. */}
-        <div className="flex flex-col gap-4 pt-14 sm:gap-5">
-          {/* The section's header, above the frame it describes. */}
+      <div
+        ref={ref}
+        className="relative"
+        style={{ height: track ?? `calc(100vh + ${steps.length * 45}vh)` }}
+      >
+        {/* `min-h-screen`, not `h-screen`. The header and the frame together are
+            close to a short viewport's whole height, and a fixed `h-screen` box
+            whose content exceeds it centres the overflow out of both ends — the
+            lede clipped at the top, the note at the bottom, with no way to scroll
+            to either because the scrollport is the page. `min-h-screen` lets the
+            box grow instead; past that point the section scrolls as a tall block
+            rather than pinning, which degrades honestly.
+
+            The gap tightens from 5 to 4 below `sm` for the same reason: on a phone
+            every 4px is a line of the transcript. */}
+        <div className="sticky top-0 flex min-h-screen flex-col justify-center gap-4 sm:gap-5">
+          {/* The section's header, on screen for as long as the frame is pinned —
+              which is the point. A reader arriving mid-scroll can see what the
+              five stages are FOR while watching them run, instead of having read
+              it two screens ago. */}
           {heading ? (
-            // No `px-1`: the header sat 4px right of every other section's
-            // left edge on the page.
-            <div>
-              <p className="text-muted-foreground text-xs font-medium">
-                {heading.label}
-              </p>
+            <div className="px-1">
+              <p className="label">{heading.label}</p>
               <h2
                 id={heading.id}
-                className="text-foreground mt-2.5 max-w-[34ch] text-[22px] leading-[1.2] font-medium tracking-[-0.03em] sm:text-[27px]"
+                className="mt-2.5 max-w-[34ch] text-[22px] leading-[1.2] font-medium tracking-[-0.03em] text-ink sm:text-[27px]"
               >
                 {heading.title}
                 {/* `{' '}` and not a space inside the span or a newline between
@@ -298,15 +396,13 @@ export function SteppedTerminal({
                     explicit expression cannot be reformatted away. */}
                 {heading.tail ? (
                   <>
-                    {" "}
-                    <span className="text-muted-foreground">
-                      {heading.tail}
-                    </span>
+                    {' '}
+                    <span className="text-ink-3">{heading.tail}</span>
                   </>
                 ) : null}
               </h2>
               {heading.lede ? (
-                <p className="text-muted-foreground mt-2.5 max-w-[62ch] text-[13.5px] leading-relaxed sm:text-[15px]">
+                <p className="mt-2.5 max-w-[62ch] text-[13.5px] leading-relaxed text-ink-2 sm:text-[15px]">
                   {heading.lede}
                 </p>
               ) : null}
@@ -316,40 +412,41 @@ export function SteppedTerminal({
           <div className="flex flex-col gap-5 lg:grid lg:grid-cols-[190px_1fr] lg:items-center">
             {/* The rail says which stage you are on, and now moves you to any
                 other one. The heading above says which section they belong to. */}
-            <StageList
-              stages={tasks}
-              current={shown}
-              label={label}
-              onSelect={setShown}
-            />
+            <StageList stages={tasks} current={shown} label={label} onSelect={goToStage} />
 
-            <figure className="bg-card w-full min-w-0 rounded-xl border p-[5px] shadow-sm">
+            <figure className="mat-panel w-full min-w-0 rounded-[14px] p-[5px]">
               <figcaption className="flex h-9 items-center gap-2.5 pr-[3px] pl-2.5">
                 {step.badge ? (
                   <span
-                    className={`bg-background inline-flex h-[22px] shrink-0 items-center rounded-md border px-2 text-[11.5px] font-medium shadow-xs ${
-                      step.badgeStrong
-                        ? "text-foreground"
-                        : "text-muted-foreground"
+                    className={`mat-cap inline-flex h-[22px] shrink-0 items-center rounded-[6px] px-2 text-[11.5px] font-medium ${
+                      step.badgeStrong ? 'text-ink' : 'text-ink-3'
                     }`}
                   >
                     {step.badge}
                   </span>
                 ) : null}
-                <span className="text-foreground text-[13px] font-medium tracking-[-0.01em]">
+                <span className="text-[13px] font-medium tracking-[-0.01em] text-ink">
                   {step.label}
                 </span>
 
                 {/* The picker sits in the chrome rather than above the section,
                     because what it changes is inside this well and nowhere else.
-                    Two cells in a tray. It matches the docs tabs, which
+                    §3 rules out a pill, so it is two cells in a tray; radii nest,
+                    5 inside 7.
+
+                    Ink for the selected cell, not accent. §7c lists "segmented
+                    thumb" among the controls that mark selection with ink and
+                    depth, and says why: accent means "the system is responding
+                    to you right now", and if every selected thing were blue,
+                    focus would stop meaning anything. This was `bg-accent` until
+                    that section was re-read. It also matches the docs tabs, which
                     fumadocs draws in ink — one preference, two controls, one
                     idiom. */}
                 {step.choices ? (
                   <span
                     role="group"
                     aria-label={`How to run ${step.label.toLowerCase()}`}
-                    className="bg-background ml-auto flex shrink-0 items-center gap-px rounded-md border p-px shadow-xs"
+                    className="mat-cap ml-auto flex shrink-0 items-center gap-px rounded-[7px] p-px"
                   >
                     {step.choices.map((choice) => {
                       const on = chosen(step, pick) === choice.lines;
@@ -359,10 +456,8 @@ export function SteppedTerminal({
                           type="button"
                           aria-pressed={on}
                           onClick={() => writePref(choice.id)}
-                          className={`rounded-md px-2 py-[5px] font-mono text-xs tabular-nums transition-colors ${
-                            on
-                              ? "bg-foreground text-card"
-                              : "text-muted-foreground hover:text-foreground"
+                          className={`press meta rounded-[5px] px-2 py-[5px] ${
+                            on ? 'bg-ink text-panel' : 'text-ink-3 hover:text-ink'
                           }`}
                         >
                           {choice.label}
@@ -372,9 +467,7 @@ export function SteppedTerminal({
                   </span>
                 ) : null}
 
-                <span
-                  className={`text-muted-foreground shrink-0 font-mono text-xs tabular-nums ${step.choices ? "pl-2.5" : "ml-auto"}`}
-                >
+                <span className={`meta shrink-0 text-ink-3 ${step.choices ? 'pl-2.5' : 'ml-auto'}`}>
                   {shown + 1} of {steps.length}
                 </span>
               </figcaption>
@@ -384,9 +477,9 @@ export function SteppedTerminal({
                 here because the div inside is itself the scroll container. Putting
                 `overflow-x-auto` here as well was tried and is dead config —
                 scrollWidth equals clientWidth, so it can never scroll. */}
-              <div
-                className="bg-muted overflow-hidden rounded-lg px-3.5 py-3"
-                style={{ height: frame.height }}
+              <motion.div
+                className="mat-well overflow-hidden rounded-[9px] px-3.5 py-3"
+                style={{ height }}
               >
                 {/* The x scroller. At a 390px viewport this well is 324px while
                   the widest transcript row is 495px, so something has to scroll
@@ -401,9 +494,10 @@ export function SteppedTerminal({
                   vertical case — so the clipped end of a line was unreachable by
                   keyboard. A tab stop on a scrollable region is what makes it
                   reachable, and it is cheaper than measuring. */}
-                <div
+                <motion.div
                   tabIndex={0}
                   className="overflow-x-auto overscroll-contain font-mono text-[12.5px] leading-[22px] whitespace-pre"
+                  style={{ opacity, y, filter }}
                 >
                   {/* One box per line, so the frame height stays integer. The
                     `shiki` class is on the line rather than on the well: its
@@ -419,18 +513,15 @@ export function SteppedTerminal({
                       dangerouslySetInnerHTML={{ __html: line.html }}
                     />
                   ))}
-                  <div
-                    className="text-muted-foreground"
-                    style={{ height: LINE }}
-                  >
-                    {"$ "}
-                    <span className="bg-foreground ml-px inline-block h-[13px] w-[7px] align-[-1px]" />
+                  <div className="text-ink-3" style={{ height: LINE }}>
+                    {'$ '}
+                    <span className="ml-px inline-block h-[13px] w-[7px] bg-ink align-[-1px]" />
                   </div>
-                </div>
-              </div>
+                </motion.div>
+              </motion.div>
 
               {step.note ? (
-                <p className="text-muted-foreground mt-2 min-h-[3.4rem] max-w-[62ch] px-2.5 pb-1 text-[13px] leading-relaxed">
+                <p className="mt-2 min-h-[3.4rem] max-w-[62ch] px-2.5 pb-1 text-[13px] leading-relaxed text-ink-2">
                   {step.note}
                 </p>
               ) : null}
@@ -439,10 +530,10 @@ export function SteppedTerminal({
         </div>
       </div>
 
-      {/* Only one frame is on screen at a time. A screen reader gets every
-          session, whole, once. */}
+      {/* Which frame is on screen depends on scroll position, and a screen reader
+          has no scroll position. This is every session, whole, once. */}
       <pre className="sr-only">
-        {frames.map((f) => f.lines.map((l) => l.text).join("\n")).join("\n\n")}
+        {frames.map((f) => f.lines.map((l) => l.text).join('\n')).join('\n\n')}
       </pre>
     </>
   );

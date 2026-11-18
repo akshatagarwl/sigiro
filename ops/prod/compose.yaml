@@ -1,0 +1,164 @@
+name: sigiro
+
+services:
+  catalog-db:
+    image: 127.0.0.1:5555/linguabench/postgres:18
+    container_name: linguabench-sigiro-catalog-db
+    command:
+      - /bin/sh
+      - -ec
+      - >-
+        export POSTGRES_PASSWORD="$$SIGIRO_CATALOG_PASSWORD";
+        install -m 0600 -o postgres -g postgres /dev/null /var/lib/postgresql/data/server.crt;
+        install -m 0600 -o postgres -g postgres /dev/null /var/lib/postgresql/data/server.key;
+        printf "%s" "$$SIGIRO_AUTH_DB_TLS_CERT_B64" | base64 -d > /var/lib/postgresql/data/server.crt;
+        printf "%s" "$$SIGIRO_AUTH_DB_TLS_KEY_B64" | base64 -d > /var/lib/postgresql/data/server.key;
+        exec /usr/local/bin/docker-entrypoint.sh postgres
+        -c max_connections=30
+        -c shared_buffers=64MB
+        -c work_mem=2MB
+        -c ssl=on
+        -c ssl_cert_file=/var/lib/postgresql/data/server.crt
+        -c ssl_key_file=/var/lib/postgresql/data/server.key
+    environment:
+      POSTGRES_USER: sigiro
+      POSTGRES_DB: sigiro
+      SIGIRO_CATALOG_PASSWORD: ${SIGIRO_CATALOG_PASSWORD:?required}
+      SIGIRO_AUTH_DB_TLS_CERT_B64: ${SIGIRO_AUTH_DB_TLS_CERT_B64:?required}
+      SIGIRO_AUTH_DB_TLS_KEY_B64: ${SIGIRO_AUTH_DB_TLS_KEY_B64:?required}
+    volumes:
+      - catalog-data:/var/lib/postgresql/data
+    networks:
+      workload:
+        aliases:
+          - auth-db.sigiro.com
+    restart: unless-stopped
+    cpus: 0.25
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 128
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U sigiro -d sigiro]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: 10m
+
+  edge:
+    image: nginxinc/nginx-unprivileged:1.30.3-alpine@sha256:b3f2436575bd5be7386518084d842dac414ab4962712afa31e99e0942a56e3b2
+    container_name: linguabench-sigiro-edge
+    user: 10001:10001
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        cat > /etc/nginx/nginx.conf <<'EOF'
+        worker_processes 1;
+        pid /tmp/nginx.pid;
+        error_log /dev/stderr warn;
+
+        events {
+          worker_connections 64;
+        }
+
+        http {
+          access_log /dev/stdout;
+          client_body_temp_path /tmp/client_temp;
+          proxy_temp_path /tmp/proxy_temp;
+          fastcgi_temp_path /tmp/fastcgi_temp;
+          uwsgi_temp_path /tmp/uwsgi_temp;
+          scgi_temp_path /tmp/scgi_temp;
+          server_tokens off;
+          client_max_body_size 64k;
+          client_body_timeout 5s;
+          send_timeout 5s;
+          keepalive_timeout 5s;
+
+          server {
+            listen 8080;
+            location = /health {
+              access_log off;
+              default_type text/plain;
+              return 200 'ok';
+            }
+            location / {
+              return 404;
+            }
+          }
+        }
+        EOF
+        exec nginx -g 'daemon off;'
+    networks: [workload]
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=4m
+      - /etc/nginx:rw,noexec,nosuid,nodev,size=1m,uid=10001,gid=10001,mode=0700
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 0.05
+    mem_limit: 64m
+    memswap_limit: 64m
+    pids_limit: 32
+    healthcheck:
+      test: [CMD-SHELL, wget -q -O /dev/null http://127.0.0.1:8080/health]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    logging: *logging
+
+  hosted:
+    image: ${SIGIRO_IMAGE:?required}
+    container_name: linguabench-sigiro-hosted
+    command: [serve]
+    environment:
+      SIGIRO_HOSTED_DATA_DIR: /var/lib/sigiro/telemetry
+      SIGIRO_DUCKDB_CACHE_DIR: /var/cache/sigiro/duckdb
+      SIGIRO_CATALOG_URL: 'postgresql://sigiro:${SIGIRO_CATALOG_PASSWORD:?required}@auth-db.sigiro.com:5432/sigiro?sslmode=verify-full'
+      RUST_LOG: info
+      SIGIRO_RETENTION_DAYS: "7"
+      SIGIRO_FLUSH_INTERVAL_SECS: "1"
+      SIGIRO_MAX_DISK_BYTES: "4294967296"
+      SIGIRO_DUCKDB_THREADS: "1"
+      SIGIRO_DUCKDB_MEMORY_LIMIT: 512MB
+      SIGIRO_QUERY_TIMEOUT_SECONDS: "10"
+      SIGIRO_MAX_RESULT_ROWS: "10000"
+      SIGIRO_MAX_INGEST_BODY_BYTES: "8388608"
+      SIGIRO_AUTH_ISSUER: https://sigiro.com/api/auth
+      SIGIRO_AUTH_AUDIENCE: https://sigiro.com
+      SIGIRO_AUTH_JWKS_URL: https://sigiro.com/api/auth/jwks
+      SIGIRO_ADMIN_TOKEN: ${SIGIRO_ADMIN_TOKEN:?required}
+    volumes:
+      - hosted-data:/var/lib/sigiro/telemetry
+      - hosted-duckdb-cache:/var/cache/sigiro/duckdb
+    networks: [workload]
+    ports:
+      - 127.0.0.1:9998:9999
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 1.0
+    mem_limit: 1792m
+    memswap_limit: 2560m
+    pids_limit: 256
+    logging: *logging
+
+networks:
+  workload:
+    external: true
+    name: sigiro
+
+volumes:
+  catalog-data:
+    external: true
+    name: linguabench_sigiro_catalog_data
+  hosted-data:
+    external: true
+    name: linguabench_sigiro_hosted_data
+  hosted-duckdb-cache:
+    name: linguabench_sigiro_hosted_duckdb_cache

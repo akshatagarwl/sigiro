@@ -29,9 +29,7 @@ ENTRY_POINTS = (
     r"\.process_events\(",
     r"\.next_due\(",
     r"\.mark_sent\(",
-    r"\.mark_failed\(",
-    r"\.replay_dead\(",
-    r"\.delivery_summary\(",
+    r"\.mark_retry\(",
 )
 
 FN_RE = re.compile(r"\s*(pub(?:\([^)]*\))?\s+)?(async\s+)?fn\s+(\w+)")

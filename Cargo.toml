@@ -1,137 +1,150 @@
 [package]
 name = "sigiro"
-version = "0.2.0"
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-
-[workspace]
-members = ["crates/sigiro-core", "crates/segments", "crates/segments-wasm"]
-
-[workspace.package]
+version = "0.1.0"
 edition = "2024"
-# The real floor, not an aspiration: `rusqlite` 0.41.1 requires 1.89,
+# The real floor, not an aspiration: `rmcp` and `darling` both require 1.88,
 # so a lower number here does not buy compatibility — it silently costs it.
 # Cargo treats `rust-version` as a RESOLVER input, so when this said 1.85 a
 # plain `cargo add rmcp` resolved to 2.2.0 instead of 3.x with no warning and
 # no error. Keep this equal to the highest MSRV in the dependency tree
 # (`cargo metadata` reports it); raise it deliberately when a dependency
 # forces it, and never leave it below what the tree already demands.
-rust-version = "1.89"
-license = "FSL-1.1-ALv2"
+rust-version = "1.88"
+license = "Apache-2.0"
 
-[workspace.lints.clippy]
-# Disallowed patterns (configured in clippy.toml)
-disallowed_methods = "deny"
-disallowed_macros = "deny"
-
-# Silent error drops via `let _ = expr_returning_result`
-let_underscore_must_use = "deny"
-
-# General quality
-needless_pass_by_value = "warn"
-cloned_instead_of_copied = "warn"
-redundant_closure_for_method_calls = "warn"
-manual_string_new = "warn"
-inefficient_to_string = "warn"
-
-[workspace.lints.rust]
-unused_must_use = "deny"
-dead_code = "warn"
-unused_imports = "warn"
+[workspace]
+members = []
 
 [dependencies]
-sigiro-core = { path = "crates/sigiro-core" }
-sigiro-segments = { path = "crates/segments" }
+# BOCPD changepoint detection for /diagnose anomaly flags (pure Rust, no Stan)
+augurs-changepoint = "0.10.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
-dirs = "7"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "blocking", "cookies", "query"] }
+dirs = "6"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "cookies"] }
 dashmap = "6"
-rusqlite = { version = "0.41", features = ["bundled", "fallible_uint"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 postgres = "0.19"
 postgres-native-tls = "0.5"
-# Vendored so Linux release binaries cross-compile from macOS without a
-# target OpenSSL install; macOS and Windows use their platform TLS instead.
-native-tls = { version = "0.2", features = ["vendored"] }
+native-tls = "0.2"
 
 # OTLP ingest
 tonic = { version = "0.14", features = ["tls-aws-lc"] }
 tonic-types = "0.14"
 prost = "0.14"
-arrow = "60"
-# Linked against the upstream static bundle from scripts/prepare-duckdb-static.sh.
-# Keep it feature-free beyond these two: `bundled`, `parquet` and `json` would
-# compile DuckDB locally.
-duckdb = { version = "=1.20000.1", default-features = false, features = ["appender-arrow", "vscalar"] }
-opentelemetry-proto = { version = "0.33", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles", "with-serde"] }
+arrow = "58"
+opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles", "with-serde"] }
+# Temporary ProtoJSON decoder until the message-level serde defaults land in a
+# released opentelemetry-proto. The decoded request crosses back over protobuf,
+# keeping the existing 0.31 ingest and gRPC types untouched.
+opentelemetry-proto-json = { package = "opentelemetry-proto", version = "0.33", git = "https://github.com/Arnav12114/opentelemetry-rust.git", rev = "7b70ecc68e68a1e0ea5c343caf8e37c68adaa356", default-features = false, features = ["gen-tonic-messages", "metrics", "with-serde"] }
 axum = "0.8"
-axum-server = { version = "0.9", features = ["tls-rustls"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
-tower-http = { version = "0.7", features = ["compression-full", "decompression-full", "cors", "trace"] }
-axum-anyhow = "0.11"
+tower-http = { version = "0.6", features = ["compression-full", "decompression-full", "cors", "trace"] }
+axum-anyhow = "0.10"
 prefixed-api-key = { version = "0.3", features = ["sha2"] }
 tower_governor = { version = "0.8", features = ["axum"] }
 serde = { version = "1", features = ["derive"] }
-nutype = { version = "0.8", features = ["regex", "serde"] }
+nutype = { version = ">=0.7,<0.8", features = ["regex", "serde"] }
 secrecy = "0.10"
 serde_json = "1"
-sha2 = "0.11"
+sha2 = "0.10"
 tracing = "0.1"
 tracing-attributes = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "ansi"] }
-# Self-profiling (src/profiling.rs): pprof-rs samples CPU; its `cpp` feature
-# demangles DuckDB's native C++ frames. jemalloc_pprof dumps the sampled heap,
-# pprof_util parses the dump, and backtrace symbolizes its addresses.
+# Exact: 2.0.4 fixes periodic ProfilerGuard recreation while retaining the
+# pprof fork that demangles native C++ frames. The vendored pprofrs backend in
+# 2.1.1 regressed macOS DuckDB frames to `_ZN...` names in a real push E2E.
+pyroscope = { version = "=2.0.4", features = ["backend-jemalloc", "backend-pprof-rs"] }
+tikv-jemallocator = { version = "0.6.1", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 regex = "1"
+drain3 = "0.3.0"
 hex = "0.4.3"
 libc = "0.2.184"
 flate2 = "1"
-parking_lot = "0.13"
+parking_lot = "0.12"
 thiserror = "2"
 url = "2"
-unicode-normalization = "0.1"
 tempfile = "3"
 headers = "0.4"
 mime = "0.3"
-rust-embed = { version = "8.13", features = ["debug-embed"] }
+sqlparser = { version = "0.53", features = ["visitor"] }
 axum-extra = { version = "0.12.6", features = ["typed-routing", "multipart"] }
+multer = "3"
+futures-util = "0.3"
 walkdir = "2"
 
-opentelemetry = "0.33"
-opentelemetry_sdk = { version = "0.33", features = ["rt-tokio", "logs"] }
-opentelemetry-otlp = { version = "0.33.1", features = ["http-proto", "reqwest-blocking-client", "logs", "metrics"] }
-opentelemetry-appender-tracing = "0.33"
-tracing-opentelemetry = "0.34"
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "logs"] }
+opentelemetry-otlp = { version = "0.31.1", features = ["http-proto", "reqwest-blocking-client", "logs", "metrics"] }
+opentelemetry-appender-tracing = "0.31"
+tracing-opentelemetry = "0.32"
 typed-env = "0.3.0"
-utoipa = "6"
+utoipa = "5"
+validator = { version = "0.20", features = ["derive"] }
+axum-valid = "0.23" # default features = basic (json/form/query) + validator
 camino = "1.2.2"
+itertools = "0.14.0"
 rmcp = { version = "3.1.2", features = ["client", "server", "macros", "transport-streamable-http-server", "transport-streamable-http-client-reqwest", "transport-io", "schemars"] }
-jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 tokio-metrics = "0.5.1"
 oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 keyring = "4.2.0"
 webbrowser = { version = "1.2.4", features = ["hardened"] }
 rpassword = "7.4.0"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Keep the mature v1 ergonomic API while linking DuckDB v2's compatibility C
+# API from scripts/prepare-duckdb-static.sh. duckdb-rs's Cyanoptera branch has
+# not restored appender-arrow or vscalar yet; both are required by Sigiro.
+duckdb = { version = "=1.10505.0", default-features = false, features = ["appender-arrow", "vscalar"] }
+
+# All supported targets use the pinned upstream static bundle prepared by
+# scripts/prepare-duckdb-static.sh. Keeping this dependency feature-free is
+# intentional: `bundled`, `parquet`, and `json` would compile DuckDB locally.
+[target.'cfg(target_os = "macos")'.dependencies]
+duckdb = { version = "=1.10505.0", default-features = false, features = ["appender-arrow", "vscalar"] }
+
 [dev-dependencies]
-criterion = { version = "0.8", features = ["html_reports"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+axum-test = "17"
+temp-env = "0.3"
+insta = { version = "1.47.2", features = ["yaml", "json"] }
 schemars = "1"
 tokio-util = "0.7"
 
-[lints]
-workspace = true
+[[bench]]
+name = "diagnose_bench"
+harness = false
+test = false
 
-# Android (bionic) can't build jemalloc and doesn't need self-profiling;
-# it uses the system allocator and reports self-profiling as disabled.
-[target.'cfg(not(target_os = "android"))'.dependencies]
-pprof = { version = "0.15", default-features = false, features = ["cpp"] }
-jemalloc_pprof = "0.9"
-pprof_util = "0.8.2"
-backtrace = "0.3"
-tikv-jemallocator = { version = "0.7", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
+[[bench]]
+name = "appender_bench"
+harness = false
+test = false
+
+[lints.clippy]
+# Disallowed patterns (configured in clippy.toml)
+disallowed-methods = "deny"
+disallowed-macros = "deny"
+
+# Silent error drops via `let _ = expr_returning_result`
+let-underscore-must-use = "deny"
+
+# General quality
+needless-pass-by-value = "warn"
+cloned-instead-of-copied = "warn"
+redundant-closure-for-method-calls = "warn"
+manual-string-new = "warn"
+inefficient-to-string = "warn"
+
+[lints.rust]
+unused-must-use = "deny"
+dead_code = "warn"
+unused_imports = "warn"
 
 [profile.dev]
 split-debuginfo = "unpacked"
@@ -141,6 +154,13 @@ debug = 1
 # shrinks target/ (the bulk of the old 66 GB debug dir was dep debuginfo) and
 # speeds dep compile+link. Our own crate keeps debug = 1 above.
 [profile.dev.package."*"]
+debug = false
+
+[profile.test]
+split-debuginfo = "unpacked"
+debug = 1
+
+[profile.test.package."*"]
 debug = false
 
 [profile.release]

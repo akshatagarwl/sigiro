@@ -1,0 +1,43 @@
+[Unit]
+Description=Native Kamal Proxy ingress
+# Deliberately NOT ordered after sigiro.service. sigiro fetches the Better Auth
+# JWKS over its PUBLIC issuer URL (https://sigiro.com/api/auth/jwks) during
+# startup, and that request re-enters this host's ingress. Ordering the proxy
+# after sigiro inverts that and makes every boot fail sigiro's first start
+# attempt.
+#
+# The proxy binds 80/443 and serves an unrouted host a 404 until
+# kamal-proxy-routes.service registers targets, so starting before the backends
+# is safe; the route unit is what waits for them.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kamal-proxy
+Group=kamal-proxy
+Environment=HOME=/var/lib/kamal-proxy
+# Config and TLS certificates live under the service's own state directory.
+# They previously sat in a Docker volume (/var/lib/docker/volumes/...), which
+# made the native ingress depend on Docker being installed and made
+# `docker volume prune` able to destroy production TLS.
+Environment=XDG_CONFIG_HOME=/var/lib/kamal-proxy/config
+ExecStart=/opt/kamal-proxy/current/kamal-proxy run --http-port 80 --https-port 443
+Restart=on-failure
+RestartSec=3s
+TimeoutStartSec=30s
+CPUQuota=100%
+MemoryMax=256M
+MemorySwapMax=256M
+TasksMax=128
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/kamal-proxy
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

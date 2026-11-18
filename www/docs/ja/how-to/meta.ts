@@ -2,5 +2,5 @@
 // and rerun the translation instead of editing this copy.
 export default {
   order: 2,
-  title: "ハウツーガイド",
+  title: 'ハウツーガイド',
 };

@@ -61,13 +61,12 @@ executor tools integrations
 The docs site also exposes a public, read-only MCP server:
 
 ```
-https://sigiro.com/mcp/docs
+https://sigiro.com/mcp
 ```
 
 Add it as an MCP integration in Executor and select the streamable HTTP transport. This
 gives an agent documentation tools such as search and page retrieval. It does
-not provide access to a workspace's telemetry. The same URL without `/docs`,
-`https://sigiro.com/mcp`, adds the telemetry tools and requires an OAuth sign-in.
+not provide access to a tenant's telemetry.
 
 Use the OpenAPI integration for live telemetry operations. Use the MCP one when an agent
 needs to find or read sigiro documentation. You can add both to the same
@@ -83,7 +82,7 @@ endpoint and transport used by your deployment.
 ## Verify the import
 
 Check the integration in Executor before asking an agent to use it. The sigiro API import
-should expose operations for services, traces, alerts and queries.
+should expose operations for services, traces, anomalies, investigations and queries.
 The docs import should expose documentation search and page retrieval.
 
 Then test one read-only call first. For a hosted API connection, confirm that the

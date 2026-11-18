@@ -87,9 +87,7 @@ pub(crate) fn resolve_edges(cli_edges: &[String]) -> Result<Vec<Edge>> {
         "no edges resolved for the federated query: no --edge/SIGIRO_EDGES override was \
          given, and tailnet discovery found no peer tagged tag:sigiro-edge. Refusing to run \
          a federated query against zero edges — pass --edge name=host:port, set SIGIRO_EDGES, \
-         or tag a tailnet peer tag:sigiro-edge. `sigiro query` only federates self-hosted \
-         edges; to query hosted sigiro.com or one local server, use `sigiro mcp` or POST \
-         the SQL to /v1/query (see https://sigiro.com/docs/reference/cli#query)."
+         or tag a tailnet peer tag:sigiro-edge."
     );
 
     // ponytail: best-effort textual normalization only (lowercase +
@@ -337,7 +335,7 @@ impl ParsedQuery {
 /// that shape — never silently degrades (e.g. never falls back to
 /// avg-of-avgs for an unsupported case).
 fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
-    let escaped = sigiro_core::sql::escape_sql_string(sql);
+    let escaped = crate::sql::escape_sql_string(sql);
     let json_text: String = conn
         .query_row(
             &format!("SELECT json_serialize_sql('{escaped}')"),
@@ -595,7 +593,7 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
                     .is_some_and(|o| !o.is_empty());
                 anyhow::ensure!(!has_order_bys, "ordered aggregates are not federatable");
                 let function_name = field_str(item, "function_name")?.to_lowercase();
-                // DuckDB v2 represents each function argument as a named
+                // Cyanoptera represents each function argument as a named
                 // wrapper around its expression. Federated aggregates accept
                 // positional expressions only.
                 let arguments = field(item, "arguments")?
@@ -867,7 +865,7 @@ fn deparse_constant(literal: &Value) -> Result<String> {
     let text = field_str(literal, "text")?;
     match kind {
         "NULL_LITERAL" => Ok("NULL".to_string()),
-        "STRING" => Ok(format!("'{}'", sigiro_core::sql::escape_sql_string(text))),
+        "STRING" => Ok(format!("'{}'", crate::sql::escape_sql_string(text))),
         "BOOLEAN" => match text {
             "true" => Ok("TRUE".to_string()),
             "false" => Ok("FALSE".to_string()),
@@ -1210,12 +1208,12 @@ fn wrap_quack_query(
         "SELECT * FROM quack_query('quack://{}:{}', '{}'",
         edge.host,
         edge.port,
-        sigiro_core::sql::escape_sql_string(inner_sql)
+        crate::sql::escape_sql_string(inner_sql)
     );
     if let Some(t) = token {
         sql.push_str(&format!(
             ", token := '{}'",
-            sigiro_core::sql::escape_sql_string(t.as_ref())
+            crate::sql::escape_sql_string(t.as_ref())
         ));
     }
     sql.push_str(", disable_ssl := true);");
@@ -1241,7 +1239,7 @@ async fn fetch_edge(
     let (handle_tx, handle_rx) = tokio::sync::oneshot::channel::<Arc<duckdb::InterruptHandle>>();
 
     let mut task = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<RecordBatch>> {
-        let conn = crate::pool::open_duckdb()
+        let conn = duckdb::Connection::open_in_memory()
             .context("failed to open embedded DuckDB connection for edge fetch")?;
         conn.execute_batch("LOAD quack;")
             .context("failed to load the quack extension for the edge fetch connection")?;
@@ -1323,8 +1321,8 @@ pub async fn run_federated_query(
         "resolved federated query edges"
     );
 
-    let coord =
-        crate::pool::open_duckdb().context("failed to open the embedded coordinator connection")?;
+    let coord = duckdb::Connection::open_in_memory()
+        .context("failed to open the embedded coordinator connection")?;
     coord
         .execute_batch("INSTALL json; LOAD json;")
         .context("failed to load the json extension needed to plan the federated query")?;
@@ -1428,14 +1426,14 @@ pub async fn run_federated_query(
     let mut part_tables = Vec::new();
     for (idx, (edge_name, batch)) in edge_batches.into_iter().enumerate() {
         let table = format!("part_{idx}_{}", sanitize_ident(&edge_name));
-        let registration = duckdb::vtab::arrow::ArrowBatchRegistration::new(batch);
+        let params = duckdb::vtab::arrow::arrow_recordbatch_to_query_params(batch);
         coord
             .execute(
                 &format!(
-                    "CREATE TEMP TABLE {} AS SELECT * FROM arrow(?)",
+                    "CREATE TEMP TABLE {} AS SELECT * FROM arrow(?, ?)",
                     quote_ident(&table)
                 ),
-                [&registration],
+                params,
             )
             .with_context(|| {
                 format!("failed to materialize edge {edge_name}'s result into the coordinator")
@@ -1470,11 +1468,43 @@ pub async fn run_federated_query(
     {
         let mut obj = serde_json::Map::new();
         for (i, name) in column_names.iter().enumerate() {
-            let val = crate::duckdb_json::duckdb_row_value_to_json(row, i, &column_types[i])
+            let val = crate::sql::duckdb_row_value_to_json(row, i, &column_types[i])
                 .context("failed to read a coordinator fold result column")?;
             obj.insert(name.clone(), val);
         }
         results.push(Value::Object(obj));
     }
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn deparse_cyanoptera_literals_preserves_exact_text() {
+        assert_eq!(
+            deparse_constant(&json!({ "kind": "NUMERIC", "text": "1.50" })).unwrap(),
+            "1.50"
+        );
+        assert_eq!(
+            deparse_constant(&json!({ "kind": "STRING", "text": "it's" })).unwrap(),
+            "'it''s'"
+        );
+        assert_eq!(
+            deparse_constant(&json!({ "kind": "NULL_LITERAL", "text": "" })).unwrap(),
+            "NULL"
+        );
+    }
+
+    #[test]
+    fn deparse_cyanoptera_literal_rejects_invalid_numeric_text() {
+        let err =
+            deparse_constant(&json!({ "kind": "NUMERIC", "text": "1; DROP TABLE t" })).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid NUMERIC literal text"),
+            "unexpected error: {err}"
+        );
+    }
 }

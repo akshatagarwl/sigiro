@@ -1,22 +1,16 @@
-import { Data, Effect } from "effect";
-import { createHighlighterCore, type HighlighterCore } from "shiki/core";
-import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
-import bash from "shiki/langs/bash.mjs";
-import json from "shiki/langs/json.mjs";
-import shellsession from "shiki/langs/shellsession.mjs";
-import sql from "shiki/langs/sql.mjs";
-import ts from "shiki/langs/typescript.mjs";
-import yaml from "shiki/langs/yaml.mjs";
-import githubDark from "shiki/themes/github-dark-default.mjs";
-import githubLight from "shiki/themes/github-light-default.mjs";
+import { Data, Effect } from 'effect';
+import { createHighlighterCore, type HighlighterCore } from 'shiki/core';
+import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
+import bash from 'shiki/langs/bash.mjs';
+import shellsession from 'shiki/langs/shellsession.mjs';
+import ts from 'shiki/langs/typescript.mjs';
+import yaml from 'shiki/langs/yaml.mjs';
+import json from 'shiki/langs/json.mjs';
+import sql from 'shiki/langs/sql.mjs';
+import githubDark from 'shiki/themes/github-dark-default.mjs';
+import githubLight from 'shiki/themes/github-light-default.mjs';
 
-export type Lang =
-  | "json"
-  | "sql"
-  | "bash"
-  | "typescript"
-  | "yaml"
-  | "shellsession";
+export type Lang = 'json' | 'sql' | 'bash' | 'typescript' | 'yaml' | 'shellsession';
 
 /**
  * The highlighter could not be built. This is the failure this file's whole
@@ -26,12 +20,12 @@ export type Lang =
  * Recoverable: `degrade` turns it into plain text. Colour is the only thing the
  * reader loses.
  */
-class ShikiUnavailable extends Data.TaggedError("ShikiUnavailable")<{
+class ShikiUnavailable extends Data.TaggedError('ShikiUnavailable')<{
   readonly cause: unknown;
 }> {}
 
 /** One string, in one grammar, that Shiki refused. Recoverable, as above. */
-class HighlightFailed extends Data.TaggedError("HighlightFailed")<{
+class HighlightFailed extends Data.TaggedError('HighlightFailed')<{
   readonly lang: Lang;
   readonly cause: unknown;
 }> {}
@@ -51,7 +45,7 @@ class HighlightFailed extends Data.TaggedError("HighlightFailed")<{
  * every transcript is a literal in `lib/site.ts`, it is a failure that can only
  * be caused by a commit rather than by a visitor.
  */
-class TranscriptMismatch extends Data.TaggedError("TranscriptMismatch")<{
+class TranscriptMismatch extends Data.TaggedError('TranscriptMismatch')<{
   readonly reason: string;
 }> {}
 
@@ -80,11 +74,10 @@ const started: Promise<HighlighterCore> = createHighlighterCore({
  * this stays one build per isolate while giving every highlight below a typed
  * `ShikiUnavailable` channel instead of a rejection nobody named.
  */
-const core: Effect.Effect<HighlighterCore, ShikiUnavailable> =
-  Effect.tryPromise({
-    try: () => started,
-    catch: (cause) => new ShikiUnavailable({ cause }),
-  });
+const core: Effect.Effect<HighlighterCore, ShikiUnavailable> = Effect.tryPromise({
+  try: () => started,
+  catch: (cause) => new ShikiUnavailable({ cause }),
+});
 
 /**
  * Two of the light theme's token colours land just under AA at our code size —
@@ -97,10 +90,7 @@ const core: Effect.Effect<HighlighterCore, ShikiUnavailable> =
  * up, so a replacement written the way the theme writes it — `#6E7781` — is
  * silently never applied.
  */
-export const COLOR_REPLACEMENTS = {
-  "#6e7781": "#5a6169",
-  "#cf222e": "#b3121f",
-};
+export const COLOR_REPLACEMENTS = { '#6e7781': '#5a6169', '#cf222e': '#b3121f' };
 
 /**
  * Two themes and `defaultColor: false`, so Shiki writes each token's colour as a
@@ -109,17 +99,14 @@ export const COLOR_REPLACEMENTS = {
  * theme the colour is inline, wins over any stylesheet, and a dark well ends up
  * wearing light-mode syntax.
  */
-const THEMES = {
-  light: "github-light-default",
-  dark: "github-dark-default",
-} as const;
+const THEMES = { light: 'github-light-default', dark: 'github-dark-default' } as const;
 
 const ESCAPES = new Map([
-  ["&", "&amp;"],
-  ["<", "&lt;"],
-  [">", "&gt;"],
-  ['"', "&quot;"],
-  ["'", "&#39;"],
+  ['&', '&amp;'],
+  ['<', '&lt;'],
+  ['>', '&gt;'],
+  ['"', '&quot;'],
+  ["'", '&#39;'],
 ]);
 
 /**
@@ -137,10 +124,7 @@ const ESCAPES = new Map([
  * compiler is checking for us.
  */
 function escapeHtml(text: string): string {
-  return text.replace(
-    /[&<>"']/g,
-    (character) => ESCAPES.get(character) ?? character
-  );
+  return text.replace(/[&<>"']/g, (character) => ESCAPES.get(character) ?? character);
 }
 
 /**
@@ -151,8 +135,7 @@ function escapeHtml(text: string): string {
  * should be in either material. Nested `var()` is fine; `OUTPUT_INK` already
  * relies on it.
  */
-const PLAIN_INK =
-  "--shiki-light:var(--foreground);--shiki-dark:var(--foreground)";
+const PLAIN_INK = '--shiki-light:var(--ink);--shiki-dark:var(--ink)';
 
 /**
  * `highlight`'s output, minus the colour: the same `pre.shiki > code > span.line`
@@ -161,17 +144,15 @@ const PLAIN_INK =
  */
 function plainBlock(code: string): string {
   const lines = code
-    .split("\n")
+    .split('\n')
     .map((line) => `<span class="line">${escapeHtml(line)}</span>`)
-    .join("\n");
+    .join('\n');
   return `<pre class="shiki shiki-themes" style="${PLAIN_INK}" tabindex="0"><code>${lines}</code></pre>`;
 }
 
 /** `inlineLines`' output, minus the colour: one escaped span per line. */
 function plainInline(code: string): string[] {
-  return code
-    .split("\n")
-    .map((line) => `<span style="${PLAIN_INK}">${escapeHtml(line)}</span>`);
+  return code.split('\n').map((line) => `<span style="${PLAIN_INK}">${escapeHtml(line)}</span>`);
 }
 
 /**
@@ -190,16 +171,10 @@ function plainInline(code: string): string[] {
 function degrade<A>(
   effect: Effect.Effect<A, ShikiUnavailable | HighlightFailed>,
   plain: () => A,
-  what: string
+  what: string,
 ): Effect.Effect<A> {
   return Effect.catch(effect, (error) =>
-    Effect.as(
-      Effect.logError(
-        `highlight: falling back to plain text for ${what}`,
-        error
-      ),
-      plain()
-    )
+    Effect.as(Effect.logError(`highlight: falling back to plain text for ${what}`, error), plain()),
   );
 }
 
@@ -224,7 +199,7 @@ export function highlight(code: string, lang: Lang): Effect.Effect<string> {
           colorReplacements: COLOR_REPLACEMENTS,
         }),
       catch: (cause) => new HighlightFailed({ lang, cause }),
-    })
+    }),
   );
   return degrade(shiki, () => plainBlock(code), `a ${lang} block`);
 }
@@ -246,7 +221,7 @@ export type SessionLine = { text: string; html: string };
 function inlineLines(
   code: string,
   lang: Lang,
-  colorReplacements: Record<string, string>
+  colorReplacements: Record<string, string>,
 ): Effect.Effect<string[]> {
   const shiki = Effect.flatMap(core, (shiki) =>
     Effect.try({
@@ -256,12 +231,12 @@ function inlineLines(
             lang,
             themes: THEMES,
             defaultColor: false,
-            structure: "inline",
+            structure: 'inline',
             colorReplacements,
           })
-          .split("<br>"),
+          .split('<br>'),
       catch: (cause) => new HighlightFailed({ lang, cause }),
-    })
+    }),
   );
   return degrade(shiki, () => plainInline(code), `a ${lang} transcript line`);
 }
@@ -270,24 +245,14 @@ function inlineLines(
  * shellsession paints every output line one colour — `meta.output` — and the
  * theme's is a loud blue. Output is not syntax and should not read as any, so
  * both themes' output colour is remapped onto the ink the well already used for
- * it. Nested `var()` is fine: globals.css resolves
- * `color: var(--shiki-light)` to `var(--muted-foreground)`, which flips with the theme by
+ * it (§3: no decorative colour). Nested `var()` is fine: globals.css resolves
+ * `color: var(--shiki-light)` to `var(--ink-2)`, which flips with the theme by
  * itself, so one value serves both sides.
  */
-const OUTPUT_INK = {
-  "#0550ae": "var(--muted-foreground)",
-  "#79c0ff": "var(--muted-foreground)",
-};
+const OUTPUT_INK = { '#0550ae': 'var(--ink-2)', '#79c0ff': 'var(--ink-2)' };
 
 /** The prompt, in the muted ink the stacked fallback has always given it. */
-const PROMPT =
-  '<span style="--shiki-light:var(--muted-foreground);--shiki-dark:var(--muted-foreground)">$ </span>';
-
-/**
- * What a continuation row of a multi-line command starts with: blank space the
- * width of the prompt, so the command's own indentation lines up under it.
- */
-const CONTINUATION = "<span>  </span>";
+const PROMPT = '<span style="--shiki-light:var(--ink-3);--shiki-dark:var(--ink-3)">$ </span>';
 
 /**
  * A `$ command` + output transcript, highlighted line by line.
@@ -308,32 +273,25 @@ const CONTINUATION = "<span>  </span>";
  */
 export function highlightSession(
   cmd: string,
-  out: string
+  out: string,
 ): Effect.Effect<SessionLine[], TranscriptMismatch> {
   return Effect.gen(function* () {
-    // A long command is written across lines (a `\` continuation, or a quoted
-    // SQL string broken at its clauses), so its payoff is on screen instead of
-    // past the right edge of the well. Each row gets its own line here.
-    const cmdTexts = cmd.split("\n");
-    const texts = out.split("\n");
+    const texts = out.split('\n');
     const [cmdHtml, outHtml] = yield* Effect.all(
       [
-        inlineLines(cmd, "bash", COLOR_REPLACEMENTS),
-        inlineLines(out, "shellsession", {
-          ...COLOR_REPLACEMENTS,
-          ...OUTPUT_INK,
-        }),
+        inlineLines(cmd, 'bash', COLOR_REPLACEMENTS),
+        inlineLines(out, 'shellsession', { ...COLOR_REPLACEMENTS, ...OUTPUT_INK }),
       ],
-      { concurrency: "unbounded" }
+      { concurrency: 'unbounded' },
     );
 
     // The terminal pairs `text` with `html` positionally and sizes its frame from
     // the count, so a line that went missing would silently shift the transcript.
     // A typed failure rather than a `throw`: it still takes the render down, which
     // is the point, but the shape of the mistake is now in the function's type.
-    if (cmdHtml.length !== cmdTexts.length) {
+    if (cmdHtml.length !== 1) {
       return yield* new TranscriptMismatch({
-        reason: `highlighted ${cmdHtml.length} of ${cmdTexts.length} command lines`,
+        reason: `transcript command is not one line: ${cmd}`,
       });
     }
     if (outHtml.length !== texts.length) {
@@ -343,11 +301,7 @@ export function highlightSession(
     }
 
     return [
-      ...cmdTexts.map((text, i) =>
-        i === 0
-          ? { text: `$ ${text}`, html: PROMPT + cmdHtml[i] }
-          : { text: `  ${text}`, html: CONTINUATION + cmdHtml[i] }
-      ),
+      { text: `$ ${cmd}`, html: PROMPT + cmdHtml[0] },
       ...texts.map((text, i) => ({ text, html: outHtml[i] })),
     ];
   });

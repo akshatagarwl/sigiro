@@ -1,5 +1,8 @@
 use anyhow::{Context, Result, bail};
 
+use crate::TimestampMicros;
+use crate::diagnose::{DiagnoseRequest, DiagnoseResponse, DiagnoseServices, DiagnosisBlock};
+
 /// Explicit client auth mode — mirrors server-side AuthMode.
 #[derive(Clone)]
 pub enum ClientAuth {
@@ -103,6 +106,24 @@ impl SigiroClient {
             .context("failed to retry request after refreshing the access token")
     }
 
+    pub async fn diagnose(
+        &self,
+        service: &str,
+        from: Option<i64>,
+        to: Option<i64>,
+    ) -> Result<DiagnosisBlock> {
+        let mut resp = self
+            .diagnose_multi(vec![service.to_string()], from, to)
+            .await?;
+        if let Some(block) = resp.results.remove(service) {
+            return Ok(block);
+        }
+        if let Some(err) = resp.errors.get(service) {
+            bail!("diagnosis failed for {service}: {err}");
+        }
+        bail!("no diagnosis block returned for service {service}")
+    }
+
     async fn expect_ok(&self, resp: reqwest::Response) -> Result<reqwest::Response> {
         match resp.status().as_u16() {
             200 => Ok(resp),
@@ -139,56 +160,36 @@ impl SigiroClient {
             .context("failed to parse services response")
     }
 
-    /// Read a 2xx JSON body, or turn the failure into an error that carries the
-    /// server's own reason.
-    async fn json_or_error(&self, resp: reqwest::Response) -> Result<serde_json::Value> {
-        let status = resp.status();
-        if status == reqwest::StatusCode::NO_CONTENT {
-            return Ok(serde_json::Value::Null);
+    /// GET /v1/anomalies — the precomputed anomaly table (all signals, ranked
+    /// biggest shift first, with cross-signal `incident_id` grouping). The
+    /// entry point for the detect→diagnose loop: poll this, act on new
+    /// incidents. Optional service + µs-window filters.
+    pub async fn anomalies(
+        &self,
+        service: Option<&str>,
+        from: Option<i64>,
+        to: Option<i64>,
+    ) -> Result<crate::responses::AnomaliesResponse> {
+        let mut params: Vec<(&str, String)> = Vec::new();
+        if let Some(s) = service {
+            params.push(("service", s.to_string()));
         }
-        if status.is_success() {
-            return resp.json().await.context("failed to parse response");
+        if let Some(f) = from {
+            params.push(("from_ts", f.to_string()));
         }
-        let body = resp.text().await.unwrap_or_default();
-        let detail = serde_json::from_str::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("detail")
-                    .and_then(|d| d.as_str())
-                    .map(str::to_owned)
-            })
-            .unwrap_or(body);
-        match status.as_u16() {
-            401 => bail!("{} {detail}", self.auth.unauthorized_message()),
-            s => bail!("Server error ({s}): {detail}"),
+        if let Some(t) = to {
+            params.push(("to_ts", t.to_string()));
         }
-    }
-
-    /// GET /v1/ingest-keys — the workspace's ingest keys, without secrets.
-    pub async fn list_ingest_keys(&self) -> Result<serde_json::Value> {
-        let req = self.http.get(format!("{}/v1/ingest-keys", self.base_url));
-        let resp = self.send(req).await?;
-        self.json_or_error(resp).await
-    }
-
-    /// POST /v1/ingest-keys — create a key; the response holds the secret once.
-    pub async fn create_ingest_key(&self, name: &str) -> Result<serde_json::Value> {
         let req = self
             .http
-            .post(format!("{}/v1/ingest-keys", self.base_url))
-            .json(&serde_json::json!({ "name": name }));
+            .get(format!("{}/v1/anomalies", self.base_url))
+            .query(&params);
         let resp = self.send(req).await?;
-        self.json_or_error(resp).await
-    }
 
-    /// DELETE /v1/ingest-keys/{id}.
-    pub async fn revoke_ingest_key(&self, id: &str) -> Result<()> {
-        let req = self
-            .http
-            .delete(format!("{}/v1/ingest-keys/{id}", self.base_url));
-        let resp = self.send(req).await?;
-        self.json_or_error(resp).await.map(drop)
+        let resp = self.expect_ok(resp).await?;
+        resp.json()
+            .await
+            .context("failed to parse anomalies response")
     }
 
     /// GET /health — typed response. Returns the parsed `HealthResponse` for
@@ -209,6 +210,36 @@ impl SigiroClient {
                 bail!("Server error ({s}): {body}")
             }
         }
+    }
+
+    /// Diagnose one or more services.
+    /// Returns partial results: successful blocks in `results`, per-service
+    /// failures in `errors`.
+    pub(crate) async fn diagnose_multi(
+        &self,
+        services: Vec<String>,
+        from: Option<i64>,
+        to: Option<i64>,
+    ) -> Result<DiagnoseResponse> {
+        let body = DiagnoseRequest {
+            services: DiagnoseServices::try_new(services)?,
+            // Passed through, NOT defaulted. `None` means the caller gave no
+            // bound, and the server applies the single default in
+            // `DiagnoseRequest::window()`. The CLI must not own a second copy
+            // of that rule — see roadmap #72.
+            from_ts: from.map(TimestampMicros::try_new).transpose()?,
+            to_ts: to.map(TimestampMicros::try_new).transpose()?,
+        };
+        let req = self
+            .http
+            .post(format!("{}/v1/diagnose", self.base_url))
+            .json(&body);
+        let resp = self.send(req).await?;
+
+        let resp = self.expect_ok(resp).await?;
+        resp.json()
+            .await
+            .context("failed to parse diagnosis response")
     }
 }
 
