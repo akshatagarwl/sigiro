@@ -17,10 +17,7 @@ import type { D1Database } from "@cloudflare/workers-types";
  * distinguishable: "no such session" and "session with no active organization"
  * both return null, but neither is conflated with an error.
  */
-export const sessionTenant = async (
-  db: D1Database,
-  sessionId: string
-): Promise<string | null> => {
+export const sessionTenant = async (db: D1Database, sessionId: string): Promise<string | null> => {
   const row = await db
     .prepare('SELECT "activeOrganizationId" FROM session WHERE id = ?')
     .bind(sessionId)
@@ -35,14 +32,9 @@ export const sessionTenant = async (
  * rejects anything other than exactly one membership, and the ingest path reads
  * `[0]` as the tenant. An unordered result would make the tenant a race.
  */
-export const membershipsForUser = async (
-  db: D1Database,
-  userId: string
-): Promise<string[]> => {
+export const membershipsForUser = async (db: D1Database, userId: string): Promise<string[]> => {
   const { results } = await db
-    .prepare(
-      'SELECT "organizationId" FROM member WHERE "userId" = ? ORDER BY "createdAt", id'
-    )
+    .prepare('SELECT "organizationId" FROM member WHERE "userId" = ? ORDER BY "createdAt", id')
     .bind(userId)
     .all<{ organizationId: string }>();
   return results.map((row) => row.organizationId);
@@ -59,34 +51,17 @@ export const membershipsForUser = async (
 export const membershipRoles = async (
   db: D1Database,
   userId: string,
-  organizationId: string
+  organizationId: string,
 ): Promise<string[]> => {
   const row = await db
-    .prepare(
-      'SELECT role FROM member WHERE "userId" = ? AND "organizationId" = ?'
-    )
+    .prepare('SELECT role FROM member WHERE "userId" = ? AND "organizationId" = ?')
     .bind(userId, organizationId)
     .first<{ role: string }>();
   if (!row?.role) return [];
-  return row.role
-    .split(",")
-    .map((role) => role.trim())
-    .filter((role) => role.length > 0);
+  return row.role.split(",").map((role) => role.trim()).filter((role) => role.length > 0);
 };
 
 /** Liveness probe for `/health`. Throws if the binding cannot serve a query. */
 export const checkDatabase = async (db: D1Database): Promise<void> => {
   await db.prepare("SELECT 1").first();
-};
-
-/** An organization's display name, or null when it does not exist. */
-export const organizationName = async (
-  db: D1Database,
-  organizationId: string
-): Promise<string | null> => {
-  const row = await db
-    .prepare("SELECT name FROM organization WHERE id = ?")
-    .bind(organizationId)
-    .first<{ name: string }>();
-  return row?.name ?? null;
 };

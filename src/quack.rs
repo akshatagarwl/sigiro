@@ -7,7 +7,7 @@
 //! Two independent guards, both required:
 //! - [`load_and_pin`]: refuses to serve an unpinned/unexpected quack build.
 //! - [`install_authorization_gate`]: the actual security boundary — a Rust
-//!   scalar UDF that runs the SAME [`sigiro_segments::validate_read_only`]
+//!   scalar UDF that runs the SAME [`crate::sql::validate_read_only`]
 //!   firewall `/v1/query` enforces (SELECT-only + `sigiro_*` table allowlist
 //!   + reader-function denylist), fail-closed.
 
@@ -24,7 +24,7 @@ use duckdb::vtab::arrow::WritableVector;
 /// authorization semantics underneath this gate without a deliberate,
 /// re-verified bump here.
 ///
-/// Empirically, against the pinned DuckDB v2.0.0: quack is NOT in
+/// Empirically, against the pinned DuckDB v2.0 Cyanoptera alpha: quack is NOT in
 /// DuckDB's autoloadable "known extensions" list, so a bare `LOAD quack;`
 /// always fails with "Extension \"quack\" is an existing extension. Install
 /// it first" — [`load_and_pin`] must always `INSTALL` it explicitly. The
@@ -37,7 +37,7 @@ use duckdb::vtab::arrow::WritableVector;
 /// exactly the drift this pin exists to catch — re-verify the authorization
 /// gate against the new build and bump this constant deliberately, rather
 /// than widening the install source.
-pub(crate) const EXPECTED_QUACK_VERSION: &str = "f96420ed46";
+pub(crate) const EXPECTED_QUACK_VERSION: &str = "50bd1913e4";
 
 /// Scalar UDF name installed as the quack authorization gate. Re-registered
 /// from this Rust source on every server boot (see
@@ -98,7 +98,7 @@ pub(crate) fn load_and_pin(conn: &Connection) -> Result<()> {
 /// Signature: `sigiro_quack_authorize(connection_id VARCHAR, query VARCHAR) ->
 /// BOOLEAN` — matches quack's authorization-callback contract exactly.
 /// `connection_id` is ignored: sigiro's guard is per-query, not
-/// per-connection. Returns `true` iff [`sigiro_segments::validate_read_only`]
+/// per-connection. Returns `true` iff [`crate::sql::validate_read_only`]
 /// — the SAME firewall `/v1/query` enforces — accepts `query`: SELECT-only,
 /// `sigiro_*` table allowlist, reader-function denylist.
 ///
@@ -148,7 +148,7 @@ impl VScalar for QuackAuthorizeScalar {
                 false
             } else {
                 let query = DuckString::new(&mut { *ptr }).as_str().to_string();
-                std::panic::catch_unwind(|| sigiro_segments::validate_read_only(&query).is_ok())
+                std::panic::catch_unwind(|| crate::sql::validate_read_only(&query).is_ok())
                     .unwrap_or(false)
             };
         }
@@ -175,7 +175,7 @@ impl VScalar for QuackAuthorizeScalar {
 ///
 /// Uses a non-NULL placeholder for `connection_id` (never literal SQL
 /// `NULL`, and never something a real quack call would send): the
-/// `duckdb` crate's `VScalar` API has no hook for DuckDB's
+/// `duckdb = "1.10505.0"` crate's `VScalar` API has no hook for DuckDB's
 /// "special" null handling, so a registered scalar UDF gets DEFAULT null
 /// handling — DuckDB substitutes SQL NULL as the *whole row's output*
 /// whenever ANY argument is NULL, without ever calling into
@@ -339,12 +339,12 @@ pub(crate) fn start_server(
 ) -> Result<QuackListen> {
     let mut sql = format!(
         "SELECT listen_uri FROM quack_serve('{}'",
-        sigiro_core::sql::escape_sql_string(&uri.0)
+        crate::sql::escape_sql_string(&uri.0)
     );
     if let Some(t) = token {
         sql.push_str(&format!(
             ", token := '{}'",
-            sigiro_core::sql::escape_sql_string(t.as_ref())
+            crate::sql::escape_sql_string(t.as_ref())
         ));
     }
     sql.push_str(", allow_other_hostname := true, disable_ssl := true);");
@@ -363,8 +363,25 @@ pub(crate) fn start_server(
 pub(crate) fn stop_server(conn: &Connection, uri: &QuackUri) -> Result<()> {
     conn.execute_batch(&format!(
         "CALL quack_stop('{}');",
-        sigiro_core::sql::escape_sql_string(&uri.0)
+        crate::sql::escape_sql_string(&uri.0)
     ))
     .context("failed to stop the quack server cleanly")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QuackUri;
+
+    #[test]
+    fn quack_uri_uses_canonical_socket_address_format() {
+        assert_eq!(
+            QuackUri::new("127.0.0.1".parse().unwrap(), 7777).0,
+            "quack://127.0.0.1:7777"
+        );
+        assert_eq!(
+            QuackUri::new("::1".parse().unwrap(), 7777).0,
+            "quack://[::1]:7777"
+        );
+    }
 }

@@ -1,22 +1,6 @@
 import type { ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
 
-import {
-  BROWSER_CLIENT_ID,
-  BROWSER_CLIENT_METADATA_JSON,
-  FIRST_PARTY_CLIENT_ID,
-  FIRST_PARTY_CLIENT_METADATA_JSON,
-} from "../client-metadata.js";
-import {
-  OPTIMIZER_CLIENT_ID,
-  OPTIMIZER_CLIENT_METADATA_JSON,
-} from "../optimizer-client.js";
-
-/** First-party client documents served on this zone, answered in-isolate. */
-const FIRST_PARTY_DOCUMENTS = new Map([
-  [FIRST_PARTY_CLIENT_ID, FIRST_PARTY_CLIENT_METADATA_JSON],
-  [OPTIMIZER_CLIENT_ID, OPTIMIZER_CLIENT_METADATA_JSON],
-  [BROWSER_CLIENT_ID, BROWSER_CLIENT_METADATA_JSON],
-]);
+import { FIRST_PARTY_CLIENT_ID, FIRST_PARTY_CLIENT_METADATA_JSON } from "../client-metadata.js";
 
 /**
  * Workers-native CIMD (client metadata document) fetch.
@@ -47,23 +31,13 @@ const isBlockedHost = (hostname: string): boolean => {
   if (BLOCKED_HOSTNAMES.has(host)) return true;
   if (host.endsWith(".localhost") || host.endsWith(".internal")) return true;
   // IPv4 literals in private / loopback / link-local / CGNAT ranges.
-  if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host))
-    return true;
+  if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host)) return true;
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
-  if (
-    /^169\.254\./.test(host) ||
-    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)
-  )
-    return true;
+  if (/^169\.254\./.test(host) || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)) return true;
   if (/^0\./.test(host)) return true;
   // IPv6 loopback, link-local, and unique-local.
-  if (host === "::1" || host === "::") return true;
-  if (
-    host.startsWith("fe80:") ||
-    host.startsWith("fc") ||
-    host.startsWith("fd")
-  )
-    return true;
+  if (host === "::1" || host === "::" ) return true;
+  if (host.startsWith("fe80:") || host.startsWith("fc") || host.startsWith("fd")) return true;
   return false;
 };
 
@@ -89,10 +63,7 @@ const MAX_BYTES = 256 * 1024;
  * `manual` preserves the intent: a redirect comes back as an opaque 3xx that we
  * reject, instead of being followed to an unchecked second destination.
  */
-export const fetchClientMetadataResource: ClientMetadataResourceFetch = async (
-  url,
-  init
-) => {
+export const fetchClientMetadataResource: ClientMetadataResourceFetch = async (url, init) => {
   try {
     // A Worker cannot fetch a hostname served by another Worker on the same
     // zone over the public internet: Cloudflare refuses the loopback with
@@ -101,12 +72,11 @@ export const fetchClientMetadataResource: ClientMetadataResourceFetch = async (
     // isolate. Serve it from the shared module instead — this is both the fix
     // and strictly less work than a public round-trip.
     //
-    // Deliberately an exact match on the first-party client_ids. Any
+    // Deliberately an exact match on the canonical first-party client_id. Any
     // other URL, including another path on the same origin, still goes through
     // the full validated network path below.
-    const firstParty = FIRST_PARTY_DOCUMENTS.get(String(url));
-    if (firstParty) {
-      return new Response(firstParty, {
+    if (String(url) === FIRST_PARTY_CLIENT_ID) {
+      return new Response(FIRST_PARTY_CLIENT_METADATA_JSON, {
         status: 200,
         headers: { "content-type": "application/json" },
       });
@@ -121,10 +91,7 @@ export const fetchClientMetadataResource: ClientMetadataResourceFetch = async (
     // attempts to find. Log the real cause before it is swallowed.
     console.error("cimd: client metadata fetch failed", {
       url: String(url),
-      error:
-        error instanceof Error
-          ? `${error.name}: ${error.message}`
-          : String(error),
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
     });
     throw error;
   }
@@ -132,10 +99,8 @@ export const fetchClientMetadataResource: ClientMetadataResourceFetch = async (
 
 const fetchClientMetadata: ClientMetadataResourceFetch = async (url, init) => {
   const target = new URL(typeof url === "string" ? url : url.toString());
-  if (target.protocol !== "https:")
-    throw new Error("client metadata must be served over https");
-  if (isBlockedHost(target.hostname))
-    throw new Error("client metadata host is not permitted");
+  if (target.protocol !== "https:") throw new Error("client metadata must be served over https");
+  if (isBlockedHost(target.hostname)) throw new Error("client metadata host is not permitted");
 
   const headers = new Headers(init?.headers);
   if (!headers.has("accept")) headers.set("accept", "application/json");
@@ -155,25 +120,15 @@ const fetchClientMetadata: ClientMetadataResourceFetch = async (url, init) => {
   // A real redirect (301/302/307/308), or an opaque one on runtimes that
   // report `manual` that way, is refused: following it would fetch client
   // metadata from an unchecked second destination.
-  if (
-    response.type === "opaqueredirect" ||
-    (response.status >= 300 && response.status < 400)
-  ) {
-    throw new Error(
-      `client metadata must not redirect (got ${response.status})`
-    );
+  if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+    throw new Error(`client metadata must not redirect (got ${response.status})`);
   }
   if (!response.ok) {
     // Include a snippet of the body: a 403 from an edge/WAF layer names itself
     // there, and without it the status alone is indistinguishable from an
     // origin refusal.
-    const detail = (await response.text().catch(() => ""))
-      .slice(0, 200)
-      .replace(/\s+/g, " ")
-      .trim();
-    throw new Error(
-      `client metadata fetch failed: ${response.status}${detail ? ` — ${detail}` : ""}`
-    );
+    const detail = (await response.text().catch(() => "")).slice(0, 200).replace(/\s+/g, " ").trim();
+    throw new Error(`client metadata fetch failed: ${response.status}${detail ? ` — ${detail}` : ""}`);
   }
 
   // Do NOT read the body here. The caller streams it itself with its own byte

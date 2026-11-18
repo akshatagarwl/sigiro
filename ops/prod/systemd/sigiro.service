@@ -1,0 +1,33 @@
+[Unit]
+Description=Sigiro hosted telemetry service
+Requires=postgresql@18-main.service
+After=postgresql@18-main.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sigiro
+Group=sigiro
+WorkingDirectory=/var/lib/sigiro/telemetry
+ExecStart=/opt/sigiro/current/sigiro serve
+ExecStartPost=/usr/bin/curl --fail --silent --show-error --retry 30 --retry-delay 1 --retry-all-errors http://127.0.0.1:9999/health
+EnvironmentFile=/etc/sigiro/environment
+EnvironmentFile=/etc/sigiro/secrets/sigiro.env
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=120s
+LimitNOFILE=65536
+CPUQuota=100%
+MemoryMax=1792M
+MemorySwapMax=2560M
+TasksMax=256
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/sigiro/telemetry /var/cache/sigiro/duckdb
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

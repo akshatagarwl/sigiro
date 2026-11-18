@@ -11,8 +11,9 @@ import Base from '@/layouts/Base.astro';
  * inherit the site header, the footer, Blume's fonts and the `blume:theme`
  * tokens: the same document as `/` and `/docs/*`.
  *
- * Everything inside the card is `AuthCard`, one React island built from stock
- * shadcn/ui components. It is a single component because the flow is a single state machine. An earlier cut
+ * Everything inside the card is `AuthCard`, one React island built from the
+ * interior.dev components vendored under `src/components/interior/`. It is a
+ * single component because the flow is a single state machine. An earlier cut
  * split it — a vanilla module toggling `hidden` on five `<div>`s, with a React
  * field bolted on top — which gave one flow two owners and two sources of truth
  * for which step the user is on.
@@ -51,7 +52,7 @@ const { page, title, intro } = Astro.props;
     data-page={page}
   >
     <section
-      class="border bg-card shadow-sm rounded-xl p-7"
+      class="rounded-[14px] border border-stone-200/80 bg-white p-7 shadow-[0_1px_2px_rgba(28,25,23,0.04)] dark:border-white/[0.08] dark:bg-[#1D1D1A]"
       aria-labelledby="title"
     >
       {/*
@@ -62,17 +63,7 @@ const { page, title, intro } = Astro.props;
       */}
       <AuthCard page={page} title={title} intro={intro} client:load />
     </section>
-    {/*
-      Only about the email and code steps, so `AuthCard` shows it on those two
-      phases and hides it on approval, consent and success screens (it toggles
-      `hidden` by id). The server renders it visible only where the card starts
-      on the email step, so a device page never flashes it.
-    */}
-    <p
-      id="auth-footnote"
-      class="mt-5 text-center text-[12px] text-muted-foreground"
-      hidden={page !== 'sign-in' && page !== 'sign-up'}
-    >
+    <p class="mt-5 text-center text-[12px] text-stone-500 dark:text-stone-500">
       Passwordless sign-in · 6-digit codes expire after five minutes
     </p>
   </section>

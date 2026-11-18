@@ -1,0 +1,32 @@
+[Unit]
+Description=Register native Kamal Proxy routes
+# kamal-proxy's control socket is created under TMPDIR, and the proxy unit runs
+# with PrivateTmp=yes, so that socket only exists inside the unit's private
+# namespace. JoinsNamespaceOf is what lets this unit reach it; running the CLI
+# from a normal root shell fails with "no such file or directory".
+After=kamal-proxy.service sigiro.service sigiro-edge.service linguabench-web.service
+Requires=kamal-proxy.service
+JoinsNamespaceOf=kamal-proxy.service
+PartOf=kamal-proxy.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=kamal-proxy
+Group=kamal-proxy
+Environment=HOME=/var/lib/kamal-proxy
+Environment=TMPDIR=/tmp
+# Routes are re-registered on every boot rather than relying on the proxy's
+# persisted state. That state survives from the Docker deployment and still
+# names retired container IDs, so a boot that only restored it would serve 502s
+# for every host.
+ExecStart=/usr/local/sbin/configure-native-routes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

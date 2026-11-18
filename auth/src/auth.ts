@@ -1,22 +1,12 @@
-import { agentAuth } from "@better-auth/agent-auth";
 import { cimd } from "@better-auth/cimd";
-import { defineRequestState } from "@better-auth/core/context";
-import type { SecondaryStorage } from "@better-auth/core/db";
+import { agentAuth } from "@better-auth/agent-auth";
 import { mcp } from "@better-auth/mcp";
-import {
-  oauthDeviceAuthorization,
-  type ClientMetadataResourceFetch,
-} from "@better-auth/oauth-provider";
+import { oauthDeviceAuthorization, type ClientMetadataResourceFetch } from "@better-auth/oauth-provider";
 import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { emailOTP, jwt, organization } from "better-auth/plugins";
-
-import { deviceTenant } from "./device-tenant.js";
-import {
-  assertTenantScopeAccess,
-  tenantForDeviceClient,
-} from "./tenant-scope.js";
+import type { SecondaryStorage } from "@better-auth/core/db";
 
 export const SIGIRO_SCOPES = [
   "openid",
@@ -25,21 +15,24 @@ export const SIGIRO_SCOPES = [
   "offline_access",
   "telemetry:ingest",
   "services:read",
+  "diagnose:read",
   "traces:read",
   "query:read",
+  "anomalies:read",
   "alerts:read",
   "alerts:write",
   "tenant:members",
   "tenant:agents",
   "tenant:admin",
-  "optimizer:write",
 ] as const;
 
 export const SIGIRO_AGENT_CAPABILITIES = [
   "telemetry:ingest",
   "services:read",
+  "diagnose:read",
   "traces:read",
   "query:read",
+  "anomalies:read",
   "alerts:read",
   "alerts:write",
 ] as const;
@@ -61,13 +54,6 @@ export interface AuthRuntime {
   sessionTenant(sessionId: string): Promise<string | null>;
   /** Every organization a user belongs to, oldest first. Backed by pg or D1. */
   membershipsForUser(userId: string): Promise<ReadonlyArray<string>>;
-  /** Organization roles for elevated tenant write scopes. */
-  membershipRoles(
-    userId: string,
-    tenantId: string
-  ): Promise<ReadonlyArray<string>>;
-  /** Display name of an organization, for the `tenant_name` claim. */
-  organizationName(tenantId: string): Promise<string | null>;
   testOTP?: string;
   sendEmail(message: {
     to: string;
@@ -94,18 +80,6 @@ const requireResource = (value: unknown, expected: string): void => {
   }
 };
 
-/**
- * Better Auth runs `sendVerificationOTP` through `runInBackgroundOrAwait`,
- * which awaits it and then LOGS and SWALLOWS any error, so the endpoint
- * answered `{"success":true}` while Cloudflare refused every email (403,
- * `sending_disabled`). The send records its failure here, per request, and an
- * after hook turns it into an error the sign-in form shows.
- */
-const emailDelivery = defineRequestState<{ failure?: unknown }>(() => ({}));
-
-export const EMAIL_DELIVERY_FAILED_MESSAGE =
-  "We could not send the code. Try again in a minute.";
-
 export const createAuthOptions = (runtime: AuthRuntime) =>
   ({
     appName: "Sigiro",
@@ -118,14 +92,6 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
     disabledPaths: ["/token"],
     telemetry: { enabled: false },
     hooks: {
-      after: createAuthMiddleware(async () => {
-        const { failure } = await emailDelivery.get();
-        if (failure === undefined) return;
-        throw new APIError("SERVICE_UNAVAILABLE", {
-          code: "EMAIL_DELIVERY_FAILED",
-          message: EMAIL_DELIVERY_FAILED_MESSAGE,
-        });
-      }),
       before: createAuthMiddleware(async (context) => {
         if (context.path === "/oauth2/authorize") {
           requireResource(context.query?.resource, runtime.resource);
@@ -136,15 +102,11 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
           ) {
             throw new APIError("BAD_REQUEST", {
               error: "invalid_request",
-              message:
-                "authorization requires PKCE with code_challenge_method S256",
+              message: "authorization requires PKCE with code_challenge_method S256",
             });
           }
         }
-        if (
-          context.path === "/oauth2/token" ||
-          context.path === "/device/code"
-        ) {
+        if (context.path === "/oauth2/token" || context.path === "/device/code") {
           requireResource(context.body?.resource, runtime.resource);
         }
       }),
@@ -162,18 +124,12 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
         ...(runtime.testOTP ? { generateOTP: () => runtime.testOTP! } : {}),
         async sendVerificationOTP({ email: recipient, otp }) {
           if (runtime.testOTP) return;
-          try {
-            await runtime.sendEmail({
-              to: recipient,
-              from: runtime.emailFrom,
-              subject: "Your Sigiro verification code",
-              text: `Your Sigiro verification code is ${otp}. It expires in five minutes. If you didn't request this code, you can ignore this email.`,
-            });
-          } catch (cause) {
-            console.error("verification email was not sent", cause);
-            (await emailDelivery.get()).failure = cause;
-            throw cause;
-          }
+          await runtime.sendEmail({
+            to: recipient,
+            from: runtime.emailFrom,
+            subject: "Your Sigiro verification code",
+            text: `Your Sigiro verification code is ${otp}. It expires in five minutes. If you didn't request this code, you can ignore this email.`,
+          });
         },
       }),
       passkey(),
@@ -214,72 +170,30 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
         extensions: [
           {
             claims: {
-              accessToken: async ({
-                client,
-                referenceId,
-                sessionId,
-                user,
-                scopes,
-              }) => {
+              accessToken: async ({ client, referenceId, sessionId, user }) => {
                 const registeredTenantId = referenceId ?? client.referenceId;
-                let tenantId: string;
-                if (referenceId && user?.id) {
-                  // Bound to a user's chosen workspace (device approval).
-                  // Re-checked on every refresh: removing a member from a
-                  // workspace must end their access to it.
-                  const memberships = await runtime.membershipsForUser(user.id);
-                  if (!memberships.includes(referenceId))
-                    throw new APIError("BAD_REQUEST", {
-                      error: "invalid_grant",
-                      error_description:
-                        "you are no longer a member of this workspace; run `sigiro auth login`",
-                    });
-                  tenantId = referenceId;
-                } else if (registeredTenantId) {
-                  tenantId = registeredTenantId;
-                } else if (sessionId) {
-                  const activeOrganizationId =
-                    await runtime.sessionTenant(sessionId);
-                  if (!activeOrganizationId)
-                    throw new Error("token session has no active organization");
-                  tenantId = activeOrganizationId;
-                } else {
-                  if (!user?.id)
-                    throw new Error(
-                      "token issuance has no tenant-bearing user, session, or client"
-                    );
-                  const memberships = await runtime.membershipsForUser(user.id);
-                  tenantId = tenantForDeviceClient(
-                    client.clientId,
-                    memberships
-                  );
+                if (registeredTenantId) return { tid: registeredTenantId };
+                if (sessionId) {
+                  const activeOrganizationId = await runtime.sessionTenant(sessionId);
+                  if (!activeOrganizationId) throw new Error("token session has no active organization");
+                  return { tid: activeOrganizationId };
                 }
-                await assertTenantScopeAccess(
-                  scopes,
-                  user?.id,
-                  tenantId,
-                  runtime.membershipRoles
-                );
-                const tenantName = await runtime.organizationName(tenantId);
-                return tenantName
-                  ? { tid: tenantId, tenant_name: tenantName }
-                  : { tid: tenantId };
+                if (!user?.id) throw new Error("token issuance has no tenant-bearing user, session, or client");
+
+                const memberships = await runtime.membershipsForUser(user.id);
+                if (memberships.length !== 1) {
+                  throw new Error("device token user must belong to exactly one organization");
+                }
+                return { tid: memberships[0]! };
               },
             },
           },
         ],
         clientReference: ({ session }) =>
-          typeof session?.activeOrganizationId === "string"
-            ? session.activeOrganizationId
-            : undefined,
-        clientPrivileges: ({ session }) =>
-          typeof session?.activeOrganizationId === "string",
+          typeof session?.activeOrganizationId === "string" ? session.activeOrganizationId : undefined,
+        clientPrivileges: ({ session }) => typeof session?.activeOrganizationId === "string",
       }),
-      oauthDeviceAuthorization({
-        verificationUri: `${new URL(runtime.baseURL).origin}/device`,
-      }),
-      // After oauthDeviceAuthorization(): it wraps that plugin's grant.
-      deviceTenant(),
+      oauthDeviceAuthorization({ verificationUri: `${new URL(runtime.baseURL).origin}/device` }),
       cimd({
         fetchClientMetadataResource: runtime.fetchClientMetadataResource,
         metadataProfile: "mcp-2026-07-28",
@@ -287,5 +201,4 @@ export const createAuthOptions = (runtime: AuthRuntime) =>
     ],
   }) satisfies Parameters<typeof betterAuth>[0];
 
-export const createAuth = (runtime: AuthRuntime) =>
-  betterAuth(createAuthOptions(runtime));
+export const createAuth = (runtime: AuthRuntime) => betterAuth(createAuthOptions(runtime));

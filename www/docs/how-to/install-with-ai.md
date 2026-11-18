@@ -88,7 +88,7 @@ An agent does more than you want here. State these limits before the agent start
 - Do not install an OTel Collector. sigiro is the collector.
 - Do not add manual spans for each endpoint. Auto-instrumentation covers them.
 - Do not change database connection strings or business logic.
-- Do not set up dashboards or alert configuration. That is not part of this task.
+- Do not set up dashboards or alert configuration. sigiro has neither.
 
 The full task is this: detect the framework, install auto-instrumentation, and point
 it at sigiro.
@@ -187,7 +187,7 @@ curl http://localhost:9999/v1/services
 ```
 
 Your service appears within a few seconds of real traffic. After it appears,
-a bounded `POST /v1/query` can inspect its spans and logs.
+`sigiro diagnose my-service` has data to read.
 
 If the service does not appear, make these checks. On a self-hosted server,
 confirm the port: `:4318` for HTTP and `:4317` for gRPC. On the hosted service,
@@ -204,8 +204,8 @@ without a 401 response.
 
 ## Next
 
-- [Quickstart](/docs/tutorials/quickstart#3-query-recent-errors) — query recent
-  errors with SQL
+- [Quickstart](/docs/tutorials/quickstart#3-ask-what-changed) — ask what changed
+  and why
 - [Send your agent's own telemetry to sigiro](/docs/how-to/agent-telemetry) —
   point Claude Code or Codex at sigiro too
 - [Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding) — use this if

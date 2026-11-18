@@ -1,0 +1,80 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "hermes-agent",
+  "elements": [
+    {"type": "text", "id": "title", "x": 200, "y": 20, "text": "Sigiro Federated Debugging Architecture", "fontSize": 28, "fontFamily": 1, "strokeColor": "#1e1e1e", "originalText": "Sigiro Federated Debugging Architecture", "autoResize": true},
+
+    {"type": "rectangle", "id": "agent_box", "x": 310, "y": 80, "width": 280, "height": 80, "roundness": {"type": 3}, "backgroundColor": "#d0bfff", "fillStyle": "solid", "boundElements": [{"id": "t_agent", "type": "text"}]},
+    {"type": "text", "id": "t_agent", "x": 320, "y": 90, "width": 260, "height": 60, "text": "AI Agent\n(arbitrary SQL queries)", "fontSize": 20, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "agent_box", "originalText": "AI Agent\n(arbitrary SQL queries)", "autoResize": true},
+
+    {"type": "arrow", "id": "arrow_agent_central", "x": 450, "y": 160, "width": 0, "height": 60, "points": [[0,0],[0,60]], "endArrowhead": "arrow", "startBinding": {"elementId": "agent_box", "fixedPoint": [0.5, 1]}, "endBinding": {"elementId": "central_box", "fixedPoint": [0.5, 0]}},
+    {"type": "text", "id": "t_arrow1", "x": 460, "y": 175, "text": "query", "fontSize": 16, "fontFamily": 1, "strokeColor": "#868e96", "originalText": "query", "autoResize": true},
+
+    {"type": "rectangle", "id": "central_box", "x": 250, "y": 220, "width": 400, "height": 100, "roundness": {"type": 3}, "backgroundColor": "#a5d8ff", "fillStyle": "solid", "boundElements": [{"id": "t_central", "type": "text"}]},
+    {"type": "text", "id": "t_central", "x": 260, "y": 230, "width": 380, "height": 80, "text": "Central Sigiro\n(fan-out queries, aggregate results,\ncoordinator node)", "fontSize": 20, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "central_box", "originalText": "Central Sigiro\n(fan-out queries, aggregate results,\ncoordinator node)", "autoResize": true},
+
+    {"type": "arrow", "id": "arrow_c1", "x": 290, "y": 320, "width": 100, "height": 100, "points": [[0,0],[-100,100]], "endArrowhead": "arrow", "startBinding": {"elementId": "central_box", "fixedPoint": [0.1, 1]}, "endBinding": {"elementId": "edge1_box", "fixedPoint": [0.5, 0]}},
+    {"type": "arrow", "id": "arrow_c2", "x": 370, "y": 320, "width": 0, "height": 100, "points": [[0,0],[0,100]], "endArrowhead": "arrow", "startBinding": {"elementId": "central_box", "fixedPoint": [0.3, 1]}, "endBinding": {"elementId": "edge2_box", "fixedPoint": [0.5, 0]}},
+    {"type": "arrow", "id": "arrow_c3", "x": 450, "y": 320, "width": 0, "height": 100, "points": [[0,0],[0,100]], "endArrowhead": "arrow", "startBinding": {"elementId": "central_box", "fixedPoint": [0.5, 1]}, "endBinding": {"elementId": "edge3_box", "fixedPoint": [0.5, 0]}},
+    {"type": "arrow", "id": "arrow_c4", "x": 530, "y": 320, "width": 0, "height": 100, "points": [[0,0],[0,100]], "endArrowhead": "arrow", "startBinding": {"elementId": "central_box", "fixedPoint": [0.7, 1]}, "endBinding": {"elementId": "edge4_box", "fixedPoint": [0.5, 0]}},
+    {"type": "arrow", "id": "arrow_c5", "x": 610, "y": 320, "width": 100, "height": 100, "points": [[0,0],[100,100]], "endArrowhead": "arrow", "startBinding": {"elementId": "central_box", "fixedPoint": [0.9, 1]}, "endBinding": {"elementId": "edge5_box", "fixedPoint": [0.5, 0]}},
+
+    {"type": "rectangle", "id": "edge1_box", "x": 80, "y": 420, "width": 180, "height": 110, "roundness": {"type": 3}, "backgroundColor": "#b2f2bb", "fillStyle": "solid", "boundElements": [{"id": "t_edge1", "type": "text"}]},
+    {"type": "text", "id": "t_edge1", "x": 90, "y": 430, "width": 160, "height": 90, "text": "Sigiro #1\n[ DuckDB ]\nhot data + telemetry\n+ machine info", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "edge1_box", "originalText": "Sigiro #1\n[ DuckDB ]\nhot data + telemetry\n+ machine info", "autoResize": true},
+
+    {"type": "rectangle", "id": "edge2_box", "x": 280, "y": 420, "width": 180, "height": 110, "roundness": {"type": 3}, "backgroundColor": "#b2f2bb", "fillStyle": "solid", "boundElements": [{"id": "t_edge2", "type": "text"}]},
+    {"type": "text", "id": "t_edge2", "x": 290, "y": 430, "width": 160, "height": 90, "text": "Sigiro #2\n[ DuckDB ]\nhot data + telemetry\n+ machine info", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "edge2_box", "originalText": "Sigiro #2\n[ DuckDB ]\nhot data + telemetry\n+ machine info", "autoResize": true},
+
+    {"type": "rectangle", "id": "edge3_box", "x": 480, "y": 420, "width": 180, "height": 110, "roundness": {"type": 3}, "backgroundColor": "#b2f2bb", "fillStyle": "solid", "boundElements": [{"id": "t_edge3", "type": "text"}]},
+    {"type": "text", "id": "t_edge3", "x": 490, "y": 430, "width": 160, "height": 90, "text": "Sigiro #3\n[ DuckDB ]\nhot data + telemetry\n+ machine info", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "edge3_box", "originalText": "Sigiro #3\n[ DuckDB ]\nhot data + telemetry\n+ machine info", "autoResize": true},
+
+    {"type": "rectangle", "id": "edge4_box", "x": 680, "y": 420, "width": 180, "height": 110, "roundness": {"type": 3}, "backgroundColor": "#b2f2bb", "fillStyle": "solid", "boundElements": [{"id": "t_edge4", "type": "text"}]},
+    {"type": "text", "id": "t_edge4", "x": 690, "y": 430, "width": 160, "height": 90, "text": "Sigiro #4\n[ DuckDB ]\nhot data + telemetry\n+ machine info", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "edge4_box", "originalText": "Sigiro #4\n[ DuckDB ]\nhot data + telemetry\n+ machine info", "autoResize": true},
+
+    {"type": "rectangle", "id": "edge5_box", "x": 880, "y": 420, "width": 180, "height": 110, "roundness": {"type": 3}, "backgroundColor": "#b2f2bb", "fillStyle": "solid", "boundElements": [{"id": "t_edge5", "type": "text"}]},
+    {"type": "text", "id": "t_edge5", "x": 890, "y": 430, "width": 160, "height": 90, "text": "Sigiro #5\n[ DuckDB ]\nhot data + telemetry\n+ machine info", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "edge5_box", "originalText": "Sigiro #5\n[ DuckDB ]\nhot data + telemetry\n+ machine info", "autoResize": true},
+
+    {"type": "rectangle", "id": "m1_box", "x": 100, "y": 550, "width": 140, "height": 50, "roundness": {"type": 3}, "backgroundColor": "#ffd8a8", "fillStyle": "solid", "boundElements": [{"id": "t_m1", "type": "text"}]},
+    {"type": "text", "id": "t_m1", "x": 105, "y": 555, "width": 130, "height": 40, "text": "Machine 1", "fontSize": 18, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "m1_box", "originalText": "Machine 1", "autoResize": true},
+
+    {"type": "rectangle", "id": "m2_box", "x": 300, "y": 550, "width": 140, "height": 50, "roundness": {"type": 3}, "backgroundColor": "#ffd8a8", "fillStyle": "solid", "boundElements": [{"id": "t_m2", "type": "text"}]},
+    {"type": "text", "id": "t_m2", "x": 305, "y": 555, "width": 130, "height": 40, "text": "Machine 2", "fontSize": 18, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "m2_box", "originalText": "Machine 2", "autoResize": true},
+
+    {"type": "rectangle", "id": "m3_box", "x": 500, "y": 550, "width": 140, "height": 50, "roundness": {"type": 3}, "backgroundColor": "#ffd8a8", "fillStyle": "solid", "boundElements": [{"id": "t_m3", "type": "text"}]},
+    {"type": "text", "id": "t_m3", "x": 505, "y": 555, "width": 130, "height": 40, "text": "Machine 3", "fontSize": 18, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "m3_box", "originalText": "Machine 3", "autoResize": true},
+
+    {"type": "rectangle", "id": "m4_box", "x": 700, "y": 550, "width": 140, "height": 50, "roundness": {"type": 3}, "backgroundColor": "#ffd8a8", "fillStyle": "solid", "boundElements": [{"id": "t_m4", "type": "text"}]},
+    {"type": "text", "id": "t_m4", "x": 705, "y": 555, "width": 130, "height": 40, "text": "Machine 4", "fontSize": 18, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "m4_box", "originalText": "Machine 4", "autoResize": true},
+
+    {"type": "rectangle", "id": "m5_box", "x": 900, "y": 550, "width": 140, "height": 50, "roundness": {"type": 3}, "backgroundColor": "#ffd8a8", "fillStyle": "solid", "boundElements": [{"id": "t_m5", "type": "text"}]},
+    {"type": "text", "id": "t_m5", "x": 905, "y": 555, "width": 130, "height": 40, "text": "Machine 5", "fontSize": 18, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "m5_box", "originalText": "Machine 5", "autoResize": true},
+
+    {"type": "rectangle", "id": "s3_box", "x": 830, "y": 130, "width": 220, "height": 80, "roundness": {"type": 3}, "backgroundColor": "#c3fae8", "fillStyle": "solid", "boundElements": [{"id": "t_s3", "type": "text"}]},
+    {"type": "text", "id": "t_s3", "x": 840, "y": 140, "width": 200, "height": 60, "text": "S3 + Parquet\n(cold/historical storage)", "fontSize": 18, "fontFamily": 1, "strokeColor": "#1e1e1e", "textAlign": "center", "verticalAlign": "middle", "containerId": "s3_box", "originalText": "S3 + Parquet\n(cold/historical storage)", "autoResize": true},
+
+    {"type": "arrow", "id": "arrow_flush", "x": 880, "y": 420, "width": 80, "height": 100, "points": [[0,0],[80,-100]], "endArrowhead": "arrow", "strokeStyle": "dashed", "strokeColor": "#868e96", "startBinding": {"elementId": "edge5_box", "fixedPoint": [1, 0.5]}, "endBinding": {"elementId": "s3_box", "fixedPoint": [0, 0.7]}},
+    {"type": "arrow", "id": "arrow_flush2", "x": 260, "y": 460, "width": 580, "height": 230, "points": [[0,0],[580,-230]], "endArrowhead": "arrow", "strokeStyle": "dashed", "strokeColor": "#868e96", "startBinding": {"elementId": "edge1_box", "fixedPoint": [0, 0.5]}, "endBinding": {"elementId": "s3_box", "fixedPoint": [0, 0.3]}},
+    {"type": "text", "id": "t_flush", "x": 650, "y": 110, "text": "flush (periodic)", "fontSize": 14, "fontFamily": 1, "strokeColor": "#868e96", "originalText": "flush (periodic)", "autoResize": true},
+
+    {"type": "text", "id": "t_legend_title", "x": 50, "y": 650, "text": "Legend:", "fontSize": 18, "fontFamily": 1, "strokeColor": "#1e1e1e", "originalText": "Legend:", "autoResize": true},
+
+    {"type": "rectangle", "id": "leg1", "x": 50, "y": 680, "width": 30, "height": 20, "backgroundColor": "#d0bfff", "fillStyle": "solid"},
+    {"type": "text", "id": "t_leg1", "x": 90, "y": 680, "text": "AI Agent", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "originalText": "AI Agent", "autoResize": true},
+
+    {"type": "rectangle", "id": "leg2", "x": 50, "y": 710, "width": 30, "height": 20, "backgroundColor": "#a5d8ff", "fillStyle": "solid"},
+    {"type": "text", "id": "t_leg2", "x": 90, "y": 710, "text": "Central Sigiro (coordinator)", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "originalText": "Central Sigiro (coordinator)", "autoResize": true},
+
+    {"type": "rectangle", "id": "leg3", "x": 50, "y": 740, "width": 30, "height": 20, "backgroundColor": "#b2f2bb", "fillStyle": "solid"},
+    {"type": "text", "id": "t_leg3", "x": 90, "y": 740, "text": "Edge Sigiro (per-machine, embedded DuckDB)", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "originalText": "Edge Sigiro (per-machine, embedded DuckDB)", "autoResize": true},
+
+    {"type": "rectangle", "id": "leg4", "x": 50, "y": 770, "width": 30, "height": 20, "backgroundColor": "#ffd8a8", "fillStyle": "solid"},
+    {"type": "text", "id": "t_leg4", "x": 90, "y": 770, "text": "Physical/virtual machine", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "originalText": "Physical/virtual machine", "autoResize": true},
+
+    {"type": "rectangle", "id": "leg5", "x": 50, "y": 800, "width": 30, "height": 20, "backgroundColor": "#c3fae8", "fillStyle": "solid"},
+    {"type": "text", "id": "t_leg5", "x": 90, "y": 800, "text": "Long-term storage (S3 + Parquet)", "fontSize": 16, "fontFamily": 1, "strokeColor": "#1e1e1e", "originalText": "Long-term storage (S3 + Parquet)", "autoResize": true}
+  ],
+  "appState": {
+    "viewBackgroundColor": "#ffffff"
+  }
+}
