@@ -13,7 +13,7 @@ curl -fsSL https://sigiro.com/install | sh
 sigiro serve
 ```
 
-No account and no config. It listens on:
+No account and no config. Open-mode servers listen on `127.0.0.1` by default:
 
 | Port | What |
 |---|---|
@@ -23,7 +23,15 @@ No account and no config. It listens on:
 
 Data goes to `~/.local/share/sigiro` on Linux and `~/Library/Application Support/sigiro` on macOS.
 Change it with `--data-dir` or `SIGIRO_DATA_DIR`.
-There is no login on a self-hosted server, so keep it on localhost or a private network.
+Local open mode has no login and makes no calls to Sigiro Cloud authentication.
+The dashboard reads `/v1/auth/config` to learn the server's mode; an unreachable
+server shows a connection error, never a sign-in prompt.
+
+Network exposure is explicit: `SIGIRO_BIND` changes the listener address. An open
+server does **not** authenticate requests, even on a private network. If you
+expose it beyond loopback, put it behind an authenticated reverse proxy or an
+access-controlled network perimeter. Do not expose it directly to the internet.
+Hosted JWT-authenticated deployments retain their existing listener defaults.
 
 ## Send it telemetry
 
@@ -105,6 +113,12 @@ mise run build                     # release binary with the dashboard built in
 ```
 
 `mise run build-dev` is a faster debug build. It embeds the dashboard only if `mise run dashboard-build` ran first.
+
+For dashboard development, run a current `sigiro serve` locally, then run the
+Next.js dev server in `dashboard/`. Development requests under `/v1/` proxy to
+`http://127.0.0.1:9999` by default; set `SIGIRO_DEV_BACKEND` to another backend
+origin if needed. This does not proxy production sign-in. Static production
+builds still use same-origin API routes supplied by their serving infrastructure.
 Checks and the repo layout are in [CONTRIBUTING.md](CONTRIBUTING.md).
 Words used in the code are defined in [CONTEXT.md](CONTEXT.md).
 Report security issues as described in [SECURITY.md](SECURITY.md).

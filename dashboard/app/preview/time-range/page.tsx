@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  relativeAgo,
-  relativeNow,
-  toDate,
-  toUrlString,
-  type DateTimeRangeValue,
-} from "@loykin/datetime-range";
+import { parseTimeEndpoint, toUrlString, type DateTimeRangeValue } from "@/lib/sigiro/time-window";
 import * as React from "react";
 
 import { TimeRangePicker } from "@/components/sigiro/time-range-picker";
@@ -15,9 +9,9 @@ import { Button } from "@/components/ui/button";
 /** Isolated evaluation: deliberately does not change shared query controls. */
 export default function TimeRangePreview() {
   const [start, setStart] = React.useState<DateTimeRangeValue>(() =>
-    relativeAgo(15, "Minutes ago")
+    parseTimeEndpoint("now-15m", Date.now()).value
   );
-  const [end, setEnd] = React.useState<DateTimeRangeValue>(relativeNow);
+  const [end, setEnd] = React.useState<DateTimeRangeValue>({ type: "relative", relativeNow: true });
   const [timezone, setTimezone] = React.useState("");
   React.useEffect(() => {
     setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -25,7 +19,8 @@ export default function TimeRangePreview() {
   const [snapshot, setSnapshot] = React.useState("");
 
   const resolve = (from: DateTimeRangeValue, to: DateTimeRangeValue) => {
-    setSnapshot(`${toDate(from).toISOString()} → ${toDate(to).toISOString()}`);
+    const now = Date.now();
+    setSnapshot(`${parseTimeEndpoint(toUrlString(from), now).date.toISOString()} → ${parseTimeEndpoint(toUrlString(to), now).date.toISOString()}`);
   };
 
   return (
@@ -33,7 +28,7 @@ export default function TimeRangePreview() {
       <header className="space-y-2">
         <h1 className="text-xl font-semibold">Time-range picker preview</h1>
         <p className="text-muted-foreground text-sm">
-          BaseKit / Base UI. Local evaluation only: this picker does not run
+          UI SDK. Local evaluation only: this picker does not run
           queries or replace the dashboard header.
         </p>
       </header>

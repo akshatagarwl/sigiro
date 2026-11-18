@@ -1,4 +1,3 @@
-import type { DateTimeRangeValue } from "@loykin/datetime-range";
 import { subMonths, subYears } from "date-fns";
 
 const UNITS = {
@@ -11,6 +10,26 @@ const UNITS = {
   y: "Years ago",
 } as const;
 const MS = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
+
+export type DateTimeRangeValue = {
+  type: "absolute" | "relative";
+  absoluteValue?: Date;
+  relativeValue?: number | string;
+  relativeFormat?: (typeof UNITS)[keyof typeof UNITS];
+  relativeNow?: boolean;
+};
+
+export function toUrlString(value: DateTimeRangeValue): string {
+  if (value.type === "absolute") {
+    if (!value.absoluteValue || !Number.isFinite(value.absoluteValue.getTime())) throw new Error("Invalid absolute time");
+    return String(value.absoluteValue.getTime());
+  }
+  if (value.relativeNow) return "now";
+  const unit = Object.entries(UNITS).find(([, label]) => label === value.relativeFormat)?.[0];
+  const amount = Number(value.relativeValue);
+  if (!unit || !Number.isSafeInteger(amount) || amount < 0) throw new Error("Invalid relative time");
+  return `now-${amount}${unit}`;
+}
 
 /** Strict parsing: upstream silently turns malformed URL values into "now". */
 export function parseTimeEndpoint(

@@ -102,7 +102,11 @@ export const createBrowserOAuth = (options: BrowserOAuthOptions) => {
       credentials: "omit",
       cache: "no-store",
     });
-    if (!response.ok) throw new Error("CIMD metadata unavailable");
+    if (!response.ok)
+      throw new Error(
+        `Authentication metadata unavailable (HTTP ${response.status}). ` +
+          "This dashboard needs the Sigiro authentication service; a standalone Next.js preview cannot sign you in."
+      );
     const metadata = (await response.json()) as Partial<oauth.Client> & {
       redirect_uris?: unknown;
     };

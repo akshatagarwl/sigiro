@@ -1,6 +1,6 @@
 "use client";
 
-import { Collapsible } from "@base-ui/react/collapsible";
+import { Collapsible } from "@/components/ui/parts";
 import * as React from "react";
 
 import { DataTableAuto } from "@/components/data-table/data-table-auto";

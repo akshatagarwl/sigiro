@@ -4,7 +4,7 @@ import { IconAlertTriangle } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
-import { auth, localToken } from "@/lib/sigiro/query";
+import { authHeaders } from "@/lib/sigiro/query";
 
 /** `GET /v1/alerts` → `delivery`: the project's alert webhook outbox. */
 export type DeliverySummary = {
@@ -16,8 +16,6 @@ export type DeliverySummary = {
 
 const KEY = ["sigiro", "alert-delivery"] as const;
 
-const bearer = () => auth.currentToken() ?? localToken();
-
 /**
  * Reads the outbox summary. Servers without alerting (the hosted cell) or
  * tokens without `alerts:read` answer non-2xx; that hides the notice rather
@@ -26,11 +24,15 @@ const bearer = () => auth.currentToken() ?? localToken();
 async function fetchDelivery(
   signal: AbortSignal
 ): Promise<DeliverySummary | null> {
-  const token = bearer();
-  if (!token) return null;
+  let authorization: Record<string, string>;
+  try {
+    authorization = authHeaders();
+  } catch {
+    return null;
+  }
   const response = await fetch("/v1/alerts?status=firing", {
     credentials: "omit",
-    headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+    headers: { ...authorization, accept: "application/json" },
     signal,
   });
   if (!response.ok) return null;
@@ -39,12 +41,11 @@ async function fetchDelivery(
 }
 
 async function replayDead(): Promise<number> {
-  const token = bearer();
-  if (!token) throw new Error("Not signed in.");
+  const authorization = authHeaders();
   const response = await fetch("/v1/alerts/replay", {
     method: "POST",
     credentials: "omit",
-    headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+    headers: { ...authorization, accept: "application/json" },
   });
   if (!response.ok) throw new Error(`Replay failed (${response.status}).`);
   return ((await response.json()) as { replayed: number }).replayed;

@@ -1,70 +1,52 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { OverlayHost } from "@ui-sdk/react/overlays";
+import { Menu, MenuTrigger, MenuContent, MenuItem } from "@ui-sdk/react/menu";
+import { auth } from "@/lib/sigiro/query";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import * as React from "react";
-
-import { AppSidebar } from "@/components/app-sidebar";
 import { AlertDeliveryNotice } from "@/components/sigiro/alert-delivery-notice";
-import { AuthGate } from "@/components/sigiro/auth-gate";
+import { AuthGate, useLocalMode, useWorkspace } from "@/components/sigiro/auth-gate";
 import { SiteHeader } from "@/components/site-header";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { Toaster } from "@/components/ui/sonner";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { ControlsProvider, useControls } from "@/lib/sigiro/controls";
+import { AgentBridge } from "@/components/sigiro/agent-bridge";
+
+const pages = [["/", "Overview"], ["/traces/", "Traces"], ["/logs/", "Logs"], ["/profiles/", "Profiles"], ["/sql/", "SQL"]] as const;
+
+function Navigation() {
+  const pathname = usePathname();
+  const workspace = useWorkspace();
+  const local = useLocalMode();
+  const [authError, setAuthError] = React.useState<string>();
+  return <div className="flex flex-wrap items-center gap-x-8 gap-y-2 border-b px-4 py-3 lg:px-6">
+    <Link href="/" className="font-semibold tracking-tight no-underline">sigiro</Link>
+    <nav aria-label="Main navigation" className="order-last flex w-full min-w-0 gap-1 overflow-x-auto text-sm sm:order-none sm:w-auto">
+      {pages.map(([href, label]) => <Link key={href} href={href} aria-current={pathname.replace(/\/$/, "") === href.replace(/\/$/, "") ? "page" : undefined} className="rounded-md px-3 py-1.5 text-muted-foreground no-underline hover:bg-muted hover:text-foreground aria-[current=page]:bg-primary aria-[current=page]:text-primary-foreground">{label}</Link>)}
+    </nav>
+    <Menu><MenuTrigger aria-label={`${workspace ? `${workspace} ` : ""}Workspace menu`} className="ml-auto">{workspace ?? "Workspace"}</MenuTrigger><MenuContent align="end" sideOffset={8}>
+      <MenuItem value="docs" render={<a href="/docs" />}>Documentation</MenuItem>
+      {!local && <MenuItem value="switch" onSelect={() => { auth.forget(); void auth.beginAuthorization().catch(error => { if (!String(error).includes("sign-in flow has started")) setAuthError(error instanceof Error ? error.message : String(error)); }); }}>Switch workspace</MenuItem>}
+      {!local && <MenuItem value="sign-out" onSelect={() => { auth.forget(); location.reload(); }}>Sign out</MenuItem>}
+    </MenuContent></Menu>
+    {authError && <p role="alert" className="text-destructive text-sm">{authError}</p>}
+  </div>;
+}
 
 function WindowGuard({ children }: { children: React.ReactNode }) {
   const { windowError } = useControls();
   const pathname = usePathname();
-  if (windowError && pathname.replace(/\/$/, "") !== "/sql")
-    return (
-      <div role="alert" className="space-y-2 p-6 text-sm">
-        <h2 className="font-semibold">Invalid time range</h2>
-        <p>{windowError}. Choose a valid range in the header to continue.</p>
-      </div>
-    );
+  if (windowError && pathname.replace(/\/$/, "") !== "/sql") return <div role="alert" className="space-y-2 p-6 text-sm"><h2 className="font-semibold">Invalid time range</h2><p>{windowError}. Choose a valid range in the header to continue.</p></div>;
   return children;
 }
 
-/** dashboard-01's sidebar + inset layout, behind sign-in, with the providers the blocks need. */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [queryClient] = React.useState(() => new QueryClient());
-  const pathname = usePathname();
-  const [navigationOpen, setNavigationOpen] = React.useState(false);
-  React.useEffect(() => setNavigationOpen(false), [pathname]);
-  return (
-    <QueryClientProvider client={queryClient}>
-      <NuqsAdapter>
-        <TooltipProvider>
-          <React.Suspense>
-            <AuthGate>
-              <ControlsProvider>
-                <SidebarProvider
-                  open={navigationOpen}
-                  onOpenChange={setNavigationOpen}
-                  style={
-                    {
-                      "--sidebar-width": "calc(var(--spacing) * 60)",
-                      "--header-height": "calc(var(--spacing) * 12)",
-                    } as React.CSSProperties
-                  }
-                >
-                  <AppSidebar variant="inset" collapsible="icon" />
-                  <SidebarInset className="h-svh min-w-0 overflow-hidden md:h-[calc(100svh-1rem)]">
-                    <SiteHeader />
-                    <AlertDeliveryNotice />
-                    <div className="@container/main flex min-h-0 flex-1 flex-col overflow-y-auto">
-                      <WindowGuard>{children}</WindowGuard>
-                    </div>
-                  </SidebarInset>
-                </SidebarProvider>
-              </ControlsProvider>
-            </AuthGate>
-          </React.Suspense>
-          <Toaster />
-        </TooltipProvider>
-      </NuqsAdapter>
-    </QueryClientProvider>
-  );
+  return <QueryClientProvider client={queryClient}><NuqsAdapter><React.Suspense><AuthGate><ControlsProvider>
+    <div className="flex h-svh min-w-0 flex-col"><header className="shrink-0"><a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:bg-background focus:p-3">Skip to content</a><Navigation /><SiteHeader /></header><AlertDeliveryNotice /><main id="main-content" tabIndex={-1} className="@container/main flex min-h-0 flex-1 flex-col overflow-y-auto outline-none"><WindowGuard>{children}</WindowGuard></main></div>
+    <OverlayHost />
+    <AgentBridge />
+  </ControlsProvider></AuthGate></React.Suspense></NuqsAdapter></QueryClientProvider>;
 }

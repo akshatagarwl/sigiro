@@ -1,9 +1,12 @@
 "use client";
 
-import { toUrlString, type DateTimeRangeValue } from "@loykin/datetime-range";
+import { toUrlString, type DateTimeRangeValue } from "@/lib/sigiro/time-window";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import {
   parseAsBoolean,
+  parseAsArrayOf,
+  parseAsTimestamp,
   parseAsInteger,
   parseAsString,
   parseAsStringLiteral,
@@ -59,7 +62,6 @@ export function ControlsProvider({ children }: { children: React.ReactNode }) {
   const [
     {
       range,
-      timestamp,
       from: customFrom,
       to: customTo,
       timeStart,
@@ -69,7 +71,7 @@ export function ControlsProvider({ children }: { children: React.ReactNode }) {
     setTime,
   ] = useQueryStates({
     range: parseAsStringLiteral(RANGE_KEYS).withDefault("24h"),
-    timestamp: parseAsString,
+    timestamp: parseAsArrayOf(parseAsTimestamp, "-"),
     from: parseAsInteger,
     to: parseAsInteger,
     timeStart: parseAsString,
@@ -79,16 +81,18 @@ export function ControlsProvider({ children }: { children: React.ReactNode }) {
     after: parseAsString,
     direction: parseAsString,
   });
+  const timestamp = useSearchParams().get("timestamp");
   const hasCustomWindow =
     timestamp !== null ||
     customFrom !== null ||
     customTo !== null ||
     timeStart !== null ||
     timeEnd !== null;
-  const [service, setService] = useQueryState(
+  const [services, setService] = useQueryState(
     "service",
-    parseAsString.withDefault("")
+    parseAsArrayOf(parseAsString, ",")
   );
+  const service = services?.[0] ?? "";
   const [tick, setTick] = React.useState(0);
   const [now, setNow] = React.useState(() => Date.now());
   const refresh = React.useCallback(() => {
@@ -197,7 +201,7 @@ export function ControlsProvider({ children }: { children: React.ReactNode }) {
         refresh();
       },
       service,
-      setService: (next) => void setService(next || null),
+      setService: (next) => void setService(next ? [next] : null),
       live,
       setLive: (next) => void setTime({ live: next || null }),
       tick,

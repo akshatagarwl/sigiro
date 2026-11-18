@@ -12,8 +12,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Separator } from "@/components/ui/separator"
-import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Toggle } from "@/components/ui/toggle"
 import { TimeRangePicker } from "@/components/sigiro/time-range-picker"
 import { useControls, useSql } from "@/lib/sigiro/controls"
@@ -68,13 +66,11 @@ export function SiteHeader() {
   const { resolvedTheme, setTheme } = useTheme()
 
   return (
-    <header className="flex min-h-(--header-height) shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear">
+    <div className="flex min-h-14 shrink-0 items-center gap-2 border-b">
       {/* Wraps on a phone: the filters drop under the title instead of pushing the page sideways. */}
       <div className="flex w-full flex-wrap items-center gap-1 px-4 py-2 lg:gap-2 lg:px-6">
-        <SidebarTrigger className="-ml-1" />
-        <Separator orientation="vertical" className="mx-2 data-[orientation=vertical]:h-4" />
         <h1 className="text-base font-medium">{TITLES[pathname] ?? "Sigiro"}</h1>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+        <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
           {isSql ? (
             <span className="text-muted-foreground text-xs">Time is controlled by SQL</span>
           ) : (
@@ -117,6 +113,6 @@ export function SiteHeader() {
           </Button>
         </div>
       </div>
-    </header>
+    </div>
   )
 }

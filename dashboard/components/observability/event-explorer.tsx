@@ -1,9 +1,7 @@
 "use client";
 
-import { Button as RowButton } from "@base-ui/react/button";
-import { Dialog } from "@base-ui/react/dialog";
-import { Menu } from "@base-ui/react/menu";
-import { Tabs } from "@base-ui/react/tabs";
+import { Button as RowButton } from "@ui-sdk/react/button";
+import { Dialog, Menu, Tabs } from "@/components/ui/parts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import * as React from "react";
 
@@ -238,15 +236,14 @@ export function EventExplorer({
           </Button>
           <Menu.Root>
             <Menu.Trigger render={<Button />}>View</Menu.Trigger>
-            <Menu.Portal>
-              <Menu.Positioner sideOffset={6} className={styles.positioner}>
-                <Menu.Popup className={styles.menu}>
+                <Menu.Popup sideOffset={6} className={styles.menu}>
                   <Menu.Group>
                     <Menu.GroupLabel className={styles.menuLabel}>
                       Display
                     </Menu.GroupLabel>
                     <Menu.CheckboxItem
                       className={styles.menuItem}
+                      value="wrap"
                       checked={wrap}
                       onCheckedChange={setWrap}
                     >
@@ -257,6 +254,7 @@ export function EventExplorer({
                     </Menu.CheckboxItem>
                     <Menu.CheckboxItem
                       className={styles.menuItem}
+                      value="comfortable"
                       checked={comfortable}
                       onCheckedChange={setComfortable}
                     >
@@ -273,6 +271,7 @@ export function EventExplorer({
                     {DEFAULT_COLUMNS.map((column) => (
                       <Menu.CheckboxItem
                         key={column}
+                        value={column}
                         className={styles.menuItem}
                         checked={columns.includes(column)}
                         disabled={columns.length === 1 && columns[0] === column}
@@ -292,8 +291,6 @@ export function EventExplorer({
                     ))}
                   </Menu.Group>
                 </Menu.Popup>
-              </Menu.Positioner>
-            </Menu.Portal>
           </Menu.Root>
         </div>
       </div>
@@ -522,7 +519,6 @@ export function EventExplorer({
             if (!open) close();
           }}
         >
-          <Dialog.Portal>
             <Dialog.Backdrop className={styles.backdrop} />
             <Dialog.Popup
               className={styles.mobileInspector}
@@ -540,7 +536,6 @@ export function EventExplorer({
                 {notice}
               </div>
             </Dialog.Popup>
-          </Dialog.Portal>
         </Dialog.Root>
       )}
     </section>
