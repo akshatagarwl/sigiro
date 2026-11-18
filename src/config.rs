@@ -1,5 +1,4 @@
-use anyhow::{Context, Result};
-use std::num::{NonZeroU64, NonZeroUsize};
+use anyhow::Result;
 use typed_env::{Envar, EnvarDef};
 
 // ---------------------------------------------------------------------------
@@ -20,28 +19,38 @@ pub(crate) static OTLP_HTTP_PORT: Envar<u16> =
     Envar::on_startup("SIGIRO_OTLP_HTTP_PORT", || EnvarDef::Default(4318));
 
 /// S3 cold storage config. Empty/unset means no S3.
+/// on_demand (not on_startup) so temp_env::with_vars works in tests.
 pub(crate) static S3_BUCKET: Envar<String> =
     Envar::on_demand("SIGIRO_S3_BUCKET", || EnvarDef::Default(String::new()));
 pub(crate) static S3_REGION: Envar<String> =
     Envar::on_startup("SIGIRO_S3_REGION", || EnvarDef::Default(String::new()));
-/// Absolute HTTP(S) endpoint URL, e.g.
-/// `https://<account>.r2.cloudflarestorage.com` for Cloudflare R2. Required when
-/// `SIGIRO_S3_BUCKET` is set — R2/most S3-compatible stores are unreachable via
-/// DuckDB's default AWS endpoint resolution. The scheme determines DuckDB's
-/// `USE_SSL` setting.
+/// S3-compatible endpoint host (no scheme), e.g. `<account>.r2.cloudflarestorage.com`
+/// for Cloudflare R2. Required when `SIGIRO_S3_BUCKET` is set — R2/most S3-compatible
+/// stores are unreachable via DuckDB's default AWS endpoint resolution.
+/// on_demand (not on_startup) so temp_env::with_vars works in tests.
 pub(crate) static S3_ENDPOINT: Envar<String> =
     Envar::on_demand("SIGIRO_S3_ENDPOINT", || EnvarDef::Default(String::new()));
 /// S3 access key ID. Falls back to the conventional `AWS_ACCESS_KEY_ID` when unset.
+/// on_demand (not on_startup) so temp_env::with_vars works in tests.
 pub(crate) static S3_KEY_ID: Envar<String> =
     Envar::on_demand("SIGIRO_S3_KEY_ID", || EnvarDef::Default(String::new()));
 /// S3 secret access key. Falls back to the conventional `AWS_SECRET_ACCESS_KEY` when unset.
+/// on_demand (not on_startup) so temp_env::with_vars works in tests.
 pub(crate) static S3_SECRET: Envar<String> =
     Envar::on_demand("SIGIRO_S3_SECRET", || EnvarDef::Default(String::new()));
 /// Conventional AWS credential env vars — fallback source for S3_KEY_ID/S3_SECRET.
+/// on_demand (not on_startup) so temp_env::with_vars works in tests.
 pub(crate) static AWS_ACCESS_KEY_ID: Envar<String> =
     Envar::on_demand("AWS_ACCESS_KEY_ID", || EnvarDef::Default(String::new()));
 pub(crate) static AWS_SECRET_ACCESS_KEY: Envar<String> =
     Envar::on_demand("AWS_SECRET_ACCESS_KEY", || EnvarDef::Default(String::new()));
+/// Whether the S3 secret DuckDB attaches with speaks TLS (`USE_SSL` in the
+/// `CREATE SECRET` SQL). Default `true` — real S3 (and R2) require TLS.
+/// Dev/CI S3-compatible stores (MinIO over plain HTTP) set this `false`.
+/// on_demand (not on_startup) so temp_env::with_vars works in tests, matching
+/// the other S3_* config above.
+pub(crate) static S3_USE_SSL: Envar<bool> =
+    Envar::on_demand("SIGIRO_S3_USE_SSL", || EnvarDef::Default(true));
 
 /// OTel service name for self-instrumentation.
 pub(crate) static OTEL_SERVICE_NAME: Envar<String> = Envar::on_startup("OTEL_SERVICE_NAME", || {
@@ -54,48 +63,16 @@ pub(crate) static OTEL_EXPORTER_OTLP_ENDPOINT: Envar<String> =
         EnvarDef::Default(String::new())
     });
 
-/// OTLP profiles endpoint for self-profiling, used as-is. Unset means
-/// `OTEL_EXPORTER_OTLP_ENDPOINT` + `/v1development/profiles`, or this server.
-pub(crate) static OTEL_EXPORTER_OTLP_PROFILES_ENDPOINT: Envar<String> =
-    Envar::on_startup("OTEL_EXPORTER_OTLP_PROFILES_ENDPOINT", || {
-        EnvarDef::Default(String::new())
-    });
-
 /// OTel auth key for self-ingestion (optional). Empty means no auth.
 pub(crate) static OTEL_AUTH_KEY: Envar<String> =
     Envar::on_startup("SIGIRO_OTEL_AUTH_KEY", || EnvarDef::Default(String::new()));
-
-/// Deployment-wide Alertmanager-compatible webhook. Empty disables delivery.
-pub(crate) static ALERT_WEBHOOK_URL: Envar<String> =
-    Envar::on_startup("SIGIRO_ALERT_WEBHOOK_URL", || {
-        EnvarDef::Default(String::new())
-    });
-/// Optional bearer token for the alert webhook.
-static ALERT_WEBHOOK_TOKEN: Envar<String> = Envar::on_demand("SIGIRO_ALERT_WEBHOOK_TOKEN", || {
-    EnvarDef::Default(String::new())
-});
-
-pub(crate) fn alert_webhook_token() -> Result<Option<crate::alerts::AlertWebhookToken>> {
-    let raw = ALERT_WEBHOOK_TOKEN.value()?;
-    if raw.is_empty() {
-        return Ok(None);
-    }
-    crate::alerts::AlertWebhookToken::try_new(raw)
-        .map(Some)
-        .map_err(|error| anyhow::anyhow!("invalid SIGIRO_ALERT_WEBHOOK_TOKEN: {error}"))
-}
-/// Optional DuckDB extension-cache override. Normal deployments use
-/// `<SIGIRO_DATA_DIR>/extensions`.
+/// DuckDB extension directory (optional — shared cache across tests).
 pub(crate) static EXTENSION_DIR: Envar<String> =
     Envar::on_startup("SIGIRO_EXTENSION_DIR", || EnvarDef::Default(String::new()));
 
 /// DuckDB worker threads per shared project database. Default: host parallelism.
-static DUCKDB_THREADS: Envar<usize> = Envar::on_startup("SIGIRO_DUCKDB_THREADS", || {
-    EnvarDef::Default(
-        std::thread::available_parallelism()
-            .expect("failed to determine available parallelism")
-            .get(),
-    )
+pub(crate) static DUCKDB_THREADS: Envar<usize> = Envar::on_startup("SIGIRO_DUCKDB_THREADS", || {
+    EnvarDef::Default(default_duckdb_threads())
 });
 
 /// DuckDB memory cap per shared project database. Default: 400 MB — safely
@@ -106,7 +83,7 @@ pub(crate) static DUCKDB_MEMORY_LIMIT: Envar<String> =
         EnvarDef::Default("400MB".to_string())
     });
 
-/// Per-query wall-clock timeout in seconds. DuckDB (pinned version) has no
+/// Per-query wall-clock timeout in seconds. DuckDB (bundled version) has no
 /// `statement_timeout` setting, so this is enforced by interrupting the
 /// reader connection from a watchdog once the deadline passes (see
 /// `execute_sql` in server.rs). Default: 30s.
@@ -119,10 +96,11 @@ pub(crate) static QUERY_TIMEOUT_SECONDS: Envar<u64> =
 pub(crate) static MAX_RESULT_ROWS: Envar<usize> =
     Envar::on_startup("SIGIRO_MAX_RESULT_ROWS", || EnvarDef::Default(100_000));
 
-/// Self-profiling: `true` sends sigiro's own CPU and heap profiles over OTLP
-/// (see `src/profiling.rs`). Off by default.
-pub(crate) static SELF_PROFILING: Envar<String> =
-    Envar::on_startup("SIGIRO_SELF_PROFILING", || EnvarDef::Default(String::new()));
+/// Pyroscope profiling endpoint (optional — no profiling if unset).
+pub(crate) static PYROSCOPE_ENDPOINT: Envar<String> =
+    Envar::on_startup("SIGIRO_PYROSCOPE_ENDPOINT", || {
+        EnvarDef::Default(String::new())
+    });
 
 /// Flush interval for per-project flusher tasks (seconds). Default: 60s.
 /// Controls how often buffered rows are flushed to DuckDB, even if the row
@@ -163,7 +141,9 @@ pub(crate) static FLUSH_ROW_THRESHOLD: Envar<usize> =
 /// competes for CPU and disk with everything else on the box. Five seconds is a
 /// sound production budget — raising it globally would make a real shutdown hang
 /// slower to detect — but a loaded machine can exceed it for reasons unrelated
-/// to the code under test.
+/// to the code under test. The test suite raises it via the environment (see
+/// the `test` recipe in the justfile) so a busy laptop does not produce a
+/// failure that teaches people to re-run the gate until it passes.
 ///
 /// Operators draining a large buffer onto slow disk have the same problem and
 /// the same lever.
@@ -207,10 +187,13 @@ pub(crate) fn backpressure_policy() -> Result<BackpressurePolicy> {
     }
 }
 
-pub(crate) fn duckdb_threads() -> Result<NonZeroUsize> {
-    let raw = DUCKDB_THREADS.value()?;
-    NonZeroUsize::new(raw)
-        .ok_or_else(|| anyhow::anyhow!("SIGIRO_DUCKDB_THREADS must be greater than zero"))
+pub(crate) fn duckdb_threads() -> Result<usize> {
+    let threads = DUCKDB_THREADS.value()?;
+    anyhow::ensure!(
+        threads > 0,
+        "SIGIRO_DUCKDB_THREADS must be greater than zero"
+    );
+    Ok(threads)
 }
 
 pub(crate) fn duckdb_memory_limit() -> Result<String> {
@@ -237,6 +220,12 @@ pub(crate) fn max_result_rows() -> Result<usize> {
     Ok(rows)
 }
 
+fn default_duckdb_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+}
+
 /// Byte-size threshold that triggers an immediate flush. Default: 8_388_608 (8 MiB).
 /// When the total buffered bytes across all signal tables reaches this limit,
 /// the flusher writes to DuckDB without waiting for the row threshold or timer.
@@ -252,14 +241,18 @@ pub(crate) static FLUSH_BYTE_THRESHOLD: Envar<usize> =
 /// (enforced when the body is collected into `Bytes`, which happens after
 /// `RequestDecompressionLayer` has already un-gzipped it), so this also
 /// bounds a gzip-bomb, not just the wire size.
-static MAX_INGEST_BODY_BYTES: Envar<usize> =
+pub(crate) static MAX_INGEST_BODY_BYTES: Envar<usize> =
     Envar::on_startup("SIGIRO_MAX_INGEST_BODY_BYTES", || {
         EnvarDef::Default(8_388_608)
     });
 
-pub(crate) fn max_ingest_body_bytes() -> Result<NonZeroUsize> {
-    NonZeroUsize::new(MAX_INGEST_BODY_BYTES.value()?)
-        .context("SIGIRO_MAX_INGEST_BODY_BYTES must be greater than zero")
+pub(crate) fn max_ingest_body_bytes() -> Result<usize> {
+    let bytes = MAX_INGEST_BODY_BYTES.value()?;
+    anyhow::ensure!(
+        bytes > 0,
+        "SIGIRO_MAX_INGEST_BODY_BYTES must be greater than zero"
+    );
+    Ok(bytes)
 }
 
 /// Hard cap on total bytes under `SIGIRO_DATA_DIR`. 0 = disabled (default).
@@ -293,127 +286,42 @@ pub(crate) static MAX_DISK_BYTES: Envar<u64> =
 
 /// How often the storage-maintenance task samples the `SIGIRO_DATA_DIR`
 /// on-disk byte size for the disk cap. Default: 30s.
-static DISK_SAMPLE_SECONDS: Envar<u64> =
+pub(crate) static DISK_SAMPLE_SECONDS: Envar<u64> =
     Envar::on_startup("SIGIRO_DISK_SAMPLE_SECONDS", || EnvarDef::Default(30));
 
 pub fn max_disk_bytes() -> Result<u64> {
     MAX_DISK_BYTES.value().map_err(anyhow::Error::from)
 }
 
-/// Consecutive DuckLake `CHECKPOINT` failures on one project's writer before
-/// its ingest is shed with 507 / `resource_exhausted`.
-///
-/// A failed checkpoint materialises nothing: telemetry keeps accumulating in
-/// the catalog while no Parquet is written. In distributed mode that catalog is
-/// an external Postgres which `SIGIRO_MAX_DISK_BYTES` never samples, so the
-/// disk gate cannot see the growth — sustained checkpoint failure is the only
-/// signal available.
-///
-/// The default of 3 rides out a transient blip (one failed cycle recovers on
-/// the next, and any success resets the count) while still bounding how long a
-/// genuinely wedged storage backend can absorb unmaterialisable writes. Set 0
-/// to disable shedding: failures are still counted and reported by `/health`,
-/// but ingest keeps being accepted.
-pub(crate) static MAX_CHECKPOINT_FAILURES: Envar<u32> =
-    Envar::on_startup("SIGIRO_MAX_CHECKPOINT_FAILURES", || EnvarDef::Default(3));
-
-pub(crate) fn max_checkpoint_failures() -> Result<u32> {
-    MAX_CHECKPOINT_FAILURES.value().map_err(anyhow::Error::from)
+pub(crate) fn disk_sample_seconds() -> Result<u64> {
+    let secs = DISK_SAMPLE_SECONDS.value()?;
+    anyhow::ensure!(
+        secs > 0,
+        "SIGIRO_DISK_SAMPLE_SECONDS must be greater than zero"
+    );
+    Ok(secs)
 }
-
-pub(crate) fn disk_sample_seconds() -> Result<NonZeroU64> {
-    NonZeroU64::new(DISK_SAMPLE_SECONDS.value()?)
-        .context("SIGIRO_DISK_SAMPLE_SECONDS must be greater than zero")
-}
-
-/// A static build of the dashboard on disk (`dashboard/dist`, the directory
-/// holding `dashboard/`). An open-mode server serves the dashboard built into
-/// the binary at `/dashboard/`; set this to serve a different build instead,
-/// for example while developing the dashboard.
-pub(crate) static DASHBOARD_DIR: Envar<String> =
-    Envar::on_startup("SIGIRO_DASHBOARD_DIR", || EnvarDef::Unset);
-
-/// A static export of the docs on disk (`www/dist-binary`, the directory
-/// holding the docs' `index.html`). Every server serves the docs built into the
-/// binary at `/docs/`; set this to serve a different export instead, for
-/// example while editing the docs.
-pub(crate) static DOCS_DIR: Envar<String> =
-    Envar::on_startup("SIGIRO_DOCS_DIR", || EnvarDef::Unset);
 
 /// Data directory for sigiro (holds DuckDB files, extensions, binaries).
 /// Defaults to the platform data dir (~/.local/share/sigiro on Unix, %LOCALAPPDATA%\sigiro on Windows).
 pub(crate) static DATA_DIR: Envar<String> =
     Envar::on_startup("SIGIRO_DATA_DIR", || EnvarDef::Unset);
 
-/// Persistent hosted telemetry filesystem. Hosted mode never uses the local
-/// platform data directory: PostgreSQL owns catalog state and this path owns
-/// only local DuckLake data files, crash evidence, and migration evidence.
-pub(crate) static HOSTED_DATA_DIR: Envar<String> =
-    Envar::on_startup("SIGIRO_HOSTED_DATA_DIR", || {
-        EnvarDef::Default("/var/lib/sigiro/telemetry".to_string())
-    });
-
-/// Shared writable DuckDB extension/cache directory for hosted mode.
-pub(crate) static DUCKDB_CACHE_DIR: Envar<String> =
-    Envar::on_startup("SIGIRO_DUCKDB_CACHE_DIR", || {
-        EnvarDef::Default("/var/cache/sigiro/duckdb".to_string())
-    });
-
-pub fn hosted_data_dir() -> Result<camino::Utf8PathBuf> {
-    Ok(camino::Utf8PathBuf::from(HOSTED_DATA_DIR.value()?))
-}
-
-pub(crate) fn duckdb_cache_dir() -> Result<camino::Utf8PathBuf> {
-    Ok(camino::Utf8PathBuf::from(DUCKDB_CACHE_DIR.value()?))
-}
-
-/// Server URL for CLI client and admin commands. An empty value selects the
-/// hosted endpoint after OAuth login and localhost otherwise.
-pub static ENDPOINT: Envar<String> =
-    Envar::on_startup("SIGIRO_ENDPOINT", || EnvarDef::Default(String::new()));
-
-/// Public Blume documentation MCP endpoint. Override this for a self-hosted
-/// docs deployment; no Sigiro credential is sent to this endpoint. When it is
-/// unreachable, `sigiro mcp` answers the same tools from the docs built into
-/// the binary (`docs_mcp`); an empty value skips the endpoint altogether.
-pub static DOCS_MCP_URL: Envar<String> = Envar::on_demand("SIGIRO_DOCS_MCP_URL", || {
-    EnvarDef::Default("https://sigiro.com/mcp/docs".to_string())
+/// Server URL for CLI client and admin commands.
+pub static ENDPOINT: Envar<String> = Envar::on_startup("SIGIRO_ENDPOINT", || {
+    EnvarDef::Default("http://localhost:9999".to_string())
 });
 
-/// Bearer token for a hosted JWT endpoint. Client-only: it is sent
+/// Bearer token for a hosted (`TenantKeys`) endpoint. Client-only: it is sent
 /// as a bearer token by `client::try_build_client` and never configures
 /// server-side authentication.
 ///
 /// `on_demand`, not `on_startup`, because `main.rs` writes this variable from
-/// the `--token` flag after startup and a cached read would miss it. Empty string
-/// rather than `Unset` so the caller keeps its "no token means no auth" shape
+/// the `--key` flag after startup and a cached read would miss it. Empty string
+/// rather than `Unset` so the caller keeps its "no key means no auth" shape
 /// without an error path.
-pub(crate) static ACCESS_TOKEN: Envar<String> =
-    Envar::on_demand("SIGIRO_ACCESS_TOKEN", || EnvarDef::Default(String::new()));
-
-/// Better Auth OAuth issuer, protected-resource audience, and JWKS endpoint.
-/// Set all three to make Sigiro a JWT resource server. Distributed storage
-/// rejects startup unless all three are present; local/edge modes may be Open.
-pub(crate) static AUTH_ISSUER: Envar<String> =
-    Envar::on_demand("SIGIRO_AUTH_ISSUER", || EnvarDef::Default(String::new()));
-pub(crate) static AUTH_AUDIENCE: Envar<String> =
-    Envar::on_demand("SIGIRO_AUTH_AUDIENCE", || EnvarDef::Default(String::new()));
-pub(crate) static AUTH_JWKS_URL: Envar<String> =
-    Envar::on_demand("SIGIRO_AUTH_JWKS_URL", || EnvarDef::Default(String::new()));
-
-pub(crate) fn jwt_resource_server_config() -> Result<Option<(String, String, String)>> {
-    let issuer = AUTH_ISSUER.value()?;
-    let audience = AUTH_AUDIENCE.value()?;
-    let jwks_url = AUTH_JWKS_URL.value()?;
-    if issuer.is_empty() && audience.is_empty() && jwks_url.is_empty() {
-        return Ok(None);
-    }
-    anyhow::ensure!(
-        !issuer.is_empty() && !audience.is_empty() && !jwks_url.is_empty(),
-        "SIGIRO_AUTH_ISSUER, SIGIRO_AUTH_AUDIENCE, and SIGIRO_AUTH_JWKS_URL must be set together"
-    );
-    Ok(Some((issuer, audience, jwks_url)))
-}
+pub(crate) static API_KEY: Envar<String> =
+    Envar::on_demand("SIGIRO_API_KEY", || EnvarDef::Default(String::new()));
 
 /// Path to the direct-ingest TLS certificate PEM file (ports 4317 and 4318).
 /// The main HTTP API stays plaintext for a TLS-terminating reverse proxy.
@@ -469,18 +377,6 @@ pub(crate) static QUACK_BIND: Envar<String> = Envar::on_startup("SIGIRO_QUACK_BI
     EnvarDef::Default("127.0.0.1".to_string())
 });
 
-/// Bind address for the HTTP, OTLP-HTTP and gRPC listeners outside quack mode.
-/// Unset binds every interface, as hosted mode needs (the ingress sits on the
-/// Docker network). Android defaults to loopback: a phone joins untrusted
-/// networks and a self-hosted Sigiro there has no auth or TLS by default.
-pub(crate) static BIND: Envar<String> = Envar::on_startup("SIGIRO_BIND", || {
-    if cfg!(target_os = "android") {
-        EnvarDef::Default("127.0.0.1".to_string())
-    } else {
-        EnvarDef::Unset
-    }
-});
-
 /// Port for the quack query-serving surface.
 pub(crate) static QUACK_PORT: Envar<u16> =
     Envar::on_startup("SIGIRO_QUACK_PORT", || EnvarDef::Default(7777));
@@ -488,24 +384,16 @@ pub(crate) static QUACK_PORT: Envar<u16> =
 /// Optional bearer token quack clients must present. Empty (the default)
 /// means no token — an acceptable choice only because the bind address
 /// above defaults to loopback and any wider exposure is the operator's own,
-/// explicit choice.
-static QUACK_TOKEN: Envar<String> =
+/// explicit choice. on_demand (not on_startup) so temp_env::with_vars works
+/// in tests, matching the S3_* secret pattern above.
+pub(crate) static QUACK_TOKEN: Envar<String> =
     Envar::on_demand("SIGIRO_QUACK_TOKEN", || EnvarDef::Default(String::new()));
-
-pub(crate) fn quack_token() -> Result<Option<crate::quack::QuackToken>> {
-    let raw = QUACK_TOKEN.value()?;
-    if raw.is_empty() {
-        return Ok(None);
-    }
-    crate::quack::QuackToken::try_new(raw)
-        .map(Some)
-        .map_err(|error| anyhow::anyhow!("invalid SIGIRO_QUACK_TOKEN: {error}"))
-}
 
 /// Federated query coordinator (`sigiro query`) edge override: comma-separated
 /// `name=host:port` entries. When set (together with any `--edge` CLI flags),
 /// used verbatim and tailnet discovery (peers tagged `tag:sigiro-edge`) is
 /// skipped entirely. Empty (the default) means: discover from the tailnet.
+/// on_demand (not on_startup) so temp_env::with_vars works in tests.
 pub(crate) static EDGES: Envar<String> =
     Envar::on_demand("SIGIRO_EDGES", || EnvarDef::Default(String::new()));
 

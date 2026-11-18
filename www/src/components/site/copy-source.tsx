@@ -1,6 +1,6 @@
-"use client";
+'use client';
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 /** How long the check stays up. */
 const HELD_MS = 1500;
@@ -20,13 +20,8 @@ function useCopyButton(onCopy: () => Promise<void>): [boolean, () => void] {
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
   // A ref, so the callback identity below stays stable while `code` changes.
-  // Updated in an effect, not during render: writing a ref while rendering made
-  // the React Compiler skip this whole component. A click always lands after
-  // the commit, so the ref is current by then.
   const latest = useRef(onCopy);
-  useEffect(() => {
-    latest.current = onCopy;
-  });
+  latest.current = onCopy;
 
   useEffect(() => () => window.clearTimeout(timer.current ?? undefined), []);
 
@@ -44,7 +39,7 @@ function useCopyButton(onCopy: () => Promise<void>): [boolean, () => void] {
 }
 
 /**
- * The copy affordance a code fence gets: a 24px cap in the caption row, labelled
+ * The copy affordance a code fence gets: a 22px cap in the caption row, labelled
  * `copy` in mono, that swaps for a moss check on success.
  *
  * Both faces sit in the same grid cell and only opacity moves, so the cap keeps
@@ -73,7 +68,7 @@ export function CopySource({ code, label }: { code: string; label?: string }) {
       await navigator.clipboard.writeText(code);
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
-      console.error("sigiro: could not write to the clipboard", error);
+      console.error('sigiro: could not write to the clipboard', error);
       throw error;
     }
   });
@@ -82,8 +77,8 @@ export function CopySource({ code, label }: { code: string; label?: string }) {
     <button
       type="button"
       onClick={copy}
-      aria-label={label ? `Copy ${label}` : "Copy code"}
-      className="bg-background text-muted-foreground hover:text-foreground grid h-6 shrink-0 place-items-center rounded-md border px-2 text-[10.5px] font-medium shadow-xs transition-colors"
+      aria-label={label ? `Copy ${label}` : 'Copy code'}
+      className="mat-cap press grid h-[22px] shrink-0 place-items-center rounded-[6px] px-2 text-[10.5px] font-medium text-ink-2 hover:text-ink"
     >
       <span
         className="col-start-1 row-start-1 transition-opacity duration-100"
@@ -93,7 +88,7 @@ export function CopySource({ code, label }: { code: string; label?: string }) {
       </span>
       <span
         aria-hidden
-        className="col-start-1 row-start-1 inline-flex items-center text-emerald-600 transition-opacity duration-100"
+        className="col-start-1 row-start-1 inline-flex items-center text-moss transition-opacity duration-100"
         style={{ opacity: copied ? 1 : 0 }}
       >
         <svg
@@ -111,7 +106,7 @@ export function CopySource({ code, label }: { code: string; label?: string }) {
         </svg>
       </span>
       <span className="sr-only" role="status">
-        {copied ? "Copied" : ""}
+        {copied ? 'Copied' : ''}
       </span>
     </button>
   );

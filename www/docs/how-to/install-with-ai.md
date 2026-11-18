@@ -1,6 +1,6 @@
 ---
 title: Instrument your code with an agent
-description: Give one prompt to an agent. It adds OpenTelemetry auto-instrumentation to your service and points it at sigiro — in Claude Code, OpenCode, or Codex.
+description: Give one prompt to an agent. The agent adds OpenTelemetry auto-instrumentation to your service and points it at sigiro. This works with Claude Code, OpenCode, and Codex.
 sidebar:
   order: 1
 ---
@@ -13,25 +13,12 @@ exporter at sigiro.
 This works with Claude Code, OpenCode, Codex, or any agent that edits files and
 runs your package manager.
 
-## Install the sigiro skill
-
-Install the public skill before you start the agent:
-
-```bash
-npx skills add Arnav12114/skills
-```
-
-The [`debug-with-sigiro` skill](https://github.com/Arnav12114/skills) teaches the
-agent how to use sigiro after telemetry arrives. This guide stays focused on
-instrumentation.
-
 ## Before you start
 
 You need a sigiro server as the destination. Start one with `sigiro serve`, or with
-the Docker command in the [quickstart](/docs/tutorials/quickstart#1-run-it). For
-hosted sigiro, run `sigiro signup --name "Your Name" --email you@example.com` for
-a new account (or browser-based `sigiro auth login` for an existing account) before
-starting the agent. Self-hosted servers need no key.
+the Docker command in the [quickstart](/docs/tutorials/quickstart#1-run-it). A
+self-hosted server needs no key. Only the hosted service needs a key, and that key
+has the form `sk_<tenant>_<random>`.
 
 Auto-instrumentation exists for Python, Node.js, Java, .NET and Ruby. If your
 service is Go, do not use the prompt. Go to
@@ -39,17 +26,14 @@ service is Go, do not use the prompt. Go to
 
 ## 1. Give the agent this prompt
 
-Replace the endpoint. For a new hosted account, run the terminal signup command
-first; for an existing account, use the logged-in CLI session instead of copying a
-token into the prompt.
+Replace the endpoint. Delete the key line unless you use the hosted service.
 
 ```
 Instrument this codebase for sigiro observability.
 
 SIGIRO ENDPOINT: http://localhost:4318  (self-hosted; for hosted sigiro use
                  https://<your-sigiro-host> with no port)
-HOSTED AUTH: sigiro signup --name "Your Name" --email you@example.com  (new account;
-             use sigiro auth login for an existing account; omit for self-hosted)
+HOSTED API KEY: sk_<tenant>_<random>  (omit entirely for a self-hosted server)
 
 Goal: add OpenTelemetry auto-instrumentation so this service emits traces,
 metrics, and logs to sigiro. Make the minimum change that works — prefer
@@ -64,14 +48,12 @@ Rules:
 - Set OTEL_EXPORTER_OTLP_ENDPOINT to the SIGIRO ENDPOINT above exactly as given.
   A self-hosted server listens on :4318; a hosted one carries no port. Do not add
   or remove a port
-- For hosted sigiro only, read a bearer token with `sigiro auth token`; never paste it into source
+- For hosted sigiro only, set OTEL_EXPORTER_OTLP_HEADERS with the tenant bearer token
 - Set OTEL_SERVICE_NAME to identify this service (use the existing service name or repo name)
 - Use the existing package manager (pip, npm, Maven, Gradle, gem, go get)
-- For a new hosted account, use `sigiro signup --name "Your Name" --email you@example.com`;
-  for an existing account, use `sigiro auth login`. Never hardcode credentials.
+- For hosted sigiro, do NOT hardcode the tenant key — read it from SIGIRO_API_KEY
 - If a file already initializes the OTel SDK, update it rather than re-initializing
-- For automation only, read credentials from the environment; interactive users should
-  use the OS credential store via `sigiro signup` or `sigiro auth login`
+- Add SIGIRO_API_KEY to .env.example only for a hosted deployment
 ```
 
 If the agent detects the wrong language, tell it directly:
@@ -88,21 +70,21 @@ An agent does more than you want here. State these limits before the agent start
 - Do not install an OTel Collector. sigiro is the collector.
 - Do not add manual spans for each endpoint. Auto-instrumentation covers them.
 - Do not change database connection strings or business logic.
-- Do not set up dashboards or alert configuration. That is not part of this task.
+- Do not set up dashboards or alert configuration. sigiro has neither.
 
 The full task is this: detect the framework, install auto-instrumentation, and point
 it at sigiro.
 
 ## 3. Check the coverage you get
 
-| Language | Approach                                         | Covers                                                          |
-| -------- | ------------------------------------------------ | --------------------------------------------------------------- |
-| Python   | `opentelemetry-instrument` CLI + distro          | HTTP (FastAPI, Flask, Starlette), DB (psycopg2, asyncpg), Redis |
-| Node.js  | `@opentelemetry/auto-instrumentations-node`      | HTTP (Express, Fastify), DB (pg, mysql2, mongoose)              |
-| Java     | `opentelemetry-javaagent.jar`                    | HTTP (Servlets, Spring), DB (JDBC), JVM metrics                 |
-| .NET     | `OpenTelemetry.AutoInstrumentation` startup hook | HTTP (ASP.NET Core), DB (EF Core)                               |
-| Ruby     | `opentelemetry-instrumentation-all` gem          | HTTP (Rails), DB (ActiveRecord), Sidekiq                        |
-| Go       | `otelc` compile-time instrumentation             | HTTP server spans, Go runtime metrics, third-party libraries    |
+| Language | Approach | Covers |
+|----------|----------|--------|
+| Python | `opentelemetry-instrument` CLI + distro | HTTP (FastAPI, Flask, Starlette), DB (psycopg2, asyncpg), Redis |
+| Node.js | `@opentelemetry/auto-instrumentations-node` | HTTP (Express, Fastify), DB (pg, mysql2, mongoose) |
+| Java | `opentelemetry-javaagent.jar` | HTTP (Servlets, Spring), DB (JDBC), JVM metrics |
+| .NET | `OpenTelemetry.AutoInstrumentation` startup hook | HTTP (ASP.NET Core), DB (EF Core) |
+| Ruby | `opentelemetry-instrumentation-all` gem | HTTP (Rails), DB (ActiveRecord), Sidekiq |
+| Go | `otelc` compile-time instrumentation | HTTP server spans, Go runtime metrics, third-party libraries |
 
 If a library gets no spans, add the spans by hand for that library only.
 
@@ -187,7 +169,7 @@ curl http://localhost:9999/v1/services
 ```
 
 Your service appears within a few seconds of real traffic. After it appears,
-a bounded `POST /v1/query` can inspect its spans and logs.
+`sigiro diagnose my-service` has data to read.
 
 If the service does not appear, make these checks. On a self-hosted server,
 confirm the port: `:4318` for HTTP and `:4317` for gRPC. On the hosted service,
@@ -198,14 +180,14 @@ service for OTel startup errors, because a wrong exporter configuration reports
 the fault at boot.
 
 On the hosted service, confirm that the header is exactly
-`Authorization: Bearer <oauth-access-token>`. A self-hosted server ignores all
+`Authorization: Bearer sk_<tenant>_<random>`. A self-hosted server ignores all
 authentication headers. Therefore a wrong key fails there without a message and
 without a 401 response.
 
 ## Next
 
-- [Quickstart](/docs/tutorials/quickstart#3-query-recent-errors) — query recent
-  errors with SQL
+- [Quickstart](/docs/tutorials/quickstart#3-ask-what-changed) — ask what changed
+  and why
 - [Send your agent's own telemetry to sigiro](/docs/how-to/agent-telemetry) —
   point Claude Code or Codex at sigiro too
 - [Send telemetry to hosted sigiro](/docs/how-to/hosted-onboarding) — use this if
