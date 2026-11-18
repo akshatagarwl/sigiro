@@ -1,6 +1,6 @@
 [package]
 name = "sigiro"
-version = "0.2.0"
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -18,7 +18,7 @@ edition = "2024"
 # (`cargo metadata` reports it); raise it deliberately when a dependency
 # forces it, and never leave it below what the tree already demands.
 rust-version = "1.89"
-license = "FSL-1.1-ALv2"
+license = "Apache-2.0"
 
 [workspace.lints.clippy]
 # Disallowed patterns (configured in clippy.toml)
@@ -47,7 +47,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "tim
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 dirs = "7"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "blocking", "cookies", "query"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "blocking", "cookies"] }
 dashmap = "6"
 rusqlite = { version = "0.41", features = ["bundled", "fallible_uint"] }
 postgres = "0.19"
@@ -67,7 +67,7 @@ arrow = "60"
 duckdb = { version = "=1.20000.1", default-features = false, features = ["appender-arrow", "vscalar"] }
 opentelemetry-proto = { version = "0.33", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles", "with-serde"] }
 axum = "0.8"
-axum-server = { version = "0.9", features = ["tls-rustls"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
 tower-http = { version = "0.7", features = ["compression-full", "decompression-full", "cors", "trace"] }
 axum-anyhow = "0.11"
@@ -81,9 +81,11 @@ sha2 = "0.11"
 tracing = "0.1"
 tracing-attributes = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "ansi"] }
-# Self-profiling (src/profiling.rs): pprof-rs samples CPU; its `cpp` feature
-# demangles DuckDB's native C++ frames. jemalloc_pprof dumps the sampled heap,
-# pprof_util parses the dump, and backtrace symbolizes its addresses.
+# Exact: 2.0.4 fixes periodic ProfilerGuard recreation while retaining the
+# pprof fork that demangles native C++ frames. The vendored pprofrs backend in
+# 2.1.1 regressed macOS DuckDB frames to `_ZN...` names in a real push E2E.
+pyroscope = { version = "=2.0.4", features = ["backend-jemalloc", "backend-pprof-rs"] }
+tikv-jemallocator = { version = "0.6.1", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 regex = "1"
 hex = "0.4.3"
@@ -92,12 +94,12 @@ flate2 = "1"
 parking_lot = "0.13"
 thiserror = "2"
 url = "2"
-unicode-normalization = "0.1"
 tempfile = "3"
 headers = "0.4"
 mime = "0.3"
-rust-embed = { version = "8.13", features = ["debug-embed"] }
 axum-extra = { version = "0.12.6", features = ["typed-routing", "multipart"] }
+multer = "3"
+futures-util = "0.3"
 walkdir = "2"
 
 opentelemetry = "0.33"
@@ -123,15 +125,6 @@ tokio-util = "0.7"
 
 [lints]
 workspace = true
-
-# Android (bionic) can't build jemalloc and doesn't need self-profiling;
-# it uses the system allocator and reports self-profiling as disabled.
-[target.'cfg(not(target_os = "android"))'.dependencies]
-pprof = { version = "0.15", default-features = false, features = ["cpp"] }
-jemalloc_pprof = "0.9"
-pprof_util = "0.8.2"
-backtrace = "0.3"
-tikv-jemallocator = { version = "0.7", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
 
 [profile.dev]
 split-debuginfo = "unpacked"

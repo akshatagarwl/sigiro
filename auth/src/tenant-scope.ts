@@ -2,7 +2,7 @@ import { APIError } from "better-auth/api";
 
 import {
   OPTIMIZER_CLIENT_ID,
-  optimizerClientTenant,
+  OPTIMIZER_CLIENT_TENANT_ID,
 } from "./optimizer-client.js";
 
 /**
@@ -14,8 +14,9 @@ export function deviceTenantsForClient(
   memberships: ReadonlyArray<string>
 ): string[] {
   if (clientId === OPTIMIZER_CLIENT_ID) {
-    const tenant = optimizerClientTenant();
-    return tenant !== undefined && memberships.includes(tenant) ? [tenant] : [];
+    return memberships.includes(OPTIMIZER_CLIENT_TENANT_ID)
+      ? [OPTIMIZER_CLIENT_TENANT_ID]
+      : [];
   }
   return [...memberships];
 }
@@ -30,13 +31,12 @@ export function tenantForDeviceClient(
   memberships: ReadonlyArray<string>
 ): string {
   if (clientId === OPTIMIZER_CLIENT_ID) {
-    const tenant = optimizerClientTenant();
-    if (tenant === undefined || !memberships.includes(tenant)) {
+    if (!memberships.includes(OPTIMIZER_CLIENT_TENANT_ID)) {
       throw new APIError("FORBIDDEN", {
         message: "operator has no membership in the optimizer client tenant",
       });
     }
-    return tenant;
+    return OPTIMIZER_CLIENT_TENANT_ID;
   }
   if (memberships.length !== 1) {
     // Only tokens from before workspace binding reach this, for a user who

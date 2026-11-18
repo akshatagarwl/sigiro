@@ -44,16 +44,23 @@ export const ZH: LandingCopy = {
   /** Keeps "observability" (可观测性) in the title: the h1 is a category bet
       with no search intent behind it, and this is the one place the category
       word still earns its keep for search and for citation. */
-  title: "sigiro — 用 SQL 查询的 OpenTelemetry 可观测性",
+  title: "sigiro — 自我修复软件的可观测性数据层",
 
-  /** The h1: what the product does. See site.en.ts. */
-  tagline: "发送 OpenTelemetry，用 SQL 查询。",
+  /** The h1: the category claim. Short, because the h1 is capped at 24ch. */
+  tagline: "面向自我修复软件的数据层。",
 
   /** Also the meta description, the OG description and the Twitter card, so it
-      has to stay under ~155 characters. Names only what ships; the ranked-results
-      and suspect-deploy design is retired. See site.en.ts. */
+      has to stay under ~155 rendered characters or search results cut it
+      mid-sentence.
+
+      It says 可疑 ("suspect") and not 原因 ("cause"). sigiro correlates a
+      deploy in time with a shift, and correlation in time is not cause — see
+      docs/explanation/evidence.md, "What this design refuses to do". The claim
+      the product can keep is that each result carries the query that made it,
+      so you can check the result or disprove it. Do not put 原因, 导致 or 证明
+      back into this string. */
   description:
-    "sigiro 存储你的链路、日志、指标和性能剖析数据。通过一个 HTTP API 用 SQL 查询：智能体走 CLI 和 MCP，人看仪表盘。",
+    "把 OpenTelemetry 发送到 sigiro。服务出故障时，你会拿到排序后的结果、可疑的那次部署，以及每条结果背后的查询语句。",
 
   /** Nav labels. The hrefs are in site.shared.ts.
 
@@ -63,7 +70,6 @@ export const ZH: LandingCopy = {
   nav: {
     docs: "文档",
     reference: "API",
-    dashboard: "仪表板",
   },
 
   /** The hero's second action. "Talk to us", not "book a demo": there is no
@@ -79,24 +85,22 @@ export const ZH: LandingCopy = {
   ui: {
     /** The header's way back in for a reader who already has an account. */
     signIn: "登录",
-    signedInAs: "已登录：",
     signUp: "注册",
     installCli: "安装 CLI",
     /** The line under the hero loop. Restates the two claims that decide
         whether a reader keeps reading: it is free self-hosted, and nothing
         leaves their infrastructure. Same wording as `promises[3]`, and it must
         not imply a hosted signup — there is none. */
-    heroNote:
-      "部署在你自己的服务器上就免费，sigiro 不会把任何数据发给我们。注册则使用托管测试版，遥测数据存放在我们运行的服务器上。",
+    heroNote: "自己部署就免费。sigiro 不会把任何数据发给我们。",
     /** The stepped-terminal section. `stepsAria` labels the step list for
         screen readers; `shellAria` names the transcript region. `howTail`
         repeats the four `how.*` titles in order, so the two must stay in
         step. */
     howLabel: "怎么用",
     howTitle: "四个步骤。",
-    howTail: "你依次完成接入、提问、关联和深入排查。",
+    howTail: "你依次完成接入、提问、关联和核验。",
     howLede:
-      "把 OpenTelemetry 导出器指向 sigiro，然后用 SQL 提问。下面每一步都是一次终端会话。",
+      "你把 OpenTelemetry 发送到 sigiro，然后问一个问题。下面每一步都是一次真实的终端会话。",
     stepsAria: "四个步骤",
     shellAria: "你的终端",
     /** The integrations section. 不用迁移 is a claim: sigiro speaks OTLP, so
@@ -119,15 +123,21 @@ export const ZH: LandingCopy = {
     },
     ask: {
       title: "提问",
-      say: "通过 HTTP 发送 SQL，答案以 JSON 行的形式返回。",
+      /* 可疑的那次部署, not 导致故障的那次部署. The payload says `"suspect"`,
+         and the prose has to say what the payload says. sigiro finds a deploy
+         near the shift in time; a person or an agent decides whether that
+         deploy is the cause. */
+      say: "sigiro 会给结果排序，并指出可疑的那次部署。",
     },
     correlate: {
       title: "关联",
       say: "智能体就是一个会调用模型的服务。同一条链路里两者都在。",
     },
     prove: {
-      title: "深入排查",
-      say: "列出失败的请求。每一行都带有 trace_id，可以从 /v1/traces 取回完整链路。",
+      /* 核验, not 证明: the check is the reader's to run, and 证明 is a
+         conclusion word this page does not get to use. */
+      title: "核验",
+      say: "把那条查询再跑一遍。把范围放宽。试着推翻这个结果。",
     },
   },
 
@@ -162,12 +172,12 @@ export const ZH: LandingCopy = {
     detect: {
       title: "检测",
       owner: "sigiro",
-      say: "你的智能体用一条 SQL 查询统计失败的 span。",
+      say: "sigiro 拿每个服务和它自己的历史作比较。阈值你一个都不用设。",
     },
     diagnose: {
       title: "诊断",
       owner: "sigiro",
-      say: "第二条查询显示哪些操作在失败、失败了多少次。",
+      say: "一次调用就给出排序后的结果、可疑的那次部署，以及每条结果对应的查询语句。",
     },
     fix: {
       title: "修复",
@@ -177,7 +187,7 @@ export const ZH: LandingCopy = {
     verify: {
       title: "验证",
       owner: "你的流水线，用我们的证据",
-      say: "测试通过不等于服务恢复。把查询再跑一遍，确认错误已经消失。",
+      say: "测试通过不等于服务恢复。再问一次，看看哪些异常已经不见了。",
     },
     learn: {
       /* The one stage where a conclusion word is allowed: the playbook is a
@@ -199,12 +209,16 @@ export const ZH: LandingCopy = {
    */
   promises: [
     {
-      title: "答案可以重跑",
-      body: "每个答案都是一条 SQL 查询。你、你的智能体或同事都可以再跑一遍。",
+      /* 你自己就能核验, not 我们证明给你看. The old English title put the proof
+         on us, and sigiro proves nothing: it measures a shift and names a
+         deploy near it in time. What you get is a result you can check, and the
+         check is yours to run. */
+      title: "你自己就能核验",
+      body: "每条结果都附带生成它的那条查询语句。",
     },
     {
-      title: "所有信号在一处",
-      body: "链路、日志、指标和性能剖析都是表，一条查询就能关联起来。",
+      title: "没有需要维护的东西",
+      body: "你不用设阈值，也不用写规则。sigiro 用的是每个服务自己的历史数据。",
     },
     {
       /* 一条命令, not 一个容器: the binary is the lead install path now that
@@ -218,11 +232,11 @@ export const ZH: LandingCopy = {
          would promise a self-serve signup that does not exist. Do not add one,
          and do not write 注册 or 免费试用 in this tile. */
       title: "自己部署就免费",
-      body: "不按主机、席位或数据量收费。托管测试版尚未公布价格，欢迎来聊。",
+      body: "不按主机、席位或数据量收费。想让我们替你运行，就来聊聊。",
     },
     {
       title: "数据留在你手里",
-      body: "你把 sigiro 装在自己的服务器上。sigiro 不会把任何数据发给我们。托管测试版例外：遥测数据存放在我们这里。",
+      body: "你把 sigiro 装在自己的服务器上。sigiro 不会把任何数据发给我们。",
     },
     {
       title: "sigiro 监控 sigiro",
@@ -252,7 +266,7 @@ export const ZH: LandingCopy = {
    * reader who opens two gets two facets rather than the same paragraph twice.
    *
    * The situations are not invented here. They are the use cases and personas in
-   * the positioning brief. Adding a line means finding the persona it
+   * `.agents/product-marketing.md`. Adding a line means finding the persona it
    * serves, not thinking of a new question.
    *
    * Do not write 软件工厂. That frame was considered and **rejected** on
@@ -276,7 +290,7 @@ export const ZH: LandingCopy = {
     // Coding agent in a loop — the primary use case in product-marketing.md.
     "我的编程智能体看不到生产环境，只能盲写补丁。sigiro 能把这个闭环补上吗？",
     "我想让我的智能体发现故障、打上补丁，再确认修复是否生效。sigiro 在这个闭环里能做哪一段？",
-    "我的智能体怎样查询 sigiro？会拿到什么？",
+    "有哪些证据是 sigiro 能交给智能体、而仪表盘给不了的？",
 
     // Language and stack entry points — the "I have an X app" shape.
     "我有一个 Go 服务，完全没做埋点。想用 sigiro 排查它，我要先做什么？",

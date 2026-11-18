@@ -8,7 +8,7 @@ import type { LandingCopy } from "./site.en";
  * checked against it by the compiler. Read `site.en.ts` first — its comments
  * explain why each English string is worded the way it is, and those reasons
  * bind the Korean just as hard. Positioning and the five claims live in
- * the positioning brief.
+ * .agents/product-marketing.md.
  *
  * Register: formal 합니다체, technical documentation voice. Imperatives are
  * 하십시오체. The reader stays in the sentence — Korean drops the subject far
@@ -54,16 +54,23 @@ export const KO: LandingCopy = {
       intent behind it, and this is the one place the category word still earns
       its keep for search and for citation. 옵저버빌리티 is the form Korean
       developers search for; 관측 가능성 is the calque and gets no traffic. */
-  title: "sigiro — SQL로 쿼리하는 OpenTelemetry 옵저버빌리티",
+  title:
+    "sigiro — 스스로 복구하는 소프트웨어를 위한 옵저버빌리티 데이터 레이어",
 
-  /** The h1: what the product does. See site.en.ts. */
-  tagline: "OpenTelemetry를 보내고, SQL로 쿼리하십시오.",
+  /** The h1: the category claim. */
+  tagline: "스스로 복구하는 소프트웨어를 위한 데이터 레이어.",
 
   /** Also the meta description, the OG description and the Twitter card, so it
-      has to stay under ~155 characters. Names only what ships; the ranked-results
-      and suspect-deploy design is retired. See site.en.ts. */
+      has to stay under ~155 characters or search results cut it mid-sentence.
+
+      It says 의심되는 배포 ("suspect deploy") and not 원인 ("cause"). sigiro
+      correlates a deploy in time with a shift, and correlation in time is not
+      cause — see docs/explanation/evidence.md, "What this design refuses to do".
+      The claim the product can keep is that each result carries the query that
+      made it, so you can check the result or disprove it. Do not put 원인, 증명
+      or 입증 back into this string. */
   description:
-    "sigiro는 트레이스, 로그, 메트릭, 프로파일을 저장합니다. HTTP API 하나에서 SQL로 쿼리하고, 에이전트는 CLI와 MCP로, 사람은 대시보드에서 읽습니다.",
+    "OpenTelemetry를 sigiro로 보내십시오. 서비스에 장애가 발생하면 순위가 매겨진 결과와 의심되는 배포, 각 결과의 쿼리를 받습니다.",
 
   /** Nav labels. The hrefs are in site.shared.ts.
 
@@ -73,7 +80,6 @@ export const KO: LandingCopy = {
   nav: {
     docs: "문서",
     reference: "API",
-    dashboard: "대시보드",
   },
 
   /** The hero's second action. 문의하기 ("get in touch"), not 데모 신청
@@ -99,7 +105,6 @@ export const KO: LandingCopy = {
   ui: {
     /** The header's way back in for a reader who already has an account. */
     signIn: "로그인",
-    signedInAs: "로그인 계정:",
     signUp: "가입하기",
     installCli: "CLI 설치",
     /** The line under the hero loop. Restates the two claims that decide
@@ -107,14 +112,14 @@ export const KO: LandingCopy = {
         leaves their infrastructure. Wording matches `promises[3]`, and it
         promises no signup — there isn't one. */
     heroNote:
-      "직접 설치하면 무료이며 sigiro는 저희에게 어떤 데이터도 보내지 않습니다. 가입하면 호스팅 베타를 쓰게 되고, 텔레메트리는 저희가 운영하는 서버에 저장됩니다.",
+      "직접 설치하면 무료입니다. sigiro는 저희에게 어떤 데이터도 보내지 않습니다.",
     /** The stepped-terminal section. `stepsAria` labels the step list for
         screen readers; `shellAria` names the transcript region. */
     howLabel: "사용 방법",
     howTitle: "네 단계.",
-    howTail: "연결하고, 질문하고, 상관관계를 보고, 파고듭니다.",
+    howTail: "연결하고, 질문하고, 상관관계를 보고, 확인합니다.",
     howLede:
-      "OpenTelemetry 익스포터를 sigiro로 향하게 하고, SQL로 질문합니다. 아래의 각 단계는 셸 세션 하나입니다.",
+      "OpenTelemetry를 sigiro로 보냅니다. 질문 하나를 던집니다. 아래의 각 단계는 셸 세션 하나입니다.",
     stepsAria: "네 단계",
     shellAria: "사용자의 셸",
     /** The integrations section. 마이그레이션 불필요 ("No migration") is a claim:
@@ -138,15 +143,25 @@ export const KO: LandingCopy = {
     },
     ask: {
       title: "질문",
-      say: "HTTP로 SQL을 보내면 답이 JSON 행으로 돌아옵니다.",
+      /* 의심되는 배포 ("the suspect deploy"), not 장애를 일으킨 배포 ("the
+         deploy that caused the failure"). The payload says `"suspect"`, and the
+         prose has to say what the payload says. sigiro finds a deploy near the
+         shift in time; a person or an agent decides whether that deploy is the
+         cause. 지목합니다 ("points to") is deliberate — it names without
+         concluding. */
+      say: "sigiro는 결과의 순위를 매기고 의심되는 배포를 지목합니다.",
     },
     correlate: {
       title: "상관관계",
       say: "에이전트는 모델을 호출하는 서비스입니다. 트레이스 하나에 둘 다 들어 있습니다.",
     },
     prove: {
-      title: "파고들기",
-      say: "실패한 요청을 나열합니다. 각 행의 trace_id로 /v1/traces에서 트레이스 전체를 가져올 수 있습니다.",
+      /* 확인 ("check"), not 증명 ("prove"). The English title is "Prove", but
+         the sentence under it is about the reader running, widening and
+         breaking the query — the reader's check, not our proof. 검증 is reserved
+         for `loop.verify`, which is the pipeline stage of that name. */
+      title: "확인",
+      say: "쿼리를 다시 실행하십시오. 범위를 넓히십시오. 결과가 틀렸음을 보이십시오.",
     },
   },
 
@@ -182,12 +197,12 @@ export const KO: LandingCopy = {
     detect: {
       title: "탐지",
       owner: "sigiro",
-      say: "에이전트가 SQL 쿼리 하나로 실패한 스팬을 셉니다.",
+      say: "sigiro는 각 서비스를 그 서비스의 이력과 비교합니다. 임계값은 설정하지 않아도 됩니다.",
     },
     diagnose: {
       title: "진단",
       owner: "sigiro",
-      say: "두 번째 쿼리로 어떤 작업이 얼마나 자주 실패하는지 확인합니다.",
+      say: "한 번의 호출로 순위가 매겨진 결과와 의심되는 배포, 각 결과의 쿼리를 받습니다.",
     },
     fix: {
       title: "수정",
@@ -197,7 +212,7 @@ export const KO: LandingCopy = {
     verify: {
       title: "검증",
       owner: "사용자의 파이프라인, sigiro의 증거로",
-      say: "테스트 통과는 서비스 회복과 같지 않습니다. 쿼리를 다시 실행하고 오류가 사라졌는지 확인하십시오.",
+      say: "테스트 통과는 서비스 회복과 같지 않습니다. 다시 질문하고, 무엇이 사라졌는지 읽으십시오.",
     },
     learn: {
       title: "학습",
@@ -215,12 +230,16 @@ export const KO: LandingCopy = {
    */
   promises: [
     {
-      title: "다시 실행할 수 있는 답",
-      body: "모든 답은 SQL 쿼리입니다. 사용자, 에이전트, 동료 누구나 같은 쿼리를 다시 실행할 수 있습니다.",
+      /* 직접 확인하십시오 ("check it yourself"), not 결과마다 증명 ("proof with
+         each result"). The old English title put the proof on us, and sigiro
+         proves nothing: it measures a shift and names a deploy near it in time.
+         What you get is a result you can check, and the check is yours to run. */
+      title: "직접 확인하십시오",
+      body: "모든 결과에는 그 결과를 만든 쿼리가 들어 있습니다.",
     },
     {
-      title: "모든 신호를 한곳에",
-      body: "트레이스, 로그, 메트릭, 프로파일은 쿼리 하나로 조인할 수 있는 테이블입니다.",
+      title: "유지 관리할 것이 없습니다",
+      body: "임계값도 규칙도 설정하지 않습니다. sigiro는 각 서비스의 이력을 사용합니다.",
     },
     {
       /* 명령어 하나 ("one command"), not 컨테이너 하나 ("one container"): the
@@ -234,11 +253,11 @@ export const KO: LandingCopy = {
          invited a reader to sign up for something with no signup. Keep the
          second sentence an invitation to talk — no number, no 가입, no 무료 체험. */
       title: "직접 설치하면 무료입니다",
-      body: "호스트 수, 사용자 수, 데이터 양에 따른 요금이 없습니다. 호스팅 베타의 가격은 아직 공개하지 않았습니다. 문의해 주십시오.",
+      body: "호스트 수, 사용자 수, 데이터 양에 따른 요금이 없습니다. 저희가 대신 운영하기를 원하시면 문의해 주십시오.",
     },
     {
       title: "데이터는 사용자 환경에 남습니다",
-      body: "sigiro는 사용자의 서버에 설치합니다. sigiro는 저희에게 어떤 데이터도 보내지 않습니다. 예외는 호스팅 베타로, 텔레메트리가 저희 쪽에 저장됩니다.",
+      body: "sigiro는 사용자의 서버에 설치합니다. sigiro는 저희에게 어떤 데이터도 보내지 않습니다.",
     },
     {
       title: "sigiro가 sigiro를 모니터링합니다",
@@ -272,7 +291,7 @@ export const KO: LandingCopy = {
    * paragraph twice.
    *
    * The situations are not invented here. They are the use cases and personas in
-   * the positioning brief. Adding a line means finding the persona it
+   * `.agents/product-marketing.md`. Adding a line means finding the persona it
    * serves, not thinking of a new question.
    *
    * Do not write 소프트웨어 공장 ("software factory"). That frame was considered
@@ -297,7 +316,7 @@ export const KO: LandingCopy = {
     // Coding agent in a loop — the primary use case in product-marketing.md.
     "제 코딩 에이전트는 프로덕션을 볼 수 없어서 짐작으로 패치를 작성합니다. sigiro가 그 루프를 닫아 줄 수 있습니까?",
     "저는 에이전트가 장애를 탐지하고, 패치하고, 수정이 효과가 있었는지 확인하기를 원합니다. sigiro는 그 루프의 어디에 들어갑니까?",
-    "제 에이전트는 sigiro에 어떻게 쿼리하고, 무엇을 돌려받습니까?",
+    "대시보드가 줄 수 없는 어떤 증거를 sigiro는 에이전트에게 건네줍니까?",
 
     // Language and stack entry points — the "I have an X app" shape.
     "계측이 전혀 없는 Go 서비스가 있습니다. sigiro로 디버깅하려면 무엇을 해야 합니까?",

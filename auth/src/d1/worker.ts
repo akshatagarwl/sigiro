@@ -7,10 +7,7 @@ import { drizzle } from "drizzle-orm/d1";
 
 import { createAuthOptions } from "../auth.js";
 import { sendCloudflareEmail } from "../email.js";
-import {
-  configureOptimizerClientTenant,
-  OPTIMIZER_CLIENT_METADATA_JSON,
-} from "../optimizer-client.js";
+import { OPTIMIZER_CLIENT_METADATA_JSON } from "../optimizer-client.js";
 import * as schema from "../schema/auth-schema.js";
 import { fetchClientMetadataResource } from "./cimd-fetch.js";
 import {
@@ -51,7 +48,6 @@ export interface Env {
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_EMAIL_API_TOKEN?: string;
   AUTH_TEST_OTP?: string;
-  OPTIMIZER_CLIENT_TENANT_ID?: string;
 }
 
 const required = (env: Env, name: keyof Env): string => {
@@ -421,8 +417,6 @@ const dispatch = async (env: Env, request: Request): Promise<Response> => {
 };
 
 export default {
-  fetch: (request: Request, env: Env): Promise<Response> => {
-    configureOptimizerClientTenant(env.OPTIMIZER_CLIENT_TENANT_ID);
-    return dispatch(env, request);
-  },
+  fetch: (request: Request, env: Env): Promise<Response> =>
+    dispatch(env, request),
 };

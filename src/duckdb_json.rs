@@ -1,7 +1,7 @@
 //! The DuckDB→JSON value converter shared by `/v1/query` and the federated
 //! query coordinator. Native-only: it reads `duckdb-rs` rows.
 
-/// Read and convert one DuckDB result cell. DuckDB v2 emits a dedicated
+/// Read and convert one DuckDB result cell. Cyanoptera emits a dedicated
 /// Arrow `Null` array for an untyped SQL `NULL`; duckdb-rs 1.x cannot turn
 /// that array into `ValueRef`, so handle it before calling `Row::get_ref`.
 pub fn duckdb_row_value_to_json(

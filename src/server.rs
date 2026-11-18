@@ -46,11 +46,11 @@ use tracing_attributes::instrument;
         query_handler,
         services_handler,
         alerts_handler,
-        alerts_replay_handler,
         trace_detail_handler,
-        list_ingest_keys,
-        create_ingest_key,
-        revoke_ingest_key,
+        crate::ingest::pyroscope_root,
+        crate::ingest::pyroscope_push,
+        crate::ingest::pyroscope_ingest,
+        crate::ingest::pyroscope_ingest_pyroscope,
         admin_status,
             ),
     components(
@@ -58,33 +58,25 @@ use tracing_attributes::instrument;
             ServicesResponse,
             ServiceEntry,
             AlertsResponse,
-            AlertsReplayResponse,
             crate::alerts::AlertInstance,
-            crate::alerts::DeliverySummary,
             TraceDetailResponse,
             SpanDetail,
             ServiceBreakdownEntry,
             AdminStatusResponse,
-            crate::ingest_keys::IngestKeyInfo,
-            crate::ingest_keys::CreatedIngestKey,
-            CreateIngestKeyRequest,
-            IngestKeysResponse,
         )
     ),
     modifiers(&SecurityAddon),
-    /* Every operation carries an explicit `tag`.
+    /* No `tags`, and no `tag` on any operation.
      *
-     * An operation without one is not untagged: utoipa falls back to the Rust
-     * module path, so routes defined in `crate::ingest` once showed up in the
-     * public reference under a section literally named `crate::ingest`.
+     * There were two — `query` and `admin` — and a renderer groups operations by
+     * tag, so the reference gained a level of nesting for them. Once `/admin` left
+     * the public spec, `query` was one group holding every operation: a heading
+     * that grouped nothing, showing up in the docs sidebar and again as an eyebrow
+     * over each operation's title. Five operations read better as five operations.
      *
-     * The tags name what an operation is for, not how it is reached (an earlier
-     * `query` tag described the transport and grouped everything into one
-     * heading). The API has two genuine areas. */
-    tags(
-        (name = "Telemetry", description = "Read the telemetry of your workspace."),
-        (name = "Ingest keys", description = "Fixed, revocable keys that let a long-running service send telemetry."),
-    ),
+     * Worth tagging again if this API grows a second genuine area. Tagging by
+     * transport ("query") was never that — it described how you reach the endpoint,
+     * not what it is for. */
 )]
 pub(crate) struct ApiDoc;
 
@@ -152,18 +144,6 @@ impl KeyExtractor for TenantRateLimitKeyExtractor {
             .map(|tenant_id| format!("tenant:{tenant_id}"))
             .ok_or(tower_governor::GovernorError::UnableToExtractKey)
     }
-}
-
-/// A 429 from a `/v1` handler means query admission stayed full for its whole
-/// wait; tell the client when to retry, as the rate limiter's 429s do.
-async fn retry_after_on_busy(mut response: axum::response::Response) -> axum::response::Response {
-    if response.status() == axum::http::StatusCode::TOO_MANY_REQUESTS {
-        response
-            .headers_mut()
-            .entry(axum::http::header::RETRY_AFTER)
-            .or_insert(axum::http::HeaderValue::from_static("1"));
-    }
-    response
 }
 
 /// Render a `GovernorError` as a JSON body matching the shape of every other
@@ -317,175 +297,6 @@ async fn validate_auth_token(
     axum::Json(serde_json::json!({ "authenticated": true }))
 }
 
-/// Body of `POST /v1/ingest-keys`.
-#[derive(Debug, Default, serde::Deserialize, utoipa::ToSchema)]
-pub(crate) struct CreateIngestKeyRequest {
-    /// A label to tell keys apart, such as the service that uses it. 1 to 64
-    /// characters; defaults to "ingest key".
-    name: Option<String>,
-}
-
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
-pub(crate) struct IngestKeysResponse {
-    keys: Vec<crate::ingest_keys::IngestKeyInfo>,
-}
-
-/// The store and the caller for an ingest-key management request.
-///
-/// Only a person's own OAuth login may manage keys. An agent token or an
-/// ingest key minting a fresh key would hand out a credential that survives
-/// revoking the one it came from.
-fn ingest_key_manager(
-    state: &AppState,
-    context: Option<Extension<auth::AuthContext>>,
-) -> ApiResult<(crate::ingest_keys::IngestKeys, auth::AuthContext)> {
-    let (Some(keys), Some(Extension(context))) = (state.auth_mode.ingest_keys(), context) else {
-        return Err(bad_request(
-            "Ingest keys unavailable",
-            "This server runs without authentication, so it needs no ingest key; send OTLP without an Authorization header.",
-        ));
-    };
-    if context.kind != auth::CredentialKind::User {
-        return Err(axum_anyhow::forbidden(
-            "User login required",
-            "Only a person's own login (`sigiro auth login`) can manage ingest keys; agent tokens and ingest keys cannot.",
-        ));
-    }
-    Ok((keys.clone(), context))
-}
-
-fn ingest_key_storage_error(error: &anyhow::Error) -> ApiError {
-    tracing::error!("ingest key storage failed: {error:#}");
-    internal_error(
-        "Ingest key storage failed",
-        "unable to read or write ingest keys",
-    )
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/ingest-keys",
-    tag = "Ingest keys",
-    operation_id = "list-ingest-keys",
-    summary = "List ingest keys",
-    description = "Every ingest key of the workspace, newest first, revoked ones included. The secret is never returned.",
-    responses(
-        (status = 200, description = "The workspace's ingest keys", body = IngestKeysResponse),
-        (status = 401, description = "Missing or invalid bearer token"),
-        (status = 403, description = "Not a user's own OAuth access token")
-    ),
-    security(("bearer" = [])),
-)]
-#[instrument(skip_all)]
-async fn list_ingest_keys(
-    State(state): State<Arc<AppState>>,
-    context: Option<Extension<auth::AuthContext>>,
-) -> ApiResult<Json<IngestKeysResponse>> {
-    let (keys, context) = ingest_key_manager(&state, context)?;
-    let keys = keys
-        .list(&context.tenant_id)
-        .await
-        .map_err(|error| ingest_key_storage_error(&error))?;
-    Ok(Json(IngestKeysResponse { keys }))
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/ingest-keys",
-    tag = "Ingest keys",
-    operation_id = "create-ingest-key",
-    summary = "Create an ingest key",
-    description = "Create a fixed key for a long-running service. Send it as `Authorization: Bearer <key>` (for example `OTEL_EXPORTER_OTLP_HEADERS=\"Authorization=Bearer <key>\"`). It sends telemetry to this workspace and cannot read anything. The response is the only time the key is shown: only its hash is stored.",
-    request_body(content = CreateIngestKeyRequest, content_type = "application/json"),
-    responses(
-        (status = 201, description = "The new key, shown once", body = crate::ingest_keys::CreatedIngestKey),
-        (status = 400, description = "Invalid name, or the workspace already has 50 active keys"),
-        (status = 401, description = "Missing or invalid bearer token"),
-        (status = 403, description = "Not a user's own OAuth access token")
-    ),
-    security(("bearer" = [])),
-)]
-#[instrument(skip_all)]
-async fn create_ingest_key(
-    State(state): State<Arc<AppState>>,
-    context: Option<Extension<auth::AuthContext>>,
-    body: axum::body::Bytes,
-) -> ApiResult<(
-    axum::http::StatusCode,
-    Json<crate::ingest_keys::CreatedIngestKey>,
-)> {
-    let (keys, context) = ingest_key_manager(&state, context)?;
-    let request: CreateIngestKeyRequest = if body.iter().all(u8::is_ascii_whitespace) {
-        CreateIngestKeyRequest::default()
-    } else {
-        serde_json::from_slice(&body).map_err(|error| {
-            bad_request(
-                "Invalid request body",
-                &format!("expected {{\"name\": \"…\"}}: {error}"),
-            )
-        })?
-    };
-    let name = request.name.unwrap_or_else(|| "ingest key".to_owned());
-    match keys
-        .create(&context.tenant_id, &name, &context.subject)
-        .await
-    {
-        Ok(created) => {
-            tracing::info!(
-                project_id = context.tenant_id.as_ref(),
-                key_id = created.info.id,
-                "ingest key created"
-            );
-            Ok((axum::http::StatusCode::CREATED, Json(created)))
-        }
-        Err(crate::ingest_keys::CreateError::Storage(error)) => {
-            Err(ingest_key_storage_error(&error))
-        }
-        Err(error) => Err(bad_request("Ingest key not created", &error.to_string())),
-    }
-}
-
-#[utoipa::path(
-    delete,
-    path = "/v1/ingest-keys/{id}",
-    tag = "Ingest keys",
-    operation_id = "revoke-ingest-key",
-    summary = "Revoke an ingest key",
-    description = "Revoke a key by its id. Senders using it get 401 \"The ingest key has been revoked\" from then on. Revoking a revoked key succeeds again.",
-    params(("id" = String, Path, description = "The key id: the middle part of `sigiro_<id>_<secret>`")),
-    responses(
-        (status = 204, description = "Revoked"),
-        (status = 401, description = "Missing or invalid bearer token"),
-        (status = 403, description = "Not a user's own OAuth access token"),
-        (status = 404, description = "The workspace has no key with this id")
-    ),
-    security(("bearer" = [])),
-)]
-#[instrument(skip_all)]
-async fn revoke_ingest_key(
-    State(state): State<Arc<AppState>>,
-    context: Option<Extension<auth::AuthContext>>,
-    axum::extract::Path(id): axum::extract::Path<String>,
-) -> ApiResult<axum::http::StatusCode> {
-    let (keys, context) = ingest_key_manager(&state, context)?;
-    let found = keys
-        .revoke(&context.tenant_id, &id)
-        .await
-        .map_err(|error| ingest_key_storage_error(&error))?;
-    if !found {
-        return Err(axum_anyhow::not_found(
-            "Ingest key not found",
-            "This workspace has no ingest key with that id.",
-        ));
-    }
-    tracing::info!(
-        project_id = context.tenant_id.as_ref(),
-        key_id = id,
-        "ingest key revoked"
-    );
-    Ok(axum::http::StatusCode::NO_CONTENT)
-}
-
 /// Build the HTTP Router for the main API (port 9999).
 /// Extracted from `run_servers` so integration tests can build the same
 /// router with test state without starting TCP listeners.
@@ -497,20 +308,10 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     // per-tenant limiter runs before the handler.
     let v1 = Router::new()
         .route("/auth/validate", axum::routing::get(validate_auth_token))
-        .route(
-            "/ingest-keys",
-            axum::routing::get(list_ingest_keys).post(create_ingest_key),
-        )
-        .route(
-            "/ingest-keys/{id}",
-            axum::routing::delete(revoke_ingest_key),
-        )
         .typed_post(query_handler)
         .typed_get(services_handler)
         .typed_get(alerts_handler)
-        .typed_post(alerts_replay_handler)
-        .typed_get(trace_detail_handler)
-        .layer(axum_mw::map_response(retry_after_on_busy));
+        .typed_get(trace_detail_handler);
 
     let v1 = if rate_limit_v1 {
         let tenant_governor = GovernorConfigBuilder::default()
@@ -556,21 +357,6 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
         .route("/openapi.json", axum::routing::get(openapi_json));
     let public = match app_state.auth_mode.protected_resource_metadata_path() {
         Some(path) => public.route(path, axum::routing::get(oauth_protected_resource_metadata)),
-        None => public,
-    };
-
-    // The hosted dashboard signs in on sigiro.com; a self-hosted open-mode
-    // server has no sign-in, so it serves the dashboard itself (embedded in
-    // the binary, or SIGIRO_DASHBOARD_DIR when set). See src/dashboard.rs.
-    let public = match crate::dashboard::from_env(app_state.auth_mode.requires_auth()) {
-        Some(source) => crate::dashboard::routes(public, source),
-        None => public,
-    };
-
-    // The docs are public, so every server serves them, auth or not (embedded
-    // in the binary, or SIGIRO_DOCS_DIR when set). See src/docs.rs.
-    let public = match crate::docs::from_env() {
-        Some(source) => crate::docs::routes(public, source),
         None => public,
     };
 
@@ -661,10 +447,8 @@ pub async fn run_servers(
     let max_ingest_body_bytes = crate::config::max_ingest_body_bytes()?.get();
 
     let query_surface = crate::config::query_surface()?;
-    let ingest_keys = crate::ingest_keys::IngestKeys::new(alerts.admin_connection());
     let auth_mode =
-        crate::auth::AuthMode::from_runtime_config(query_surface, pool.storage_mode(), ingest_keys)
-            .await?;
+        crate::auth::AuthMode::from_runtime_config(query_surface, pool.storage_mode()).await?;
 
     // The bind address enforced for EVERY listener (HTTP, OTLP-HTTP, gRPC, and
     // quack itself) when this node is a quack edge — resolved once here so
@@ -684,17 +468,7 @@ pub async fn run_servers(
     } else {
         None
     };
-    // Outside quack, SIGIRO_BIND (loopback by default on Android) narrows the listeners.
-    let listener_bind = match (edge_bind, crate::config::BIND.value()) {
-        (Some(bind), _) => Some(bind),
-        (None, Ok(raw_bind)) => Some(
-            raw_bind
-                .parse()
-                .with_context(|| format!("SIGIRO_BIND {raw_bind:?} is not a valid IP address"))?,
-        ),
-        (None, Err(_)) => None,
-    };
-    let (http_bind_ip, grpc_bind_ip) = resolve_listener_bind_ips(listener_bind);
+    let (http_bind_ip, grpc_bind_ip) = resolve_listener_bind_ips(edge_bind);
 
     // TLS configuration
     let (otlp_http_tls_config, grpc_tls_config) = match (
@@ -841,8 +615,8 @@ pub async fn run_servers(
         None
     };
 
-    // OTLP HTTP ingest sub-router (POST /v1/traces|logs|metrics and
-    // /v1development/profiles) — a composable Router with its own auth/DefaultBodyLimit/
+    // OTLP HTTP ingest sub-router (POST /v1/traces|logs|metrics|profiles + the
+    // pyroscope paths) — a composable Router with its own auth/DefaultBodyLimit/
     // state. RequestDecompressionLayer is applied to THIS sub-router only, not
     // the whole :9999 app, matching what the dedicated :4318 listener already
     // does. Merged into the :9999 app below so there is one public port; the
@@ -1092,12 +866,26 @@ fn dir_size_bytes(path: &std::path::Path) -> (u64, bool) {
     (total, reliable)
 }
 
+/// Resets `DiskCapacityState::cleanup_in_flight` to `false` on drop so the
+/// single-flight self-heal flag is released on every exit of the spawned
+/// cleanup task — normal completion, error, OR panic-unwind — instead of only
+/// on the success path. Without this a panic in `run_retention_cleanup` would
+/// leave the flag stuck `true` and disable immediate self-heal forever.
+struct CleanupInFlightGuard(Arc<DiskCapacityState>);
+
+impl Drop for CleanupInFlightGuard {
+    fn drop(&mut self) {
+        self.0.cleanup_in_flight.store(false, Ordering::Release);
+    }
+}
+
 /// Spawn the storage-maintenance background task. Runs when retention is on
 /// (`SIGIRO_RETENTION_DAYS > 0`) OR the disk cap is armed (`cap > 0`); returns
 /// `None` when neither is configured. Drives two independent timers:
-/// - every `SIGIRO_DISK_SAMPLE_SECONDS`: sample `DATA_DIR` bytes and feed the
-///   gate (`crate::disk_gate`), which trips/clears with hysteresis and asks for
-///   a self-heal retention run while runs keep freeing space.
+/// - every `SIGIRO_DISK_SAMPLE_SECONDS`: sample `DATA_DIR` bytes and, if the
+///   cap is armed, trip/clear the gate with hysteresis. On the OFF→ON trip,
+///   single-flight an immediate retention cleanup (self-heal); the next sample
+///   tick re-measures and clears the gate — clearing stays on this one sampler.
 /// - hourly: run the routine retention cleanup (as before).
 fn spawn_storage_maintenance_task(
     router: Arc<MsgRouter>,
@@ -1138,24 +926,46 @@ fn spawn_storage_maintenance_task(
                             continue;
                         }
                     };
-                    // Every transition (and its log line) happens inside the
-                    // gate; this loop only runs the effect it asks for.
-                    if let Some(crate::disk_gate::DiskGateEffect::SpawnHeal { .. }) =
-                        disk.on_sample(bytes, reliable, retention_days > 0)
-                    {
-                        let r = Arc::clone(&router);
-                        let heal = disk.start_heal();
-                        tokio::spawn(async move {
-                            // The guard reports a failed run if this task
-                            // errors or panics, so Healing cannot outlive it.
-                            match r.run_retention_cleanup(retention_days).await {
-                                Ok(()) => heal.finish(true),
-                                Err(e) => {
-                                    tracing::error!("disk-cap self-heal retention cleanup failed: {e:#}");
-                                    heal.finish(false);
-                                }
+                    // `apply_sample` is only ever called here (one serialized
+                    // sampler) — no concurrent caller can race the load/store,
+                    // and `over_cap` is re-evaluated on the NEXT tick after any
+                    // self-heal cleanup frees space, so we never resample off-loop.
+                    match disk.apply_sample(bytes, reliable) {
+                        Some(true) => {
+                            tracing::warn!(
+                                sampled_bytes = bytes,
+                                cap,
+                                "disk cap tripped — REJECTING ingest until usage falls below 90% of cap"
+                            );
+                            // Self-heal: kick one retention cleanup, single-flighted.
+                            // The next sample tick re-measures and clears the gate.
+                            if retention_days > 0
+                                && disk
+                                    .cleanup_in_flight
+                                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                                    .is_ok()
+                            {
+                                let r = Arc::clone(&router);
+                                let ds = Arc::clone(&disk);
+                                tokio::spawn(async move {
+                                    // RAII: reset the single-flight flag on EVERY exit —
+                                    // normal, error, or panic — so a panicking cleanup
+                                    // can't wedge self-heal off forever.
+                                    let _reset = CleanupInFlightGuard(ds);
+                                    if let Err(e) = r.run_retention_cleanup(retention_days).await {
+                                        tracing::error!("disk-cap self-heal retention cleanup failed: {e:#}");
+                                    }
+                                });
                             }
-                        });
+                        }
+                        Some(false) => {
+                            tracing::info!(
+                                sampled_bytes = bytes,
+                                cap,
+                                "disk usage back under 90% of cap — ingest re-enabled"
+                            );
+                        }
+                        None => {}
                     }
                 }
 
@@ -1228,12 +1038,7 @@ async fn health(
     tracing::info!("health check called");
     (
         axum::http::StatusCode::OK,
-        axum::Json(HealthResponse::Ready {
-            alert_webhooks: state.alerts.delivery_health(),
-            disk_gate: state.router.disk_state().health(),
-            rows_dropped_total: Some(state.router.maintenance_health().rows_dropped())
-                .filter(|rows| *rows > 0),
-        }),
+        axum::Json(HealthResponse::Ready),
     )
 }
 
@@ -1265,8 +1070,7 @@ pub(crate) async fn execute_sql(
     let permit = state
         .router
         .workloads()
-        .acquire_query(auth.as_ref())
-        .await?;
+        .try_acquire(crate::workload::WorkloadClass::Query)?;
     let (handle_tx, mut handle_rx) =
         tokio::sync::oneshot::channel::<Arc<duckdb::InterruptHandle>>();
 
@@ -1437,7 +1241,6 @@ fn query_sql_contract() -> String {
 #[utoipa::path(
     post,
     path = "/v1/query",
-    tag = "Telemetry",
     operation_id = "run-query",
     summary = "Run a SQL query",
     /* `request_body(...)` rather than `request_body = String`, for the two fields
@@ -1540,11 +1343,10 @@ struct ServiceQueryRow {
 #[utoipa::path(
     get,
     path = "/v1/services",
-    tag = "Telemetry",
     operation_id = "list-services",
     summary = "List services",
     description = "Every service that has reported telemetry, with the first and \
-last timestamp seen for each (UTC text such as `2026-01-01 12:00:00.123`). The entry point \
+last timestamp seen for each (microseconds since the Unix epoch). The entry point \
 of an agent loop: pick a service here, then query its telemetry. Returns an error, never \
 a partial list, if the number of services exceeds SIGIRO_MAX_RESULT_ROWS.",
     responses(
@@ -1635,7 +1437,6 @@ struct AlertsQuery {
 #[utoipa::path(
     get,
     path = "/v1/alerts",
-    tag = "Telemetry",
     operation_id = "list-alerts",
     summary = "List alerts",
     params(AlertsQuery),
@@ -1669,12 +1470,9 @@ async fn alerts_handler(
         .workloads()
         .try_acquire(crate::workload::WorkloadClass::Maintenance)
         .map_err(|error| too_many_requests("alerts busy", &error.to_string()))?;
-    let (alerts, delivery) = tokio::task::spawn_blocking(move || {
+    let alerts = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        anyhow::Ok((
-            alert_store.list(&project_id, status.as_deref())?,
-            alert_store.delivery_summary(Some(&project_id))?,
-        ))
+        alert_store.list(&project_id, status.as_deref())
     })
     .await
     .map_err(|error| {
@@ -1685,64 +1483,13 @@ async fn alerts_handler(
         tracing::error!(project_id = auth.as_ref(), "alerts query failed: {error:#}");
         internal_error("alerts query failed", "unable to read alert state")
     })?;
-    Ok(Json(AlertsResponse { alerts, delivery }))
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/alerts/replay",
-    tag = "Telemetry",
-    operation_id = "replay-alert-webhooks",
-    summary = "Replay dead alert webhooks",
-    description = "Put this project's dead alert notifications (rejected with a 4xx, or out of attempts) back in the delivery queue, due now.",
-    responses(
-        (status = 200, description = "Notifications requeued", body = AlertsReplayResponse),
-        (status = 401, description = "Missing or invalid bearer token")
-    ),
-    security(("bearer" = [])),
-)]
-#[instrument(skip_all)]
-async fn alerts_replay_handler(
-    _path: AlertsReplayPath,
-    State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<TenantId>,
-) -> ApiResult<Json<AlertsReplayResponse>> {
-    let alert_store = state.alerts.clone();
-    let project_id = auth.as_ref().to_string();
-    let permit = state
-        .router
-        .workloads()
-        .try_acquire(crate::workload::WorkloadClass::Maintenance)
-        .map_err(|error| too_many_requests("alerts busy", &error.to_string()))?;
-    let replayed = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        alert_store.replay_dead(&project_id, crate::alerts::now_us())
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(
-            project_id = auth.as_ref(),
-            "alert replay task failed: {error}"
-        );
-        internal_error("alert replay failed", "unable to replay alert webhooks")
-    })?
-    .map_err(|error| {
-        tracing::error!(project_id = auth.as_ref(), "alert replay failed: {error:#}");
-        internal_error("alert replay failed", "unable to replay alert webhooks")
-    })?;
-    tracing::info!(
-        project_id = auth.as_ref(),
-        replayed,
-        "dead alert webhooks replayed"
-    );
-    Ok(Json(AlertsReplayResponse { replayed }))
+    Ok(Json(AlertsResponse { alerts }))
 }
 
 /// GET /v1/traces/{trace_id} -- return a single trace with full detail including critical path and service breakdown.
 #[utoipa::path(
      get,
      path = "/v1/traces/{trace_id}",
-     tag = "Telemetry",
      operation_id = "get-trace",
      summary = "Fetch one whole trace",
      description = "Every span of one trace, parent links included, so a caller \
@@ -2092,7 +1839,6 @@ fn compute_service_breakdown(
 #[utoipa::path(
     get,
     path = "/admin/status",
-    tag = "Admin",
     responses(
         (status = 200, description = "Server status", body = AdminStatusResponse)
     ),
@@ -2117,10 +1863,6 @@ async fn admin_status(
         "ingest_dropped_messages_total".to_string(),
         state.router.dropped_messages().to_string(),
     );
-    map.insert(
-        "sigiro_rows_dropped_total".to_string(),
-        state.router.maintenance_health().rows_dropped().to_string(),
-    );
     Ok(Json(AdminStatusResponse { status: map }))
 }
 
@@ -2134,69 +1876,5 @@ mod legacy_removal_tests {
         assert!(!PUBLIC_SPEC.paths.paths.contains_key("/v1/anomalies"));
         assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/query"));
         assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/services"));
-    }
-
-    #[test]
-    fn every_public_operation_has_a_named_tag_and_its_own_summary() {
-        let declared: Vec<String> = PUBLIC_SPEC
-            .tags
-            .iter()
-            .flatten()
-            .map(|tag| tag.name.clone())
-            .collect();
-        let mut summaries = std::collections::BTreeSet::new();
-        for (path, item) in &PUBLIC_SPEC.paths.paths {
-            for operation in [&item.get, &item.post, &item.delete].into_iter().flatten() {
-                let tags = operation.tags.clone().unwrap_or_default();
-                assert_eq!(tags.len(), 1, "{path}: {tags:?}");
-                assert!(
-                    declared.contains(&tags[0]),
-                    "{path}: undeclared tag {tags:?}"
-                );
-                let summary = operation.summary.clone().unwrap_or_default();
-                assert!(
-                    summaries.insert(summary.clone()),
-                    "{path}: repeated summary {summary}"
-                );
-            }
-        }
-        assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/ingest-keys"));
-        assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/ingest-keys/{id}"));
-    }
-}
-
-#[cfg(test)]
-mod admission_response_tests {
-    use super::*;
-    use axum::http::{HeaderValue, StatusCode, header::RETRY_AFTER};
-    use axum::response::IntoResponse;
-
-    #[tokio::test]
-    async fn busy_query_tells_the_client_when_to_retry() {
-        let busy = retry_after_on_busy(
-            too_many_requests("query rejected", "capacity in use").into_response(),
-        )
-        .await;
-        assert_eq!(busy.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(
-            busy.headers().get(RETRY_AFTER),
-            Some(&HeaderValue::from_static("1"))
-        );
-
-        let ok = retry_after_on_busy(StatusCode::OK.into_response()).await;
-        assert!(ok.headers().get(RETRY_AFTER).is_none());
-    }
-
-    #[test]
-    fn admission_rejection_maps_to_429() {
-        let error = anyhow::Error::new(crate::workload::AdmissionError {
-            workload: crate::workload::WorkloadClass::Query,
-            scope: crate::workload::AdmissionScope::Tenant,
-            capacity: crate::workload::QUERIES_PER_TENANT,
-        });
-        assert_eq!(
-            query_api_error("query rejected", &error).status(),
-            StatusCode::TOO_MANY_REQUESTS
-        );
     }
 }

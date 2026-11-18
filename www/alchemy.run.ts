@@ -1,7 +1,6 @@
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Alchemy from "alchemy";
 import { adopt } from "alchemy/AdoptPolicy";
-import * as Output from "alchemy/Output";
 import { retain } from "alchemy/RemovalPolicy";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
@@ -27,19 +26,6 @@ export default Alchemy.Stack(
     // indistinguishable from a key re-mint and would invalidate every token.
     const authSecret = yield* Config.Redacted("BETTER_AUTH_SECRET");
     const emailToken = yield* Config.Redacted("CLOUDFLARE_EMAIL_API_TOKEN");
-    // Deployment-specific names come from the deploying environment, not the
-    // repository: the adopted origin tunnel's name, extra hostnames it serves
-    // (comma-separated, may be empty), and the optimizer operator's tenant.
-    const originTunnelName = yield* Config.String("SIGIRO_ORIGIN_TUNNEL_NAME");
-    const extraOriginHostnames = (yield* Config.String(
-      "SIGIRO_EXTRA_ORIGIN_HOSTNAMES"
-    ))
-      .split(",")
-      .map((hostname) => hostname.trim())
-      .filter((hostname) => hostname.length > 0);
-    const optimizerTenantId = yield* Config.String(
-      "SIGIRO_OPTIMIZER_TENANT_ID"
-    );
 
     const zone = yield* productionResource(
       Cloudflare.Zone.Zone("ProductionZone", {
@@ -89,39 +75,19 @@ export default Alchemy.Stack(
           CLOUDFLARE_ACCOUNT_ID: "73035685fa8536f5c07b55b168868c71",
           BETTER_AUTH_SECRET: authSecret,
           CLOUDFLARE_EMAIL_API_TOKEN: emailToken,
-          OPTIMIZER_CLIENT_TENANT_ID: optimizerTenantId,
         },
       })
     );
-    // The Hetzner host takes no inbound web traffic: cloudflared on the host
-    // dials out, and kamal-proxy serves plain HTTP on 127.0.0.1:80 behind it.
-    const originTunnel = yield* productionResource(
-      Cloudflare.Tunnel.Tunnel("OriginTunnel", {
-        name: originTunnelName,
-        ingress: [
-          { hostname: "api-origin.sigiro.com", service: "http://127.0.0.1:80" },
-          ...extraOriginHostnames.map((hostname) => ({
-            hostname,
-            service: "http://127.0.0.1:80",
-          })),
-          { service: "http_status:404" },
-        ],
-      })
-    );
-
-    const tunnelTarget = Output.interpolate`${originTunnel.tunnelId}.cfargotunnel.com`;
     const apiOriginRecord = yield* productionResource(
-      Cloudflare.DNS.Record("ApiOriginTunnelRecord", {
+      Cloudflare.DNS.Record("ApiOriginRecord", {
         zoneId: zone.zoneId,
         name: "api-origin.sigiro.com",
-        type: "CNAME",
-        content: tunnelTarget,
-        proxied: true,
-        ttl: 1,
+        type: "A",
+        content: "91.98.118.235",
+        proxied: false,
+        ttl: 60,
       })
     );
-    // DNS records for the extra origin hostnames live in their own zones and
-    // are managed outside this stack.
 
     const website = yield* productionResource(
       Cloudflare.Worker("Website", {
@@ -156,7 +122,10 @@ export default Alchemy.Stack(
             "/device/*",
             "/health",
             "/healthz",
+            "/ingest",
+            "/ingest/*",
             "/openapi.json",
+            "/push.v1.PusherService/Push",
             "/sign-in",
             "/sign-in/*",
             "/sign-up",
@@ -174,32 +143,6 @@ export default Alchemy.Stack(
           AUTH: authWorker,
           DOWNLOADS: downloads,
         },
-      })
-    );
-    // sigiro.com/dashboard: its own app (../dashboard, a Next static export)
-    // on an assets-only Worker. No Worker code runs; the route below sends
-    // /dashboard* here instead of to the website, and the export is laid out
-    // under dist/dashboard so asset paths match the URL. Same origin, so the
-    // app reaches /api/auth and /v1/query on the website Worker with no CORS.
-    const dashboard = yield* productionResource(
-      Cloudflare.Website.StaticSite("Dashboard", {
-        name: "sigiro-dashboard",
-        command: "aube run build",
-        cwd: "../dashboard",
-        outdir: "dist",
-        compatibility: { date: "2026-07-24" },
-        workersDev: false,
-        assets: {
-          htmlHandling: "auto-trailing-slash",
-          notFoundHandling: "404-page",
-        },
-      })
-    );
-    const dashboardRoute = yield* productionResource(
-      Cloudflare.Workers.WorkerRoute("DashboardRoute", {
-        zoneId: zone.zoneId,
-        pattern: "sigiro.com/dashboard*",
-        script: dashboard.workerName,
       })
     );
     const apexRoute = yield* productionResource(
@@ -223,13 +166,10 @@ export default Alchemy.Stack(
       downloads,
       emailSending,
       apiOriginRecord,
-      originTunnel,
       authDatabase,
       authWorker,
 
       website,
-      dashboard,
-      dashboardRoute,
       apexRoute,
       wwwRoute,
     };

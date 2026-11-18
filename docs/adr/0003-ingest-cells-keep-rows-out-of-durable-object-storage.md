@@ -1,0 +1,3 @@
+# Ingest cells keep telemetry rows out of Durable Object storage
+
+Durable Object SQLite bills per row written, so storing each telemetry row there would cost far more than storing the same data in R2. An ingest cell groups requests in memory and writes each group as one segment to R2 with one manifest row. A per-request queue was also rejected on cost. The flush window, when an exporter request is acknowledged, whether a per-request write-ahead blob is kept, and the cell key and sharding are deliberately left open. A formal model of acknowledgement and durability under eviction, plus measured cost and latency on Cloudflare and celld, decide them; no guess is fixed in code first.

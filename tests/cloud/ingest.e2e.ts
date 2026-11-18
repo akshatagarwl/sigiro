@@ -5,16 +5,15 @@ import {
   Fleet,
   duckdb,
   expectStatus,
-  get,
   gzip,
-  ingestHealth,
   metricsBody,
   otlpProfileBody,
   post,
   postUntilAccepted,
+  pprofBody,
+  pushRequestBody,
   token,
   traceBody,
-  waitFor,
 } from "./harness.ts";
 
 const fleet = new Fleet();
@@ -95,10 +94,46 @@ try {
   } finally {
     rmSync(profiles, { recursive: true, force: true });
   }
-  // Only OTLP carries profiles; the old non-OTLP profile paths are gone.
   await expectStatus(
-    await post("/ingest", otlpProfileBody("gone"), ingest, protobuf),
-    404
+    await post(
+      "/push.v1.PusherService/Push",
+      pushRequestBody("push-profiled"),
+      ingest,
+      "application/proto"
+    ),
+    202
+  );
+  await expectStatus(
+    await post(
+      "/ingest?name=pprof-profiled%7Benv%3Dprod%7D",
+      gzip(pprofBody()),
+      ingest,
+      "application/octet-stream"
+    ),
+    202
+  );
+  const form = new FormData();
+  form.append(
+    "profile",
+    new Blob([pushRequestBody("multipart-profiled")]),
+    "profile.pb"
+  );
+  await expectStatus(await post("/ingest/pyroscope", form, ingest), 202);
+  await expectStatus(
+    await post("/", pushRequestBody("root-profiled"), ingest),
+    202
+  );
+  for (const service of [
+    "push-profiled",
+    "pprof-profiled",
+    "multipart-profiled",
+    "root-profiled",
+  ]) {
+    await fleet.waitForRow("tenants/acme/profiles/", "service_name", service);
+  }
+  await expectStatus(
+    await post("/ingest", pushRequestBody("text"), ingest, "text/plain"),
+    400
   );
 
   await expectStatus(
@@ -206,55 +241,6 @@ try {
     fleet.count("tenants/acme/spans/", "span_name", "restart-survivor"),
     1,
     "survives restart exactly once"
-  );
-
-  // /health: tenant-scoped ingest lag and parked rows, behind a token.
-  await expectStatus(await get("/health"), 401);
-  await expectStatus(await get("/health", token("acme", "services:read")), 403);
-  await waitFor(async () => {
-    const health = await ingestHealth(token("acme", "query:read"));
-    const cell = health.ingest.traces;
-    return (
-      health.status === "ready" &&
-      cell.pendingRows === 0 &&
-      cell.lagMs === 0 &&
-      cell.parked === 0 &&
-      cell.phase !== "flushing"
-    );
-  }, "the traces cell drains and reports no lag");
-  const health = await ingestHealth(ingest);
-  assert.deepEqual(Object.keys(health.ingest).sort(), [
-    "logs",
-    "metrics",
-    "profiles",
-    "traces",
-  ]);
-
-  // Past FLUSH_BYTES the write still answers 202 straight away; the flush
-  // runs from the alarm, never in the request path.
-  fleet.deploy({
-    FLUSH_SECONDS: "600",
-    FLUSH_BYTES: "1",
-    SIGIRO_MAX_INGEST_BODY_BYTES: "1024",
-  });
-  await fleet.restart("SIGTERM");
-  await postUntilAccepted(
-    "/v1/traces",
-    traceBody([{ name: "over-flush-bytes", service: "checkout" }]),
-    ingest,
-    protobuf
-  );
-  const pending = (await ingestHealth(ingest)).ingest.traces;
-  assert.ok(pending.pendingRows <= 1, JSON.stringify(pending));
-  await fleet.waitForRow(
-    "tenants/acme/spans/",
-    "span_name",
-    "over-flush-bytes"
-  );
-  assert.equal(
-    fleet.count("tenants/acme/spans/", "span_name", "over-flush-bytes"),
-    1,
-    "flushed once from the alarm, well before FLUSH_SECONDS"
   );
 
   console.log("cloud ingest e2e passed");

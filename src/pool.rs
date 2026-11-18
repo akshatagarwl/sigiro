@@ -181,9 +181,6 @@ unsafe extern "C" {
     fn duckdb_extension_parquet_describe(descriptor: *mut ExtensionDescriptor) -> i32;
     fn duckdb_extension_json_describe(descriptor: *mut ExtensionDescriptor) -> i32;
     fn duckdb_extension_icu_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-    // DuckDB serves no android_arm64 extensions; the Android bundle links ducklake.
-    #[cfg(target_os = "android")]
-    fn duckdb_extension_ducklake_describe(descriptor: *mut ExtensionDescriptor) -> i32;
 }
 
 /// Open an in-memory DuckDB. The only way to open one: clippy bans
@@ -198,8 +195,7 @@ pub fn open_duckdb() -> Result<Connection> {
     static REGISTERED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
     REGISTERED
         .get_or_init(|| {
-            #[allow(unused_mut)]
-            let mut extensions: Vec<(&str, DescribeExtension)> = vec![
+            let extensions: [(&str, DescribeExtension); 6] = [
                 (
                     "loadable_extensions",
                     duckdb_extension_loadable_extensions_describe,
@@ -210,8 +206,6 @@ pub fn open_duckdb() -> Result<Connection> {
                 ("json", duckdb_extension_json_describe),
                 ("icu", duckdb_extension_icu_describe),
             ];
-            #[cfg(target_os = "android")]
-            extensions.push(("ducklake", duckdb_extension_ducklake_describe));
             for (name, describe) in extensions {
                 // SAFETY: each describe function is DuckDB's own, linked from
                 // the static bundle, with the signature duckdb_static_extension.h
@@ -782,14 +776,8 @@ impl ProjectPool {
         writer
             .execute_batch("USE lake;")
             .context("failed to set writer default schema")?;
-        // At least one reader per admitted query, so a tenant's queries run
-        // side by side instead of queueing again for a connection.
-        let reader_count = crate::config::duckdb_threads()?.max(
-            NonZeroUsize::new(crate::workload::QUERIES_PER_TENANT)
-                .expect("per-tenant query capacity is non-zero"),
-        );
-        let readers =
-            ReaderPool::new(&base, reader_count).context("failed to create DuckDB reader pool")?;
+        let readers = ReaderPool::new(&base, crate::config::duckdb_threads()?)
+            .context("failed to create DuckDB reader pool")?;
         Ok(OpenedProject { writer, readers })
     }
 

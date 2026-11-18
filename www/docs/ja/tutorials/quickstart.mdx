@@ -1,6 +1,8 @@
 ---
 title: クイックスタート
-description: 1 つのコマンドで sigiro を起動し、OpenTelemetry を向けて、最近の失敗を SQL で照会します。所要時間は 5 分で、コレクターも設定ファイルも不要です。
+description: >-
+  1 つの docker コマンドで sigiro を起動し、OpenTelemetry
+  を向けて、何がなぜ変わったのかを尋ねます。所要時間は 5 分で、コレクターも設定ファイルも不要です。
 sidebar:
   order: 1
 ---
@@ -116,9 +118,6 @@ curl http://localhost:9999/v1/services
 レスポンスは `services` 配列を含む JSON オブジェクトです。最初のリクエストから数秒
 以内に、お使いのサービスがその配列に現れます。配列が空の場合は、HTTP 経由の OTLP
 ではポートが `4318`、gRPC 経由の OTLP では `4317` になっていることを確認してください。
-
-同じテレメトリーをブラウザーで見るには、
-[localhost:9999/dashboard/](http://localhost:9999/dashboard/) を開きます。
 
 ## 3. 最近のエラーを問い合わせる
 

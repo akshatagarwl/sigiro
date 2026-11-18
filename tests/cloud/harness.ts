@@ -46,7 +46,6 @@ const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 
 export type FleetVars = {
   FLUSH_SECONDS?: string;
-  FLUSH_BYTES?: string;
   SIGIRO_MAX_INGEST_BODY_BYTES?: string;
   SIGIRO_MAX_RESULT_ROWS?: string;
   QUERY_MAX_SCAN_BYTES?: string;
@@ -107,19 +106,10 @@ export class Fleet {
     const project = join(cloud, `.e2e-${revision}`);
     rmSync(project, { recursive: true, force: true });
     mkdirSync(join(project, "src"), { recursive: true });
-    const sources = run(
-      "git",
-      ["-C", root, "ls-tree", "--name-only", revision, "cloud/src/"],
-      true
-    )
-      .split("\n")
-      .filter((path) => path.endsWith(".ts"));
-    for (const path of sources) {
-      writeFileSync(
-        join(project, "src", path.slice("cloud/src/".length)),
-        run("git", ["-C", root, "show", `${revision}:${path}`], true)
-      );
-    }
+    writeFileSync(
+      join(project, "src/worker.ts"),
+      run("git", ["-C", root, "show", `${revision}:cloud/src/worker.ts`], true)
+    );
     for (const shared of ["vendor", "query", "types", "node_modules"]) {
       symlinkSync(join(cloud, shared), join(project, shared));
     }
@@ -308,30 +298,6 @@ export async function post(
   return fetch(`${origin}${path}`, { method: "POST", headers, body });
 }
 
-export async function get(path: string, jwt?: string): Promise<Response> {
-  return fetch(`${origin}${path}`, {
-    headers: jwt === undefined ? {} : { authorization: `Bearer ${jwt}` },
-  });
-}
-
-export type CellStatus = {
-  phase: string;
-  pendingRows: number;
-  pendingBytes: number;
-  lagMs: number;
-  retrying: number;
-  parked: number;
-};
-
-export async function ingestHealth(
-  jwt: string
-): Promise<{ status: string; ingest: Record<string, CellStatus> }> {
-  const response = await get("/health", jwt);
-  const text = await response.text();
-  assert.equal(response.status, 200, text);
-  return JSON.parse(text);
-}
-
 export async function expectStatus(
   response: Response,
   status: number
@@ -490,12 +456,10 @@ export function otlpProfileBody(service: string): Uint8Array {
       messageField(7, entry)
     ),
   ]);
-  // OTLP profiles v1.10+: Sample.values is field 4 (field 2 is now
-  // attribute_indices).
   const sample = (stackIndex: number, value: number) =>
     message([
       varintField(1, BigInt(stackIndex)),
-      varintField(4, BigInt(value)),
+      varintField(2, BigInt(value)),
     ]);
   const profile = message([
     messageField(1, message([varintField(1, 1n), varintField(2, 2n)])),
@@ -513,6 +477,49 @@ export function otlpProfileBody(service: string): Uint8Array {
   return message([
     messageField(1, resourceProfiles),
     messageField(2, dictionary),
+  ]);
+}
+
+export function pprofBody(): Uint8Array {
+  const strings = ["", "cpu", "nanoseconds", "main", "work"];
+  const location = (id: number, fnId: number) =>
+    message([
+      varintField(1, BigInt(id)),
+      messageField(4, message([varintField(1, BigInt(fnId))])),
+    ]);
+  const fn = (id: number, name: number) =>
+    message([varintField(1, BigInt(id)), varintField(2, BigInt(name))]);
+  const sample = (ids: number[], value: number) =>
+    message([
+      ...ids.map((id) => varintField(1, BigInt(id))),
+      varintField(2, BigInt(value)),
+    ]);
+  return message([
+    messageField(1, message([varintField(1, 1n), varintField(2, 2n)])),
+    messageField(2, sample([2, 1], 10)),
+    messageField(2, sample([1], 5)),
+    messageField(4, location(1, 1)),
+    messageField(4, location(2, 2)),
+    messageField(5, fn(1, 3)),
+    messageField(5, fn(2, 4)),
+    ...strings.map((value) => stringField(6, value)),
+    varintField(9, 1_700_000_000_000_000_000n),
+  ]);
+}
+
+export function pushRequestBody(service: string): Uint8Array {
+  const label = message([
+    stringField(1, "service_name"),
+    stringField(2, service),
+  ]);
+  return message([
+    messageField(
+      1,
+      message([
+        messageField(1, label),
+        messageField(2, message([bytesField(1, pprofBody())])),
+      ])
+    ),
   ]);
 }
 

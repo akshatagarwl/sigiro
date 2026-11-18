@@ -36,13 +36,20 @@ inner Worker and bypasses the apex auth and API proxies.
 
 ## Alchemy migration
 
-`alchemy.run.ts` declares the production zone, downloads bucket, website Worker, binding, routes, and Email Sending domain, with state in Alchemy's remote Cloudflare state backend. Review its plan with:
+Two infrastructure composition roots share Alchemy's remote Cloudflare state backend:
+
+- `alchemy.run.ts` declares the production zone, downloads bucket, website Worker, binding, routes, and Email Sending domain.
+- `alchemy.hetzner.run.ts` adopts and retains the production Hetzner server, primary IPs, firewall, and SSH key.
+
+Review both plans with:
 
 ```bash
 mise run alchemy-plan
+mise run alchemy-hetzner-plan
 ```
 
-The production host stacks (server adoption and the native workload) live in a separate private infrastructure repository.
+The Hetzner task uses `HCLOUD_TOKEN` when it is set and otherwise reads the token
+from the active `hcloud` context without printing it.
 
 Both scripts fix Alchemy's stage to production. Planning does not apply, deploy, or destroy resources. The Hetzner plan must be fully no-op after adoption.
 
@@ -54,12 +61,14 @@ Both scripts fix Alchemy's stage to production. Planning does not apply, deploy,
 | `src/layouts/Base.astro`               | the document, the panel, the header and the footer                                                                                                                                                                         |
 | `src/lib/site.ts`                      | every word the site says. Copy lives here, not in markup                                                                                                                                                                   |
 | `src/lib/highlight.ts`                 | Shiki, configured for the Workers runtime                                                                                                                                                                                  |
-| `src/components/ui/` | stock shadcn/ui components, copied from the registry. Keep them unedited; the theme is `theme.css` |
+| `src/components/interior/`             | vendored from interior.dev — see DESIGN.md §1b. `task-steps.tsx` is no longer verbatim: its `TaskSteps` view was replaced by `stage-list.tsx` and the dead half was removed, so re-syncing that one file is a manual merge |
 | `src/pages/dl/[...key].ts`             | release downloads out of R2. The one route that is not prerendered                                                                                                                                                         |
 | `public/install`                       | the script `curl -fsSL sigiro.com/install \| sh` fetches                                                                                                                                                                   |
 | `public/_headers`, `public/_redirects` | caching, and the published short links                                                                                                                                                                                     |
+| `DESIGN.md`                            | the design language. Read it before changing anything visual                                                                                                                                                               |
 
-All user-facing text follows ASD-STE100 Simplified Technical English.
+Copy and positioning are governed by `.agents/product-marketing.md` at the repo
+root, and all user-facing text follows ASD-STE100 Simplified Technical English.
 
 ## Four islands
 
@@ -71,9 +80,9 @@ says so at the point it is used:
 - `faq.tsx` — `client:visible`
 - `integrations.tsx` — `client:visible`
 
-`/dashboard/` is not part of this site: it is its own app in `../dashboard`
-(a Next static export on the `Dashboard` Worker, routed at `sigiro.com/dashboard*`
-in `alchemy.run.ts`). `aube run check:dashboard` drives its build.
+`/dashboard/` is the one app route. `dashboard/dashboard.tsx` is `client:only` and
+loads DuckDB-WASM from `/duckdb/<version>/` (see `blume.config.ts` and
+`src/worker.ts`); `aube run check:dashboard` drives it against a running Worker.
 
 Nothing else on the landing page does. A React component rendered from `.astro` with no `client:*`
 directive is static markup, including the ones still marked `'use client'` — that

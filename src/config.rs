@@ -54,13 +54,6 @@ pub(crate) static OTEL_EXPORTER_OTLP_ENDPOINT: Envar<String> =
         EnvarDef::Default(String::new())
     });
 
-/// OTLP profiles endpoint for self-profiling, used as-is. Unset means
-/// `OTEL_EXPORTER_OTLP_ENDPOINT` + `/v1development/profiles`, or this server.
-pub(crate) static OTEL_EXPORTER_OTLP_PROFILES_ENDPOINT: Envar<String> =
-    Envar::on_startup("OTEL_EXPORTER_OTLP_PROFILES_ENDPOINT", || {
-        EnvarDef::Default(String::new())
-    });
-
 /// OTel auth key for self-ingestion (optional). Empty means no auth.
 pub(crate) static OTEL_AUTH_KEY: Envar<String> =
     Envar::on_startup("SIGIRO_OTEL_AUTH_KEY", || EnvarDef::Default(String::new()));
@@ -119,10 +112,11 @@ pub(crate) static QUERY_TIMEOUT_SECONDS: Envar<u64> =
 pub(crate) static MAX_RESULT_ROWS: Envar<usize> =
     Envar::on_startup("SIGIRO_MAX_RESULT_ROWS", || EnvarDef::Default(100_000));
 
-/// Self-profiling: `true` sends sigiro's own CPU and heap profiles over OTLP
-/// (see `src/profiling.rs`). Off by default.
-pub(crate) static SELF_PROFILING: Envar<String> =
-    Envar::on_startup("SIGIRO_SELF_PROFILING", || EnvarDef::Default(String::new()));
+/// Pyroscope profiling endpoint (optional — no profiling if unset).
+pub(crate) static PYROSCOPE_ENDPOINT: Envar<String> =
+    Envar::on_startup("SIGIRO_PYROSCOPE_ENDPOINT", || {
+        EnvarDef::Default(String::new())
+    });
 
 /// Flush interval for per-project flusher tasks (seconds). Default: 60s.
 /// Controls how often buffered rows are flushed to DuckDB, even if the row
@@ -326,20 +320,6 @@ pub(crate) fn disk_sample_seconds() -> Result<NonZeroU64> {
         .context("SIGIRO_DISK_SAMPLE_SECONDS must be greater than zero")
 }
 
-/// A static build of the dashboard on disk (`dashboard/dist`, the directory
-/// holding `dashboard/`). An open-mode server serves the dashboard built into
-/// the binary at `/dashboard/`; set this to serve a different build instead,
-/// for example while developing the dashboard.
-pub(crate) static DASHBOARD_DIR: Envar<String> =
-    Envar::on_startup("SIGIRO_DASHBOARD_DIR", || EnvarDef::Unset);
-
-/// A static export of the docs on disk (`www/dist-binary`, the directory
-/// holding the docs' `index.html`). Every server serves the docs built into the
-/// binary at `/docs/`; set this to serve a different export instead, for
-/// example while editing the docs.
-pub(crate) static DOCS_DIR: Envar<String> =
-    Envar::on_startup("SIGIRO_DOCS_DIR", || EnvarDef::Unset);
-
 /// Data directory for sigiro (holds DuckDB files, extensions, binaries).
 /// Defaults to the platform data dir (~/.local/share/sigiro on Unix, %LOCALAPPDATA%\sigiro on Windows).
 pub(crate) static DATA_DIR: Envar<String> =
@@ -373,9 +353,7 @@ pub static ENDPOINT: Envar<String> =
     Envar::on_startup("SIGIRO_ENDPOINT", || EnvarDef::Default(String::new()));
 
 /// Public Blume documentation MCP endpoint. Override this for a self-hosted
-/// docs deployment; no Sigiro credential is sent to this endpoint. When it is
-/// unreachable, `sigiro mcp` answers the same tools from the docs built into
-/// the binary (`docs_mcp`); an empty value skips the endpoint altogether.
+/// docs deployment; no Sigiro credential is sent to this endpoint.
 pub static DOCS_MCP_URL: Envar<String> = Envar::on_demand("SIGIRO_DOCS_MCP_URL", || {
     EnvarDef::Default("https://sigiro.com/mcp/docs".to_string())
 });
@@ -467,18 +445,6 @@ pub fn query_surface() -> Result<QuerySurface> {
 /// (e.g. a Tailscale interface IP) and own the network perimeter themselves.
 pub(crate) static QUACK_BIND: Envar<String> = Envar::on_startup("SIGIRO_QUACK_BIND", || {
     EnvarDef::Default("127.0.0.1".to_string())
-});
-
-/// Bind address for the HTTP, OTLP-HTTP and gRPC listeners outside quack mode.
-/// Unset binds every interface, as hosted mode needs (the ingress sits on the
-/// Docker network). Android defaults to loopback: a phone joins untrusted
-/// networks and a self-hosted Sigiro there has no auth or TLS by default.
-pub(crate) static BIND: Envar<String> = Envar::on_startup("SIGIRO_BIND", || {
-    if cfg!(target_os = "android") {
-        EnvarDef::Default("127.0.0.1".to_string())
-    } else {
-        EnvarDef::Unset
-    }
 });
 
 /// Port for the quack query-serving surface.

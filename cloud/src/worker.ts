@@ -5,6 +5,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Query, QueryOutcome, ViewSource } from "../query/src/query.ts";
 import initWasm, {
   decode_otlp,
+  decode_pyroscope,
   empty_segment,
   manifest_commit,
   manifest_empty,
@@ -12,11 +13,10 @@ import initWasm, {
   manifest_register,
   validate_read_only,
 } from "../vendor/segments-wasm/sigiro_segments_wasm.js";
-import { type CellState, cellStep, flushPass } from "./cell";
 import { reconcile, type Schema, type SchemaStore } from "./schema";
 
 const ingestCellSchema: Schema = {
-  wal: "CREATE TABLE {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, signal TEXT NOT NULL, format TEXT NOT NULL, sdk_name TEXT, body BLOB NOT NULL, bytes INTEGER NOT NULL, accepted_at INTEGER, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER, last_error TEXT, parked_at INTEGER, parked_reason TEXT)",
+  wal: "CREATE TABLE {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, signal TEXT NOT NULL, format TEXT NOT NULL, sdk_name TEXT, body BLOB NOT NULL, bytes INTEGER NOT NULL)",
   manifest:
     "CREATE TABLE {table} (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL)",
 };
@@ -34,7 +34,7 @@ import wasmModule from "../vendor/segments-wasm/sigiro_segments_wasm_bg.wasm";
 await initWasm(wasmModule);
 
 type Signal = "traces" | "logs" | "metrics" | "profiles";
-type Format = "protobuf" | "json";
+type Format = "protobuf" | "json" | "pyroscope";
 type Table =
   | "spans"
   | "logs"
@@ -75,19 +75,10 @@ type WalRow = {
   id: number;
   tenant: TenantId;
   signal: Signal;
-  format: string;
+  format: Format;
+  sdk_name: string | null;
   body: ArrayBuffer;
   bytes: number;
-  attempts: number;
-};
-
-export type CellStatus = {
-  phase: CellState["phase"];
-  pendingRows: number;
-  pendingBytes: number;
-  lagMs: number;
-  retrying: number;
-  parked: number;
 };
 type SegmentMetadata = {
   table: Table;
@@ -117,6 +108,18 @@ const views: Record<string, { table: Table; signal: Signal }> = {
   },
   sigiro_profiles: { table: "profiles", signal: "profiles" },
 };
+const pyroscopePaths = new Set([
+  "/",
+  "/push.v1.PusherService/Push",
+  "/ingest",
+  "/ingest/pyroscope",
+]);
+const pyroscopeContentTypes = [
+  "",
+  "application/proto",
+  "application/octet-stream",
+  "binary/octet-stream",
+];
 const servicesSql = `SELECT service_name, min(first_seen)::VARCHAR AS first_seen, max(last_seen)::VARCHAR AS last_seen,
   sum(span_count)::BIGINT AS span_count, sum(log_count)::BIGINT AS log_count, sum(metric_count)::BIGINT AS metric_count,
   sum(profile_count)::BIGINT AS profile_count, sum(span_count + log_count + metric_count + profile_count)::BIGINT AS total_count
@@ -136,16 +139,9 @@ const defaultFlushBytes = 4_194_304;
 let jwksCache: { url: string; keys: Jwk[]; expiresAt: number } | undefined;
 
 export class IngestCell extends DurableObject<Env> {
-  private cell: CellState = { phase: "idle" };
-  private flushing: Promise<void> | undefined;
-
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     reconcile(sqlStore(ctx.storage), ingestCellSchema);
-    void ctx.blockConcurrencyWhile(async () => {
-      const at = await ctx.storage.getAlarm();
-      this.cell = at === null ? { phase: "idle" } : { phase: "scheduled", at };
-    });
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -156,71 +152,44 @@ export class IngestCell extends DurableObject<Env> {
     const signal = parseSignal(params.get("signal"));
     const tenant = parseTenantId(params.get("tenant"));
     const format = parseCellFormat(params.get("format"));
+    const sdkName = params.get("name");
     if (signal === undefined || format === undefined || tenant === undefined) {
       return new Response("bad ingest cell request", { status: 400 });
     }
     const body = await request.arrayBuffer();
     try {
-      decode_otlp(signal, format, new Uint8Array(body));
+      this.decode(signal, format, sdkName, body);
     } catch (error) {
       return new Response(String(error), { status: 400 });
     }
     this.ctx.storage.sql.exec(
-      "INSERT INTO wal (tenant, signal, format, body, bytes, accepted_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO wal (tenant, signal, format, sdk_name, body, bytes) VALUES (?, ?, ?, ?, ?, ?)",
       tenant,
       signal,
       format,
+      sdkName,
       body,
-      body.byteLength,
-      Date.now()
+      body.byteLength
     );
     await this.ctx.storage.sync?.();
-    try {
-      await this.apply(
-        cellStep(
-          this.cell,
-          {
-            type: "write",
-            now: Date.now(),
-            due:
-              pendingWalBytes(this.ctx.storage.sql) >=
-              numberVar(this.env.FLUSH_BYTES, defaultFlushBytes),
-          },
-          this.flushDelayMs()
-        )
-      );
-    } catch (error) {
-      console.error(`ingest cell could not schedule a flush: ${error}`);
-    }
+    await this.scheduleIfNeeded();
     return new Response(null, { status: 202 });
   }
 
-  status(): CellStatus {
-    const row = this.ctx.storage.sql
-      .exec<{
-        pending_rows: number;
-        pending_bytes: number;
-        oldest: number | null;
-        retrying: number;
-        parked: number;
-      }>(
-        `SELECT
-          COALESCE(SUM(parked_at IS NULL), 0) AS pending_rows,
-          COALESCE(SUM(CASE WHEN parked_at IS NULL THEN bytes END), 0) AS pending_bytes,
-          MIN(CASE WHEN parked_at IS NULL THEN COALESCE(accepted_at, 0) END) AS oldest,
-          COALESCE(SUM(parked_at IS NULL AND attempts > 0), 0) AS retrying,
-          COALESCE(SUM(parked_at IS NOT NULL), 0) AS parked
-        FROM wal`
-      )
-      .one();
-    return {
-      phase: this.cell.phase,
-      pendingRows: row.pending_rows,
-      pendingBytes: row.pending_bytes,
-      lagMs: row.oldest === null ? 0 : Math.max(0, Date.now() - row.oldest),
-      retrying: row.retrying,
-      parked: row.parked,
-    };
+  private decode(
+    signal: Signal,
+    format: Format,
+    sdkName: string | null,
+    body: ArrayBuffer
+  ): Array<{ metadata: string; parquet: Uint8Array }> {
+    if (format === "pyroscope") {
+      return decode_pyroscope(
+        new Uint8Array(body),
+        sdkName,
+        numberVar(this.env.SIGIRO_MAX_INGEST_BODY_BYTES, defaultBodyLimit)
+      );
+    }
+    return decode_otlp(signal, format, new Uint8Array(body));
   }
 
   liveKeys(table: Table): string[] {
@@ -236,118 +205,56 @@ export class IngestCell extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
-    await this.apply(
-      cellStep(
-        this.cell,
-        { type: "alarm", now: Date.now() },
-        this.flushDelayMs()
-      )
-    );
-    await this.flushing;
+    await this.flush();
   }
 
-  private flushDelayMs(): number {
-    return numberVar(this.env.FLUSH_SECONDS, defaultFlushSeconds) * 1000;
-  }
-
-  private async apply(decision: ReturnType<typeof cellStep>): Promise<void> {
-    this.cell = decision.state;
-    if (decision.alarmAt !== null) {
-      await this.ctx.storage.setAlarm(decision.alarmAt);
+  private async scheduleIfNeeded(): Promise<void> {
+    const total = sumWalBytes(this.ctx.storage.sql);
+    if (total >= numberVar(this.env.FLUSH_BYTES, defaultFlushBytes)) {
+      await this.flush();
+      return;
     }
-    if (decision.flush && this.flushing === undefined) {
-      this.flushing = this.flushLoop().finally(() => {
-        this.flushing = undefined;
-      });
-    }
-  }
-
-  private async flushLoop(): Promise<void> {
-    for (;;) {
-      let next: number | null;
-      try {
-        next = (await flushPass(this.flushPort())).next;
-      } catch (error) {
-        console.error(`ingest cell flush failed: ${error}`);
-        next = Date.now() + this.flushDelayMs();
-      }
-      const decision = cellStep(
-        this.cell,
-        { type: "flushed", next },
-        this.flushDelayMs()
+    const existing = await this.ctx.storage.getAlarm();
+    if (existing === null) {
+      await this.ctx.storage.setAlarm(
+        Date.now() +
+          numberVar(this.env.FLUSH_SECONDS, defaultFlushSeconds) * 1000
       );
-      this.cell = decision.state;
-      if (decision.alarmAt !== null) {
-        await this.ctx.storage.setAlarm(decision.alarmAt);
-      }
-      if (!decision.flush) {
-        return;
-      }
     }
   }
 
-  private flushPort() {
-    const sql = this.ctx.storage.sql;
-    return {
-      now: () => Date.now(),
-      dueRows: (now: number) =>
-        sql
-          .exec<WalRow>(
-            "SELECT id, tenant, signal, format, body, bytes, attempts FROM wal WHERE parked_at IS NULL AND COALESCE(next_attempt_at, 0) <= ? ORDER BY id",
-            now
-          )
-          .toArray(),
-      decode: (row: WalRow) => {
-        const format = parseCellFormat(row.format);
-        if (format === undefined) {
-          throw new Error(`removed format ${row.format}`);
-        }
-        return decode_otlp(row.signal, format, new Uint8Array(row.body)).map(
-          (output, index) => {
-            const metadata = JSON.parse(output.metadata) as SegmentMetadata;
-            return {
-              key: objectKey(row.tenant, row.id, index, metadata.table),
-              table: metadata.table,
-              metadata,
-              parquet: output.parquet,
-            };
-          }
-        );
-      },
-      readManifest: () => readManifest(sql),
-      writeManifest: (manifest: string) => writeManifest(sql, manifest),
-      registerPending,
-      commitLive,
-      put: async (key: string, parquet: Uint8Array) => {
-        await this.env.SEGMENTS.put(key, parquet);
-      },
-      sync: async () => {
+  private async flush(): Promise<void> {
+    const rows = this.ctx.storage.sql
+      .exec<WalRow>(
+        "SELECT id, tenant, signal, format, sdk_name, body, bytes FROM wal ORDER BY id"
+      )
+      .toArray();
+    if (rows.length === 0) {
+      return;
+    }
+    let manifest = readManifest(this.ctx.storage.sql);
+    for (const row of rows) {
+      const outputs = this.decode(
+        row.signal,
+        row.format,
+        row.sdk_name,
+        row.body
+      );
+      for (const [index, output] of outputs.entries()) {
+        const metadata = JSON.parse(output.metadata) as SegmentMetadata;
+        const key = objectKey(row.tenant, row.id, index, metadata.table);
+        manifest = registerPending(manifest, key, metadata.table);
+        writeManifest(this.ctx.storage.sql, manifest);
         await this.ctx.storage.sync?.();
-      },
-      retire: (id: number) => void sql.exec("DELETE FROM wal WHERE id = ?", id),
-      backoff: (id: number, attempts: number, nextAt: number, reason: string) =>
-        void sql.exec(
-          "UPDATE wal SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?",
-          attempts,
-          nextAt,
-          reason,
-          id
-        ),
-      park: (id: number, reason: string, now: number) =>
-        void sql.exec(
-          "UPDATE wal SET parked_at = ?, parked_reason = ?, last_error = ? WHERE id = ?",
-          now,
-          reason,
-          reason,
-          id
-        ),
-      nextDue: () =>
-        sql
-          .exec<{ next: number | null }>(
-            "SELECT MIN(COALESCE(next_attempt_at, 0)) AS next FROM wal WHERE parked_at IS NULL"
-          )
-          .one().next,
-    };
+        await this.env.SEGMENTS.put(key, output.parquet);
+        manifest = commitLive(manifest, key, metadata);
+        writeManifest(this.ctx.storage.sql, manifest);
+        await this.ctx.storage.sync?.();
+      }
+      this.ctx.storage.sql.exec("DELETE FROM wal WHERE id = ?", row.id);
+      writeManifest(this.ctx.storage.sql, manifest);
+      await this.ctx.storage.sync?.();
+    }
   }
 }
 
@@ -360,10 +267,8 @@ export default {
     if (request.method === "GET" && url.pathname === "/v1/services") {
       return servicesRoute(request, env);
     }
-    if (request.method === "GET" && url.pathname === "/health") {
-      return healthRoute(request, env);
-    }
-    const route = routeSignal(url.pathname);
+    const pyroscope = pyroscopePaths.has(url.pathname);
+    const route = pyroscope ? "profiles" : routeSignal(url.pathname);
     if (request.method !== "POST" || route === undefined) {
       return new Response("not found", { status: 404 });
     }
@@ -373,9 +278,18 @@ export default {
       return new Response("request body exceeds ingest limit", { status: 413 });
     }
     const contentType = mediaType(request.headers.get("content-type"));
-    const format = parseFormat(contentType);
+    const format = pyroscope ? "pyroscope" : parseFormat(contentType);
     if (format === undefined) {
       return new Response("unsupported content type", { status: 415 });
+    }
+    if (
+      pyroscope &&
+      contentType !== "multipart/form-data" &&
+      !pyroscopeContentTypes.includes(contentType)
+    ) {
+      return new Response("unsupported Pyroscope content type", {
+        status: 400,
+      });
     }
     const auth = await authenticate(request, env, ingestScope);
     if (auth.status !== 200) {
@@ -385,6 +299,18 @@ export default {
     if (decoded.status !== 200) {
       return new Response(decoded.detail, { status: decoded.status });
     }
+    const body =
+      pyroscope && contentType === "multipart/form-data"
+        ? await profileField(
+            decoded.body,
+            request.headers.get("content-type") ?? ""
+          )
+        : decoded.body;
+    if (body === undefined) {
+      return new Response("profile form field not found in multipart body", {
+        status: 400,
+      });
+    }
     const id = env.INGEST_CELL.idFromName(cellName(auth.tenant, route));
     const stub = env.INGEST_CELL.get(id);
     const params = new URLSearchParams({
@@ -392,10 +318,14 @@ export default {
       tenant: auth.tenant,
       format,
     });
+    const name = url.searchParams.get("name");
+    if (pyroscope && name !== null) {
+      params.set("name", name);
+    }
     try {
       return await stub.fetch(`https://cell.invalid/ingest?${params}`, {
         method: "POST",
-        body: decoded.body,
+        body,
       });
     } catch (error) {
       return new Response(`ingest cell unavailable: ${String(error)}`, {
@@ -470,33 +400,6 @@ async function servicesRoute(request: Request, env: Env): Promise<Response> {
   return Response.json({ services });
 }
 
-async function healthRoute(request: Request, env: Env): Promise<Response> {
-  const auth = await authenticate(request, env, [queryScope, ingestScope]);
-  if (auth.status !== 200) {
-    return problem(
-      auth.status,
-      auth.status === 401 ? "unauthorized" : "forbidden",
-      auth.body
-    );
-  }
-  const signals: Signal[] = ["traces", "logs", "metrics", "profiles"];
-  const cells = Object.fromEntries(
-    await Promise.all(
-      signals.map(async (signal) => {
-        const cell = env.INGEST_CELL.get(
-          env.INGEST_CELL.idFromName(cellName(auth.tenant, signal))
-        );
-        return [signal, await cell.status()] as const;
-      })
-    )
-  );
-  const parked = Object.values(cells).some((cell) => cell.parked > 0);
-  return Response.json(
-    { status: parked ? "degraded" : "ready", ingest: cells },
-    { headers: { "cache-control": "no-store" } }
-  );
-}
-
 async function runQuery(
   env: Env,
   tenant: TenantId,
@@ -539,7 +442,9 @@ function mediaType(contentType: string | null): string {
 }
 
 function parseCellFormat(value: string | null): Format | undefined {
-  return value === "protobuf" || value === "json" ? value : undefined;
+  return value === "protobuf" || value === "json" || value === "pyroscope"
+    ? value
+    : undefined;
 }
 
 async function decodedBody(
@@ -576,6 +481,22 @@ async function decodedBody(
     offset += chunk.byteLength;
   }
   return { status: 200, body: body.buffer };
+}
+
+async function profileField(
+  body: ArrayBuffer,
+  contentType: string
+): Promise<ArrayBuffer | undefined> {
+  const form = await new Response(body, {
+    headers: { "content-type": contentType },
+  }).formData();
+  const field = form.get("profile");
+  if (field === null) {
+    return undefined;
+  }
+  return typeof field === "string"
+    ? new TextEncoder().encode(field).buffer
+    : await field.arrayBuffer();
 }
 
 function routeSignal(pathname: string): Signal | undefined {
@@ -620,7 +541,7 @@ function parseFormat(mediaType: string): "protobuf" | "json" | undefined {
 async function authenticate(
   request: Request,
   env: Env,
-  scope: string | string[]
+  scope: string
 ): Promise<
   { status: 200; tenant: TenantId } | { status: 401 | 403; body: string }
 > {
@@ -667,10 +588,8 @@ async function authenticate(
   if (tenant === undefined) {
     return { status: 401, body: "invalid bearer token" };
   }
-  const granted = claims.scope.split(/\s+/u);
-  const accepted = Array.isArray(scope) ? scope : [scope];
-  if (!accepted.some((needed) => granted.includes(needed))) {
-    return { status: 403, body: `missing ${accepted.join(" or ")} scope` };
+  if (!claims.scope.split(/\s+/u).includes(scope)) {
+    return { status: 403, body: `missing ${scope} scope` };
   }
   return { status: 200, tenant };
 }
@@ -790,11 +709,9 @@ function writeManifest(sql: SqlStorage, manifest: string): void {
   );
 }
 
-function pendingWalBytes(sql: SqlStorage): number {
+function sumWalBytes(sql: SqlStorage): number {
   const row = sql
-    .exec<{ total: number }>(
-      "SELECT COALESCE(SUM(bytes), 0) AS total FROM wal WHERE parked_at IS NULL"
-    )
+    .exec<{ total: number }>("SELECT COALESCE(SUM(bytes), 0) AS total FROM wal")
     .one();
   return row.total;
 }

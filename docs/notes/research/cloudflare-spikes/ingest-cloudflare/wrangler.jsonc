@@ -1,0 +1,8 @@
+{
+  "name": "sigiro-spike-ingest",
+  "main": "index.js",
+  "compatibility_date": "2026-09-01",
+  "durable_objects": { "bindings": [{ "name": "CELL", "class_name": "Cell" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Cell"] }],
+  "r2_buckets": [{ "binding": "SEGMENTS", "bucket_name": "sigiro-spike-segments-wnam" }]
+}

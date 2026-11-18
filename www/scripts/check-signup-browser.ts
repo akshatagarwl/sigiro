@@ -14,8 +14,7 @@ import assert from "node:assert/strict";
  *
  *   aube run check:signup
  *
- * Requires SIGIRO_SIGNUP_INBOX (the inbox address) and the `agentmail` CLI
- * authenticated for that inbox.
+ * Requires the `agentmail` CLI to be authenticated for INBOX.
  */
 import { spawn } from "node:child_process";
 
@@ -23,20 +22,8 @@ import { chromium, type Page } from "playwright";
 
 import { INSTALL_COMMAND } from "../src/lib/site.shared";
 
-/** The AgentMail inbox address to read, from the environment; never hardcoded. */
-function requiredInbox(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    console.error(
-      `${name} must name the AgentMail inbox to read (for example you@agentmail.to)`
-    );
-    process.exit(2);
-  }
-  return value;
-}
-
 const BASE = process.env.SIGIRO_SIGNUP_BASE ?? "https://sigiro.com";
-const INBOX = requiredInbox("SIGIRO_SIGNUP_INBOX");
+const INBOX = process.env.SIGIRO_SIGNUP_INBOX ?? "akshat@agentmail.to";
 const HEADLESS = process.env.SIGIRO_SIGNUP_HEADED !== "1";
 
 const run = (command: string, args: readonly string[]): Promise<string> =>
@@ -181,15 +168,7 @@ const main = async () => {
     step("code requested", INBOX);
 
     const otpForm = page.locator("#otp-form");
-    await otpForm
-      .waitFor({ state: "visible", timeout: 20000 })
-      .catch(async (cause: Error) => {
-        const shown = await page.locator("#error, #status").allTextContents();
-        throw new Error(
-          `no OTP form; the page says: ${shown.join(" / ") || "nothing"}`,
-          { cause }
-        );
-      });
+    await otpForm.waitFor({ state: "visible", timeout: 20000 });
     step("OTP form revealed");
 
     const receipt = await waitForOTP(requestedAt);
@@ -277,28 +256,6 @@ const main = async () => {
     );
     assert.equal(await guide.count(), 1);
     step("success screen hands the existing workspace to the CLI");
-
-    // The success screen's dashboard link must not ask for a second sign-in:
-    // the dashboard sees the session and fetches its token without a click.
-    const dashboard = success.locator('a[href="/dashboard/"]');
-    assert.equal(await dashboard.count(), 1);
-    await dashboard.click();
-    await page.waitForURL(/\/dashboard\/(\?.*)?$/, { timeout: 30000 });
-    const overview = page.locator('[data-state="ready"], [data-state="empty"]');
-    await overview.first().waitFor({ state: "visible", timeout: 45000 });
-    assert.equal(
-      await page.locator('[data-state="signed-out"]').count(),
-      0,
-      "the dashboard asked for a second sign-in"
-    );
-    const workspace =
-      (await page.locator("[data-workspace]").getAttribute("data-workspace")) ??
-      "";
-    assert.equal(workspace, organization.organization.name ?? "");
-    step(
-      "dashboard opens signed in to the same workspace",
-      `${workspace}, ${await overview.first().getAttribute("data-state")}`
-    );
 
     if (failures.length > 0)
       throw new Error(`browser reported failures:\n  ${failures.join("\n  ")}`);

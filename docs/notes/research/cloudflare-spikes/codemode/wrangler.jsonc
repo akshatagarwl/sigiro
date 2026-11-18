@@ -1,0 +1,6 @@
+{
+  "name": "spike-codemode",
+  "main": "index.js",
+  "compatibility_date": "2026-09-01",
+  "worker_loaders": [{ "binding": "LOADER" }]
+}

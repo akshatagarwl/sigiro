@@ -1,0 +1,18 @@
+---
+import { Dashboard } from '@/components/dashboard/dashboard';
+import Base from '@/layouts/Base.astro';
+import 'uplot/dist/uPlot.min.css';
+
+/**
+ * `/dashboard/` — a tenant's telemetry, sliced in the browser.
+ *
+ * The page asks the hosted query API for a bounded window of aggregates and
+ * capped rows, loads them into DuckDB-WASM, and runs every filter and the SQL
+ * box locally. `client:only` because there is nothing to render without a
+ * token, and DuckDB-WASM loads only on this route.
+ */
+---
+
+<Base title="Telemetry · Sigiro" description="Your Sigiro telemetry, queried in the browser with DuckDB-WASM." noindex>
+  <Dashboard client:only="react" />
+</Base>

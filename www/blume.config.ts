@@ -1,4 +1,9 @@
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { brotliCompress, constants as zlib } from "node:zlib";
 
 import sitemap from "@astrojs/sitemap";
 import type { AstroIntegration } from "astro";
@@ -7,6 +12,7 @@ import { script } from "blume/analytics";
 import { cloudflare } from "blume/deploy";
 import { openapi } from "blume/reference";
 import { orama } from "blume/search";
+import * as Schema from "effect/Schema";
 
 import { CF_ANALYTICS_TOKEN, SITE } from "./src/lib/site";
 
@@ -31,7 +37,7 @@ import { CF_ANALYTICS_TOKEN, SITE } from "./src/lib/site";
  * wrangler config and in no built code at all. `injectRoute` is the supported way
  * in, and the way Blume mounts its own `.well-known/mcp.json` endpoint.
  */
-const sigiro = ({ binary }: { binary: boolean }): AstroIntegration => ({
+const sigiro = (): AstroIntegration => ({
   name: "sigiro",
   hooks: {
     "astro:config:setup": ({ injectRoute, injectScript, updateConfig }) => {
@@ -81,38 +87,47 @@ const sigiro = ({ binary }: { binary: boolean }): AstroIntegration => ({
           },
         },
       });
-      // The binary's copy is static and offline: no R2 download route and no
-      // WebMCP client, which signs in against sigiro.com.
-      if (binary) return;
       injectRoute({
         pattern: "/dl/[...key]",
         entrypoint: fileURLToPath(new URL("./src/dl.ts", import.meta.url)),
       });
       injectScript("page", "import '../src/webmcp/browser.ts';");
     },
+    /**
+     * DuckDB-WASM for `/dashboard/`, self-hosted under
+     * `/duckdb/<version>/`. Only the exception-handling build ships: every
+     * browser the site supports has Wasm exceptions, and the module is 36 MB —
+     * over the 25 MiB Workers asset cap — so it is stored brotli-compressed and
+     * `src/worker.ts` serves it with `content-encoding: br`.
+     */
+    "astro:build:done": async ({ dir }) => {
+      const require = createRequire(import.meta.url);
+      const dist = dirname(
+        require.resolve("@duckdb/duckdb-wasm/dist/duckdb-eh.wasm")
+      );
+      const { version } = Schema.decodeUnknownSync(
+        Schema.fromJsonString(Schema.Struct({ version: Schema.String }))
+      )(await readFile(join(dist, "..", "package.json"), "utf8"));
+      const out = fileURLToPath(new URL(`duckdb/${version}/`, dir));
+      await mkdir(out, { recursive: true });
+      for (const file of [
+        "duckdb-browser-eh.worker.js",
+        "duckdb-browser-eh.worker.js.map",
+      ])
+        await copyFile(join(dist, file), join(out, file));
+      const wasm = await readFile(join(dist, "duckdb-eh.wasm"));
+      await writeFile(
+        join(out, "duckdb-eh.wasm.br"),
+        await promisify(brotliCompress)(wasm, {
+          params: {
+            [zlib.BROTLI_PARAM_QUALITY]: 9,
+            [zlib.BROTLI_PARAM_SIZE_HINT]: wasm.length,
+          },
+        })
+      );
+    },
   },
 });
-
-/**
- * `SIGIRO_DOCS_TARGET=binary` builds the copy of these docs the sigiro binary
- * embeds and serves at `/docs/` (`src/docs.rs`; `mise run docs-build`).
- *
- * Same content, same URLs, different shell around them:
- *
- * - Static output under `deployment.base` `/docs` instead of a Cloudflare
- *   server build under `basePath` `/docs`. The base moves *everything* under
- *   `/docs` — `_astro/`, `blume-search.json`, `llms.txt` — so the binary owns
- *   one prefix and nothing at its root. A page URL is identical either way.
- * - No landing page or sign-in pages (`content.pages` names a directory that
- *   does not exist), no `/dl` route, no WebMCP script, no MCP endpoint (static),
- *   no `@astrojs/sitemap` and no Cloudflare analytics beacon: a self-hosted
- *   server must not phone home when someone reads its manual.
- *
- * Unset, every branch below takes the sigiro.com value, so the Worker build is
- * unchanged. Read once here; Blume evaluates this module twice per run and the
- * environment is the same both times.
- */
-const BINARY = process.env.SIGIRO_DOCS_TARGET === "binary";
 
 /**
  * sigiro.com — the landing page at `/` and the docs at `/docs/*`.
@@ -150,9 +165,6 @@ export default defineConfig({
 
   logo: { text: "sigiro", href: "/" },
 
-  /** The binary embeds the docs only, not `pages/`; see `BINARY`. */
-  content: BINARY ? { pages: "pages-binary-none" } : undefined,
-
   /**
    * The docs sit under `/docs`, the landing page owns `/`.
    *
@@ -166,7 +178,7 @@ export default defineConfig({
    * days at docs.sigiro.com; that Worker, its routes and its custom domain are
    * deleted, so the hostname no longer resolves at all.
    */
-  basePath: BINARY ? undefined : "/docs",
+  basePath: "/docs",
 
   /**
    * `sigiro()` is the alias + `/dl` route, above.
@@ -200,9 +212,7 @@ export default defineConfig({
    * after `astro build` returns, so no integration hook fires late enough to
    * catch them. `scripts/serve-agent-files.mjs` moves those four and says so.
    */
-  integrations: BINARY
-    ? [sigiro({ binary: true })]
-    : [sigiro({ binary: false }), sitemap()],
+  integrations: [sigiro(), sitemap()],
 
   /**
    * Retired URLs. Two groups, two different provenances — see the comment above
@@ -340,8 +350,9 @@ export default defineConfig({
    * Chinese, Japanese and Korean, and deliberately not the European locales.
    *
    * Picked from prior art rather than taste. Of the comparable projects checked
-   * on 2026-08-12, OpenTelemetry ships zh/ja/ko/fr/es/pt and another mature project ships
-   * zh/ja/ko/fr/es — the exact intersection is zh, ja, ko. Neither translates German,
+   * on 2026-08-12, OpenTelemetry ships zh/ja/ko/fr/es/pt and ClickHouse ships
+   * zh/ja/ko/fr/es — the exact intersection is zh, ja, ko. SigNoz, the closest
+   * peer by stage, ships English only. Neither mature project translates German,
    * which is the assumption this measurement overturned.
    *
    * The three chosen are where translation actually earns its keep: developers in
@@ -436,45 +447,49 @@ export default defineConfig({
    * plan the RUM beacon excludes visitors served from EU/EEA data centres by
    * default, so EU locales are the ones this will under-report.
    */
-  analytics: BINARY
-    ? []
-    : [
-        script({
-          src: "https://static.cloudflareinsights.com/beacon.min.js",
-          strategy: "defer",
-          attributes: {
-            "data-cf-beacon": `{"token": "${CF_ANALYTICS_TOKEN}"}`,
-          },
-        }),
-      ],
+  analytics: [
+    script({
+      src: "https://static.cloudflareinsights.com/beacon.min.js",
+      strategy: "defer",
+      attributes: {
+        "data-cf-beacon": `{"token": "${CF_ANALYTICS_TOKEN}"}`,
+      },
+    }),
+  ],
 
-  deployment: BINARY
-    ? { base: "/docs", site: "https://sigiro.com" }
-    : cloudflare({
-        site: "https://sigiro.com",
-        // Named rather than left to auto-detection, which keys off CI environment
-        // variables and would pick nothing on a laptop — the dev server warned that
-        // there was no adapter and a build would fail.
-        //
-        // `server` and not `static` because the MCP route below is request-time.
-        output: "server",
+  deployment: cloudflare({
+    site: "https://sigiro.com",
+    // Named rather than left to auto-detection, which keys off CI environment
+    // variables and would pick nothing on a laptop — the dev server warned that
+    // there was no adapter and a build would fail.
+    //
+    // `server` and not `static` because the MCP route below is request-time.
+    output: "server",
 
-        /**
-         * `server` because the injected `/dl/[...key]` route and the MCP endpoint are
-         * both request-time. Every HTML route still prerenders.
-         *
-         * On the artifact-location defect this combination has, and what is and is not
-         * done about it, see the `integrations` note above.
-         */
-      }),
+    /**
+     * `server` because the injected `/dl/[...key]` route and the MCP endpoint are
+     * both request-time. Every HTML route still prerenders.
+     *
+     * On the artifact-location defect this combination has, and what is and is not
+     * done about it, see the `integrations` note above.
+     */
+  }),
 
   /**
-   * shadcn/ui's neutral palette, so the docs match the rest of the site
-   * (theme.css). Geist is shadcn's default typeface too.
+   * The three ink/accent values from www/DESIGN.md, and nothing else.
+   *
+   * The accent is the one colour that means anything on this brand — §7 — and
+   * it flips with the theme. Geist is the pairing the design language is written
+   * for. Everything past this is Blume's own theme, on purpose: matching the
+   * landing page pixel for pixel was what the 182-line stylesheet did, and it is
+   * exactly the custom code this move is meant to delete.
    */
   theme: {
-    accent: { light: "#171717", dark: "#E5E5E5" },
-    background: { light: "#FFFFFF", dark: "#0A0A0A" },
+    accent: { light: "#4568FF", dark: "#93B0FF" },
+    background: { light: "#EFEEEA", dark: "#141312" },
+    // The roles are display/body/mono, and both Geist faces are in Blume's
+    // curated set — so the pairing the design language is written for comes
+    // across with no self-hosting to arrange.
     fonts: { display: "geist", body: "geist", mono: "geist-mono" },
     mode: "system",
   },
@@ -582,7 +597,7 @@ export default defineConfig({
      * already or did not want.
      */
     mcp: {
-      enabled: !BINARY,
+      enabled: true,
       route: "/mcp/docs",
       name: "sigiro-docs",
       instructions:

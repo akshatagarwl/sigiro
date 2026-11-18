@@ -5,7 +5,7 @@
 //! `Config.masking` before tokenization, so identical-shaped logs collapse to a
 //! single template instead of spawning a distinct cluster per value.
 //!
-//! Widely used for production log clustering. Reference:
+//! Used by Datadog, Grafana Loki, IBM. Reference:
 //! "Drain: An Online Log Parsing Approach with Fixed Depth Tree" (2017).
 
 use itertools::Itertools;

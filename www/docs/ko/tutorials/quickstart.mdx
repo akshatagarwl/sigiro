@@ -1,6 +1,8 @@
 ---
 title: 빠른 시작
-description: 명령 하나로 sigiro를 실행하고 OpenTelemetry를 가리킨 다음, 최근 실패를 SQL로 조회하십시오. 5분이면 되고 컬렉터도 설정 파일도 필요 없습니다.
+description: >-
+  docker 명령 하나로 sigiro를 실행하고 OpenTelemetry를 가리킨 다음, 무엇이 왜 변했는지 물어보십시오. 5분이면 되고
+  컬렉터도 설정 파일도 필요 없습니다.
 sidebar:
   order: 1
 ---
@@ -116,9 +118,6 @@ curl http://localhost:9999/v1/services
 응답은 `services` 배열을 포함한 JSON 객체입니다. 첫 요청 이후 몇 초 내에 해당
 배열에 사용자 서비스가 나타납니다. 배열이 비어 있다면, HTTP를 통한 OTLP의
 경우 포트가 `4318`인지, gRPC를 통한 OTLP의 경우 `4317`인지 확인하십시오.
-
-같은 텔레메트리를 브라우저에서 보려면
-[localhost:9999/dashboard/](http://localhost:9999/dashboard/)를 여십시오.
 
 ## 3. 최근 오류 조회
 

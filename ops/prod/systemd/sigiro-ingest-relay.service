@@ -1,0 +1,26 @@
+[Unit]
+Description=Tenant-scoped Sigiro OTLP OAuth relay
+After=network-online.target sigiro.service
+Wants=network-online.target
+Requires=sigiro.service
+
+[Service]
+Type=simple
+User=sigiro
+Group=sigiro
+EnvironmentFile=/etc/sigiro/secrets/ingest-relay.env
+ExecStart=/opt/node/current/bin/node /usr/local/libexec/sigiro-ingest-relay.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

@@ -3,15 +3,10 @@ pub mod alerts;
 pub mod auth;
 pub mod client;
 pub mod config;
-pub(crate) mod dashboard;
 mod declared_schema;
-pub mod disk_gate;
-pub(crate) mod docs;
-pub mod docs_mcp;
 pub mod federate;
 
 pub mod ingest;
-pub mod ingest_keys;
 pub mod inserter;
 pub mod mcp;
 
@@ -19,22 +14,12 @@ pub mod duckdb_json;
 pub mod oauth;
 pub mod otel;
 pub mod pool;
-#[cfg(not(target_os = "android"))]
 pub mod profiling;
-#[cfg(target_os = "android")]
-pub mod profiling {
-    /// Self-profiling is unavailable on Android (no jemalloc, no pprof-rs).
-    pub struct ProfilingHandle;
-    pub fn start_profiling() -> anyhow::Result<Option<ProfilingHandle>> {
-        Ok(None)
-    }
-}
 pub(crate) mod quack;
 pub mod responses;
 pub mod runtime_metrics;
 pub mod schema;
 pub mod server;
-pub(crate) mod static_site;
 pub mod storage;
 pub mod types;
 pub mod workload;

@@ -83,24 +83,21 @@ export const INSTALL_COMMAND =
  * themselves.
  *
  * Every claim in it is checked against the live site rather than written from
- * memory: `/install` is a static asset that serves a real shell script, and
- * `sigiro mcp` is a stdio MCP server in that same binary. It must be the local
- * one: the prompt starts a local server, and the hosted `https://sigiro.com/mcp`
- * reads a hosted workspace, which would answer "no services" about telemetry
- * that only ever reached localhost. An install prompt that names an endpoint
+ * memory: `/install` is a static asset that serves a real shell script, `/mcp`
+ * answers 401 until authorized, and `/.well-known/agent-configuration` is
+ * served and documents the issuer. An install prompt that names an endpoint
  * which does not exist wastes a reader's agent run and their trust.
  *
  * Deliberately imperative and short. It is read by a model, not a person, and a
  * prompt that opens with marketing gives the model nothing to act on.
  */
 export const AGENT_PROMPT =
-  ("Install and run sigiro, the observability data layer, on this machine. " +
+  ("Install and run sigiro, the open-source observability data layer, on this machine. " +
     "Run: curl -fsSL https://sigiro.com/install | sh — then start it with: sigiro serve. " +
     "It listens on 4317 and 4318 for OTLP and on 9999 for its HTTP API. " +
     "Point this project\u2019s OpenTelemetry exporter at http://localhost:4318. " +
-    "Then register `sigiro mcp` as a stdio MCP server (for Claude Code: " +
-    "claude mcp add sigiro -- sigiro mcp) so you can query the telemetry directly " +
-    "with its list_services and run_query tools.") as const;
+    "Then add https://sigiro.com/mcp as an MCP server so you can query the telemetry " +
+    "directly; it uses OAuth device flow, so open the URL it prints to authorize.") as const;
 
 /**
  * Everything after "start it" is the same whichever way you started it, so the
@@ -188,11 +185,9 @@ export const HOW_SESSIONS = {
     run: [
       {
         cmd: "cat models.sql",
-        out: `SELECT s.span_attributes ->> 'gen_ai.request.model' AS model,
-       count(DISTINCT s.span_id) AS calls, max(s.duration) AS slowest
-FROM sigiro_spans s JOIN sigiro_logs l USING (trace_id)
-WHERE s.service_name = 'checkout' AND l.severity_number >= 17
-  AND s.timestamp > now() - INTERVAL '30 minutes'
+        out: `SELECT model, count(*) AS calls, max(duration) AS slowest
+FROM spans JOIN logs USING (trace_id)
+WHERE service = 'checkout' AND status = 'error'
 GROUP BY model ORDER BY slowest DESC`,
       },
       {
@@ -366,11 +361,6 @@ export const NAV_HREFS = {
    * `openapi.route` in blume.config.ts. `/docs/api` still redirects here.
    */
   reference: "/docs/reference",
-  /**
-   * The hosted workspace's dashboard. Nothing else on the site linked to it,
-   * so a reader who signed up had to know the URL to see their data.
-   */
-  dashboard: "/dashboard/",
 } as const;
 
 /**
@@ -431,7 +421,7 @@ export const READ_ALL_THREE = `Read ${SITE_SHARED.url}, the documentation at ${S
  * Mirrors `i18n.locales` in blume.config.ts, and must stay in step with it: a
  * locale with docs but no landing page sends a reader from Chinese docs to an
  * English marketing page, and a landing page with no docs is worse. The set was
- * picked from prior art — OpenTelemetry ships zh/ja/ko/fr/es/pt, another mature project
+ * picked from prior art — OpenTelemetry ships zh/ja/ko/fr/es/pt, ClickHouse
  * ships zh/ja/ko/fr/es, and the intersection is these three.
  *
  * `en` is absent on purpose: it is served at `/` rather than `/en`, so it is not

@@ -1,0 +1,10 @@
+# Validation and code hygiene
+
+This policy applies to the entire repository: Rust, the website, auth, and the coding agent.
+
+- Do not add code comments, unit tests, smoke-only checks, mocks, or simulated service responses. Keep existing real end-to-end runs; do not remove historical coverage just because its filename contains `test`. Tooling-required directives and generated or vendored code are not authored application comments.
+- Validate changes by driving the running system against real dependencies, including a failure case. Record traces, `calldiff` call-stack changes, command output, cleanup results, and independent Sigiro read-back when the task claims a safety verdict. Typechecking, linting, and health checks are prerequisites, not evidence of successful task execution.
+- JavaScript and TypeScript use Aube with the repository-root `oxfmt.config.ts` and `oxlint.config.ts`; run `aube run fmt` and `aube run lint` from the root. Effect-specific lint rules apply only to auth, anti-slop rules only to the website, and the agent's policy rules only to the agent. The agent's `.npmrc` exempts only `pino@9.14.0` from Aube's trust-downgrade check: its upstream tag is maintainer-signed and the npm tarball's SHA-512 matches registry integrity, but that manual backport has no npm provenance. Reassess the exception when the locked dependency changes. Rust continues to use its `mbx` quality gates; Oxlint does not lint Rust.
+- When legacy comments or synthetic checks exist, avoid wholesale deletion in an unrelated PR. A filename or a passing test alone does not prove a real-system run. Review new code for violations and migrate old code deliberately.
+
+The agent package's Oxlint rule rejects code comments and unit/mock/smoke files and constructs. Existing website rules require `SAFETY:` explanations for type assertions; do not disable that rule to implement a blanket comment ban. Resolve that conflict in a dedicated change before promising repository-wide mechanical enforcement of no comments.

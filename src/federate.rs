@@ -87,9 +87,7 @@ pub(crate) fn resolve_edges(cli_edges: &[String]) -> Result<Vec<Edge>> {
         "no edges resolved for the federated query: no --edge/SIGIRO_EDGES override was \
          given, and tailnet discovery found no peer tagged tag:sigiro-edge. Refusing to run \
          a federated query against zero edges — pass --edge name=host:port, set SIGIRO_EDGES, \
-         or tag a tailnet peer tag:sigiro-edge. `sigiro query` only federates self-hosted \
-         edges; to query hosted sigiro.com or one local server, use `sigiro mcp` or POST \
-         the SQL to /v1/query (see https://sigiro.com/docs/reference/cli#query)."
+         or tag a tailnet peer tag:sigiro-edge."
     );
 
     // ponytail: best-effort textual normalization only (lowercase +
@@ -595,7 +593,7 @@ fn plan_query(conn: &duckdb::Connection, sql: &str) -> Result<ParsedQuery> {
                     .is_some_and(|o| !o.is_empty());
                 anyhow::ensure!(!has_order_bys, "ordered aggregates are not federatable");
                 let function_name = field_str(item, "function_name")?.to_lowercase();
-                // DuckDB v2 represents each function argument as a named
+                // Cyanoptera represents each function argument as a named
                 // wrapper around its expression. Federated aggregates accept
                 // positional expressions only.
                 let arguments = field(item, "arguments")?

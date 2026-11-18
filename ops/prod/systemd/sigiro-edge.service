@@ -1,0 +1,26 @@
+[Unit]
+Description=Sigiro deny edge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sigiro-edge
+Group=sigiro-edge
+ExecStart=/usr/sbin/nginx -c /etc/sigiro/nginx-edge.conf -g "daemon off;"
+ExecStartPost=/usr/bin/curl --fail --silent --show-error --retry 20 --retry-delay 1 --retry-all-errors http://127.0.0.1:8080/health
+Restart=on-failure
+RestartSec=3s
+CPUQuota=5%
+MemoryMax=64M
+MemorySwapMax=64M
+TasksMax=32
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
