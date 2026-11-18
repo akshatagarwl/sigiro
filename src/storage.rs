@@ -1,20 +1,15 @@
+use crate::sql::escape_sql_string;
 use crate::types::TenantId;
 use anyhow::{Context, Result};
 use camino::Utf8Path;
 use duckdb::Connection;
 use nutype::nutype;
 use secrecy::{ExposeSecret, SecretString};
-use sigiro_core::sql::escape_sql_string;
 use tracing::instrument;
 use url::{Position, Url};
 
-const EXPECTED_DUCKDB_VERSION: &str = "v2.0.0";
-
-/// Every DuckLake attach sets AUTOMATIC_MIGRATION, so bumping this pin migrates
-/// existing catalogs forward on first attach (v2.0.0 moved `1.1-dev1` to `1.1`)
-/// and the previous binary can no longer read them. Back up hosted catalogs
-/// before deploying a bump.
-const EXPECTED_DUCKLAKE_VERSION: &str = "417a9117f5";
+const EXPECTED_DUCKDB_VERSION: &str = "v2.0.0-alpha41489";
+const EXPECTED_DUCKLAKE_VERSION: &str = "eb7b95df82";
 
 /// Initialize DuckLake with a DuckDB-native file catalog + local Parquet (zero
 /// config). Tables accessible as `lake.sigiro_*`.
@@ -43,9 +38,7 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
     // Uses catalog.ducklake (DuckDB native catalog) instead of SQLite
     // because the appender API is tested and verified to work with
     // DuckDB file catalogs (see tests/ducklake_appender_test.rs).
-    let attach_sql = format!(
-        "ATTACH 'ducklake:{project_dir_str}/catalog.ducklake' AS lake (AUTOMATIC_MIGRATION true)"
-    );
+    let attach_sql = format!("ATTACH 'ducklake:{project_dir_str}/catalog.ducklake' AS lake");
     conn.execute_batch(&attach_sql)
         .context("failed to attach DuckLake catalog")?;
     tracing::info!("DuckLake attached — catalog: DuckDB file, data: local Parquet");
@@ -263,7 +256,7 @@ impl StorageConfig {
         matches!(self.data, DataLocation::S3(_))
     }
 
-    pub fn catalog_url(&self) -> &str {
+    pub(crate) fn catalog_url(&self) -> &str {
         self.catalog_url.expose_secret()
     }
 }
@@ -443,8 +436,8 @@ pub fn tenant_metadata_schema(tenant_id: &str) -> Result<String> {
 /// Nesting under `tenants/` (rather than `<data_dir>/<tenant_id>` directly) keeps
 /// per-tenant dirs from ever colliding with sibling top-level dirs (the default
 /// project's `default/`, the shared `extensions/` dir). Shared by `ProjectPool`
-/// (the actual per-tenant connection); catalog maintenance must use the same
-/// tenant layout.
+/// (the actual per-tenant connection) and the diagnose handler's data-existence
+/// check so the two can never disagree on layout.
 pub fn tenant_data_dir(data_dir: &Utf8Path, tenant_id: &str) -> Result<camino::Utf8PathBuf> {
     let tenant_id = sanitize_tenant_id(tenant_id)?;
     Ok(data_dir.join("tenants").join(tenant_id.as_ref()))
@@ -490,8 +483,7 @@ pub fn distributed_attach_sql(
 
     let attach_sql = format!(
         "ATTACH 'ducklake:postgres:{catalog_path_sql}' AS lake \
-         (METADATA_SCHEMA '{metadata_schema_sql}', DATA_PATH '{}', CREATE_IF_NOT_EXISTS true, \
-         AUTOMATIC_MIGRATION true)",
+         (METADATA_SCHEMA '{metadata_schema_sql}', DATA_PATH '{}', CREATE_IF_NOT_EXISTS true)",
         escape_sql_string(&data_path)
     );
 
@@ -546,6 +538,7 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
             return Ok(None);
         }
     };
+
     let data = if s3_bucket.is_empty() {
         anyhow::ensure!(
             configured_s3_fields.is_empty(),
@@ -567,7 +560,6 @@ pub fn load_config() -> Result<Option<StorageConfig>> {
         DataLocation::S3(S3Config::new(bucket, region, endpoint, key_id, secret)?)
     };
 
-    validate_hosted_catalog_tls(&catalog_url)?;
     Ok(Some(StorageConfig::new(catalog_url, data)?))
 }
 
@@ -584,32 +576,6 @@ fn resolve_with_aws_fallback(
     } else {
         Ok(primary)
     }
-}
-
-fn validate_hosted_catalog_tls(uri: &str) -> Result<()> {
-    let parsed = Url::parse(uri).context("SIGIRO_CATALOG_URL must be a PostgreSQL URL")?;
-    anyhow::ensure!(
-        matches!(parsed.scheme(), "postgres" | "postgresql"),
-        "SIGIRO_CATALOG_URL must use postgres:// or postgresql://"
-    );
-    let mut sslmode = None;
-    let mut sslrootcert = None;
-    for (key, value) in parsed.query_pairs() {
-        match key.as_ref() {
-            "sslmode" => sslmode = Some(value.into_owned()),
-            "sslrootcert" => sslrootcert = Some(value.into_owned()),
-            _ => {}
-        }
-    }
-    anyhow::ensure!(
-        sslmode.as_deref() == Some("verify-full"),
-        "hosted PostgreSQL requires sslmode=verify-full"
-    );
-    anyhow::ensure!(
-        sslrootcert.as_deref().is_some_and(|path| !path.is_empty()),
-        "hosted PostgreSQL requires sslrootcert"
-    );
-    Ok(())
 }
 
 /// Convert a `postgresql://user:***@host:port/dbname` URI to a BARE libpq
@@ -648,22 +614,8 @@ pub(crate) fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
                 anyhow::bail!("invalid postgres URI: expected non-empty database name");
             }
 
-            let mut sslmode = None;
-            let mut sslrootcert = None;
-            for (key, value) in parsed.query_pairs() {
-                match key.as_ref() {
-                    "sslmode" => sslmode = Some(value.into_owned()),
-                    "sslrootcert" => sslrootcert = Some(value.into_owned()),
-                    _ => {}
-                }
-            }
-            let tls = match (sslmode, sslrootcert) {
-                (Some(mode), Some(root)) => format!(" sslmode={mode} sslrootcert={root}"),
-                _ => String::new(),
-            };
-
             Ok(format!(
-                "dbname={dbname} host={host} user={user} password={password} port={port}{tls}"
+                "dbname={dbname} host={host} user={user} password={password} port={port}"
             ))
         } else {
             // Already libpq key=value — strip any leading `postgres:` so the
@@ -688,13 +640,7 @@ pub(crate) fn resolve_extension_dir(data_dir: &Utf8Path) -> camino::Utf8PathBuf 
         .ok()
         .filter(|path| !path.is_empty())
         .map(camino::Utf8PathBuf::from)
-        .unwrap_or_else(|| {
-            if matches!(crate::config::CATALOG_URL.value(), Ok(value) if !value.is_empty()) {
-                crate::config::duckdb_cache_dir().expect("validated hosted DuckDB cache path")
-            } else {
-                data_dir.join("extensions")
-            }
-        })
+        .unwrap_or_else(|| data_dir.join("extensions"))
 }
 
 /// Install and load a list of DuckDB extensions, emitting a progress line
@@ -721,11 +667,9 @@ fn verify_duckdb_stack(conn: &Connection) -> Result<()> {
         duckdb_version == EXPECTED_DUCKDB_VERSION,
         "DuckDB version mismatch: linked {duckdb_version:?}, expected {EXPECTED_DUCKDB_VERSION:?}"
     );
-
     anyhow::ensure!(
         ducklake_version == EXPECTED_DUCKLAKE_VERSION,
-        "DuckLake version mismatch: loaded {ducklake_version:?}, expected \
-         {EXPECTED_DUCKLAKE_VERSION:?}"
+        "DuckLake version mismatch: loaded {ducklake_version:?}, expected {EXPECTED_DUCKLAKE_VERSION:?}"
     );
     Ok(())
 }
@@ -781,16 +725,82 @@ pub(crate) fn install_extensions_from(conn: &Connection, names: &[&str]) -> Resu
             i + 1,
             total,
         );
-        // Android links its extensions statically: DuckDB serves no
-        // android_arm64 downloads, so INSTALL would 404.
-        let sql = if cfg!(target_os = "android") {
-            format!("LOAD {name};")
-        } else {
-            format!("INSTALL {name}; LOAD {name};")
-        };
-        conn.execute_batch(&sql)
+        conn.execute_batch(&format!("INSTALL {name}; LOAD {name};"))
             .with_context(|| format!("failed to install/load extension {name}"))?;
         tracing::info!("loaded DuckDB extension: {name}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+
+    /// The redacting `Debug` impl must never emit the PostgreSQL password or
+    /// the S3 key id/secret — neither directly on `StorageConfig` nor through
+    /// `StorageMode`, which derives `Debug` over it.
+    #[test]
+    fn storage_config_debug_redacts_all_credentials() {
+        const PG_PASSWORD: &str = "PgP4ssw0rd_SHOULD_NOT_LEAK";
+        const S3_KEY_ID: &str = "AKIA_KEY_ID_SHOULD_NOT_LEAK";
+        const S3_SECRET: &str = "S3Secret_SHOULD_NOT_LEAK_bytes";
+
+        let config = StorageConfig::new(
+            format!("postgresql://sigiro:{PG_PASSWORD}@db.internal:5432/ducklake"),
+            DataLocation::S3(
+                S3Config::new(
+                    S3BucketName::try_new("telemetry-bucket".to_string()).unwrap(),
+                    S3Region::try_new("us-east-1".to_string()).unwrap(),
+                    "https://s3.example.com".parse().unwrap(),
+                    S3_KEY_ID.to_string(),
+                    S3_SECRET.to_string(),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
+
+        let config_dbg = format!("{config:?}");
+        let mode_dbg = format!("{:?}", StorageMode::Distributed(config));
+
+        for needle in [PG_PASSWORD, S3_KEY_ID, S3_SECRET] {
+            assert!(
+                !config_dbg.contains(needle),
+                "StorageConfig Debug leaked secret {needle:?}: {config_dbg}"
+            );
+            assert!(
+                !mode_dbg.contains(needle),
+                "StorageMode Debug leaked secret {needle:?}: {mode_dbg}"
+            );
+        }
+
+        // Non-secret fields stay visible so the config is still useful in logs.
+        assert!(config_dbg.contains("telemetry-bucket"));
+        assert!(config_dbg.contains("us-east-1"));
+        assert!(config_dbg.contains("[REDACTED]"));
+    }
+
+    /// A debug-format of `DistributedAttachSql` must never leak the catalog
+    /// password, the S3 secret SQL, or the attach SQL (which embeds the catalog).
+    #[test]
+    fn distributed_attach_sql_debug_redacts_credentials() {
+        const PW: &str = "PgP4ssw0rd_SHOULD_NOT_LEAK";
+        const S3_SECRET: &str = "S3Secret_SHOULD_NOT_LEAK";
+        let attach = DistributedAttachSql {
+            catalog_path: format!("dbname=d host=h user=u password={PW}"),
+            metadata_schema: "tenant_acme".to_string(),
+            data_path: "/data/tenants/acme".to_string(),
+            secret_sql: Some(format!("CREATE SECRET (TYPE s3, SECRET '{S3_SECRET}')")),
+            s3_scope: Some("s3://bucket/acme/".to_string()),
+            attach_sql: format!("ATTACH 'ducklake:dbname=d password={PW}' AS lake"),
+        };
+        let dbg = format!("{attach:?}");
+        assert!(!dbg.contains(PW), "attach debug leaked PG password: {dbg}");
+        assert!(
+            !dbg.contains(S3_SECRET),
+            "attach debug leaked S3 secret: {dbg}"
+        );
+        // Non-secret fields stay visible.
+        assert!(dbg.contains("tenant_acme") && dbg.contains("<redacted>"));
+    }
 }

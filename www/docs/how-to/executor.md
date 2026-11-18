@@ -2,7 +2,7 @@
 title: Connect sigiro to Executor
 description: Add sigiro's OpenAPI API or documentation MCP server to Executor, then expose the resulting tools to your agent.
 sidebar:
-  order: 6
+  order: 5
 ---
 
 [Executor](https://executor.sh/) is an integration layer for agents. It imports OpenAPI
@@ -19,7 +19,7 @@ import, which works either way.
 The public OpenAPI document is:
 
 ```
-https://sigiro.com/openapi.json
+https://api.sigiro.com/openapi.json
 ```
 
 In the Executor web UI:
@@ -28,11 +28,11 @@ In the Executor web UI:
 2. Paste the OpenAPI URL.
 3. Let Executor detect and index the operations.
 4. Create a connection for the integration.
-5. Add the hosted sigiro OAuth access token to that connection if the API asks for it.
+5. Add the hosted sigiro tenant key to that connection if the API asks for it.
 6. Set a policy for each tool. Use approval for tools that run SQL or inspect telemetry.
 
 The specification is public and does not require a key to read. The hosted API itself
-still requires the OAuth access token. Self-hosted sigiro can use the same import pattern with
+still requires the tenant key. Self-hosted sigiro can use the same import pattern with
 the OpenAPI URL served by your own instance — and needs no key at all, because a
 self-hosted server runs in open mode and authenticates no request.
 
@@ -40,9 +40,9 @@ Executor also exposes a CLI. The equivalent import has this shape:
 
 ```bash
 executor call executor openapi addIntegration '{
-  "spec": "https://sigiro.com/openapi.json",
+  "spec": "https://api.sigiro.com/openapi.json",
   "namespace": "sigiro",
-  "baseUrl": "https://sigiro.com"
+  "baseUrl": "https://api.sigiro.com"
 }'
 ```
 
@@ -61,13 +61,12 @@ executor tools integrations
 The docs site also exposes a public, read-only MCP server:
 
 ```
-https://sigiro.com/mcp/docs
+https://sigiro.com/mcp
 ```
 
 Add it as an MCP integration in Executor and select the streamable HTTP transport. This
 gives an agent documentation tools such as search and page retrieval. It does
-not provide access to a workspace's telemetry. The same URL without `/docs`,
-`https://sigiro.com/mcp`, adds the telemetry tools and requires an OAuth sign-in.
+not provide access to a tenant's telemetry.
 
 Use the OpenAPI integration for live telemetry operations. Use the MCP one when an agent
 needs to find or read sigiro documentation. You can add both to the same
@@ -83,12 +82,12 @@ endpoint and transport used by your deployment.
 ## Verify the import
 
 Check the integration in Executor before asking an agent to use it. The sigiro API import
-should expose operations for services, traces, alerts and queries.
+should expose operations for services, traces, anomalies, investigations and queries.
 The docs import should expose documentation search and page retrieval.
 
 Then test one read-only call first. For a hosted API connection, confirm that the
-request includes the OAuth access token and that the returned data belongs to the intended
-sigiro tenant. Do not put an OAuth access token in this page, an OpenAPI URL, or an agent
+request includes the tenant key and that the returned data belongs to the intended
+sigiro tenant. Do not put a tenant key in this page, an OpenAPI URL, or an agent
 prompt checked into a repository.
 
 ## Next

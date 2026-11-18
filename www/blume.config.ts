@@ -1,14 +1,8 @@
-import { fileURLToPath } from "node:url";
-
-import sitemap from "@astrojs/sitemap";
-import type { AstroIntegration } from "astro";
-import { defineConfig } from "blume";
-import { script } from "blume/analytics";
-import { cloudflare } from "blume/deploy";
-import { openapi } from "blume/reference";
-import { orama } from "blume/search";
-
-import { CF_ANALYTICS_TOKEN, SITE } from "./src/lib/site";
+import { fileURLToPath } from 'node:url';
+import sitemap from '@astrojs/sitemap';
+import { defineConfig } from 'blume';
+import type { AstroIntegration } from 'astro';
+import { CF_ANALYTICS_TOKEN, SITE } from './src/lib/site';
 
 /**
  * The two things this project needs from Astro that Blume's config cannot express.
@@ -31,88 +25,24 @@ import { CF_ANALYTICS_TOKEN, SITE } from "./src/lib/site";
  * wrangler config and in no built code at all. `injectRoute` is the supported way
  * in, and the way Blume mounts its own `.well-known/mcp.json` endpoint.
  */
-const sigiro = ({ binary }: { binary: boolean }): AstroIntegration => ({
-  name: "sigiro",
+const sigiro = (): AstroIntegration => ({
+  name: 'sigiro',
   hooks: {
-    "astro:config:setup": ({ injectRoute, injectScript, updateConfig }) => {
+    'astro:config:setup': ({ injectRoute, updateConfig }) => {
       updateConfig({
         vite: {
           resolve: {
-            alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
-          },
-          /**
-           * `blume dev` crashed on startup with
-           *
-           *   Error: The file does not exist at ".blume/.cache/vite/deps_ssr/
-           *   sequence-<hash>.js" which is in the optimize deps directory.
-           *
-           * `sequence-*.js` is not a package — it is a chunk Vite's SSR
-           * dependency optimizer emits. The log line before the crash names the
-           * trigger:
-           *
-           *   [vite] dependency optimized: astro/app/manifest
-           *   [vite] optimized dependencies changed. reloading
-           *
-           * Astro's Cloudflare adapter runs SSR inside workerd. The optimizer
-           * discovers `astro/app/manifest` late, re-optimizes, and rewrites
-           * `deps_ssr/` with fresh hashes while the workerd runner still holds a
-           * handle to the previous chunk. The runner asks for a file that was
-           * just replaced and the dev server dies instead of reloading.
-           *
-           * Naming it up front makes the first optimizer pass the only pass, so
-           * nothing is invalidated underneath the runner. The React packages are
-           * listed for the same reason: the auth island pulls them in through a
-           * `client:load` component, which is also late discovery.
-           *
-           * `astro build` optimizes once by construction, which is why the site
-           * deployed fine the whole time the dev server could not start.
-           */
-          ssr: {
-            optimizeDeps: {
-              include: [
-                "astro/app/manifest",
-                "motion",
-                "motion/react",
-                "react",
-                "react-dom",
-                "react-dom/server",
-              ],
-            },
+            alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
           },
         },
       });
-      // The binary's copy is static and offline: no R2 download route and no
-      // WebMCP client, which signs in against sigiro.com.
-      if (binary) return;
       injectRoute({
-        pattern: "/dl/[...key]",
-        entrypoint: fileURLToPath(new URL("./src/dl.ts", import.meta.url)),
+        pattern: '/dl/[...key]',
+        entrypoint: fileURLToPath(new URL('./src/dl.ts', import.meta.url)),
       });
-      injectScript("page", "import '../src/webmcp/browser.ts';");
     },
   },
 });
-
-/**
- * `SIGIRO_DOCS_TARGET=binary` builds the copy of these docs the sigiro binary
- * embeds and serves at `/docs/` (`src/docs.rs`; `mise run docs-build`).
- *
- * Same content, same URLs, different shell around them:
- *
- * - Static output under `deployment.base` `/docs` instead of a Cloudflare
- *   server build under `basePath` `/docs`. The base moves *everything* under
- *   `/docs` — `_astro/`, `blume-search.json`, `llms.txt` — so the binary owns
- *   one prefix and nothing at its root. A page URL is identical either way.
- * - No landing page or sign-in pages (`content.pages` names a directory that
- *   does not exist), no `/dl` route, no WebMCP script, no MCP endpoint (static),
- *   no `@astrojs/sitemap` and no Cloudflare analytics beacon: a self-hosted
- *   server must not phone home when someone reads its manual.
- *
- * Unset, every branch below takes the sigiro.com value, so the Worker build is
- * unchanged. Read once here; Blume evaluates this module twice per run and the
- * environment is the same both times.
- */
-const BINARY = process.env.SIGIRO_DOCS_TARGET === "binary";
 
 /**
  * sigiro.com — the landing page at `/` and the docs at `/docs/*`.
@@ -136,7 +66,7 @@ const BINARY = process.env.SIGIRO_DOCS_TARGET === "binary";
  * their own subdomain.
  */
 export default defineConfig({
-  title: "sigiro",
+  title: 'sigiro',
   /**
    * Imported, not copied. This string reaches `llms.txt`, `llms-full.txt`, every
    * `/docs/**` page and `agent-readability.json` — the artifacts an agent reads —
@@ -148,10 +78,7 @@ export default defineConfig({
    */
   description: SITE.description,
 
-  logo: { text: "sigiro", href: "/" },
-
-  /** The binary embeds the docs only, not `pages/`; see `BINARY`. */
-  content: BINARY ? { pages: "pages-binary-none" } : undefined,
+  logo: { text: 'sigiro', href: '/' },
 
   /**
    * The docs sit under `/docs`, the landing page owns `/`.
@@ -166,7 +93,7 @@ export default defineConfig({
    * days at docs.sigiro.com; that Worker, its routes and its custom domain are
    * deleted, so the hostname no longer resolves at all.
    */
-  basePath: BINARY ? undefined : "/docs",
+  basePath: '/docs',
 
   /**
    * `sigiro()` is the alias + `/dl` route, above.
@@ -200,9 +127,7 @@ export default defineConfig({
    * after `astro build` returns, so no integration hook fires late enough to
    * catch them. `scripts/serve-agent-files.mjs` moves those four and says so.
    */
-  integrations: BINARY
-    ? [sigiro({ binary: true })]
-    : [sigiro({ binary: false }), sitemap()],
+  integrations: [sigiro(), sitemap()],
 
   /**
    * Retired URLs. Two groups, two different provenances — see the comment above
@@ -246,20 +171,24 @@ export default defineConfig({
      * set from a different cause, so it is listed separately rather than appended
      * here, which would have made this paragraph false.
      *
-     * The `/admin/*` operations are absent deliberately. They are filtered
+     * The four `/admin/*` operations are absent deliberately. They are filtered
      * out of the public `/openapi.json`, so there is no page to send anyone to,
      * and a redirect would be the one place still advertising that they exist.
      *
      * The section root moved from `/api` to `/reference` — see `openapi.route`.
      * That first rule carries every inbound link to `/docs/api`, including the one
      * in the footer of every page this site has served. */
-    { from: "/api", to: "/reference", status: 302 },
-    { from: "/api/get-trace", to: "/reference", status: 302 },
-    { from: "/api/list-services", to: "/reference", status: 302 },
-    { from: "/api/run-query", to: "/reference", status: 302 },
-    { from: "/api/v1/query/post", to: "/reference", status: 302 },
-    { from: "/api/v1/services/get", to: "/reference", status: 302 },
-    { from: "/api/v1/traces/trace_id/get", to: "/reference", status: 302 },
+    { from: '/api', to: '/reference', status: 302 },
+    { from: '/api/get-trace', to: '/reference', status: 302 },
+    { from: '/api/investigate-services', to: '/reference', status: 302 },
+    { from: '/api/list-anomalies', to: '/reference', status: 302 },
+    { from: '/api/list-services', to: '/reference', status: 302 },
+    { from: '/api/run-query', to: '/reference', status: 302 },
+    { from: '/api/v1/anomalies/get', to: '/reference', status: 302 },
+    { from: '/api/v1/investigate/post', to: '/reference', status: 302 },
+    { from: '/api/v1/query/post', to: '/reference', status: 302 },
+    { from: '/api/v1/services/get', to: '/reference', status: 302 },
+    { from: '/api/v1/traces/trace_id/get', to: '/reference', status: 302 },
 
     /* GROUP 2 — the three flat guide URLs, retired when the docs were sorted into
      * Diátaxis sections (tutorial / how-to / reference / explanation).
@@ -276,35 +205,15 @@ export default defineConfig({
      * agent that kept `/docs/quickstart.md` is exactly the reader this product is
      * for, so the extensionless form alone would have covered browsers and missed
      * them. */
-    { from: "/quickstart", to: "/tutorials/quickstart", status: 302 },
-    { from: "/quickstart.md", to: "/tutorials/quickstart.md", status: 302 },
-    { from: "/quickstart.mdx", to: "/tutorials/quickstart.mdx", status: 302 },
-    { from: "/install-with-ai", to: "/how-to/install-with-ai", status: 302 },
-    {
-      from: "/install-with-ai.md",
-      to: "/how-to/install-with-ai.md",
-      status: 302,
-    },
-    {
-      from: "/install-with-ai.mdx",
-      to: "/how-to/install-with-ai.mdx",
-      status: 302,
-    },
-    {
-      from: "/hosted-onboarding",
-      to: "/how-to/hosted-onboarding",
-      status: 302,
-    },
-    {
-      from: "/hosted-onboarding.md",
-      to: "/how-to/hosted-onboarding.md",
-      status: 302,
-    },
-    {
-      from: "/hosted-onboarding.mdx",
-      to: "/how-to/hosted-onboarding.mdx",
-      status: 302,
-    },
+    { from: '/quickstart', to: '/tutorials/quickstart', status: 302 },
+    { from: '/quickstart.md', to: '/tutorials/quickstart.md', status: 302 },
+    { from: '/quickstart.mdx', to: '/tutorials/quickstart.mdx', status: 302 },
+    { from: '/install-with-ai', to: '/how-to/install-with-ai', status: 302 },
+    { from: '/install-with-ai.md', to: '/how-to/install-with-ai.md', status: 302 },
+    { from: '/install-with-ai.mdx', to: '/how-to/install-with-ai.mdx', status: 302 },
+    { from: '/hosted-onboarding', to: '/how-to/hosted-onboarding', status: 302 },
+    { from: '/hosted-onboarding.md', to: '/how-to/hosted-onboarding.md', status: 302 },
+    { from: '/hosted-onboarding.mdx', to: '/how-to/hosted-onboarding.mdx', status: 302 },
   ],
 
   /**
@@ -340,8 +249,9 @@ export default defineConfig({
    * Chinese, Japanese and Korean, and deliberately not the European locales.
    *
    * Picked from prior art rather than taste. Of the comparable projects checked
-   * on 2026-08-12, OpenTelemetry ships zh/ja/ko/fr/es/pt and another mature project ships
-   * zh/ja/ko/fr/es — the exact intersection is zh, ja, ko. Neither translates German,
+   * on 2026-08-12, OpenTelemetry ships zh/ja/ko/fr/es/pt and ClickHouse ships
+   * zh/ja/ko/fr/es — the exact intersection is zh, ja, ko. SigNoz, the closest
+   * peer by stage, ships English only. Neither mature project translates German,
    * which is the assumption this measurement overturned.
    *
    * The three chosen are where translation actually earns its keep: developers in
@@ -368,28 +278,24 @@ export default defineConfig({
    * that disagrees — so it also nudges older pages on a retranslation.
    */
   i18n: {
-    defaultLocale: "en",
+    defaultLocale: 'en',
     locales: [
-      { code: "en", label: "English" },
+      { code: 'en', label: 'English' },
       /* Simplified, mainland conventions. Technical register — this reader is
          installing a binary, not reading marketing. */
-      {
-        code: "zh",
-        label: "简体中文",
-        style: "Simplified Chinese, mainland technical register",
-      },
+      { code: 'zh', label: '简体中文', style: 'Simplified Chinese, mainland technical register' },
       /* です/ます rather than plain form: the standard register for Japanese
          software documentation. */
       {
-        code: "ja",
-        label: "日本語",
-        style: "Polite です/ます form, technical documentation register",
+        code: 'ja',
+        label: '日本語',
+        style: 'Polite です/ます form, technical documentation register',
       },
       /* 합니다 style, the formal-polite register Korean technical docs use. */
       {
-        code: "ko",
-        label: "한국어",
-        style: "Formal 합니다 style, technical documentation register",
+        code: 'ko',
+        label: '한국어',
+        style: 'Formal 합니다 style, technical documentation register',
       },
     ],
   },
@@ -436,47 +342,54 @@ export default defineConfig({
    * plan the RUM beacon excludes visitors served from EU/EEA data centres by
    * default, so EU locales are the ones this will under-report.
    */
-  analytics: BINARY
-    ? []
-    : [
-        script({
-          src: "https://static.cloudflareinsights.com/beacon.min.js",
-          strategy: "defer",
-          attributes: {
-            "data-cf-beacon": `{"token": "${CF_ANALYTICS_TOKEN}"}`,
-          },
-        }),
-      ],
+  analytics: {
+    scripts: [
+      {
+        src: 'https://static.cloudflareinsights.com/beacon.min.js',
+        strategy: 'defer',
+        attributes: {
+          'data-cf-beacon': `{"token": "${CF_ANALYTICS_TOKEN}"}`,
+        },
+      },
+    ],
+  },
 
-  deployment: BINARY
-    ? { base: "/docs", site: "https://sigiro.com" }
-    : cloudflare({
-        site: "https://sigiro.com",
-        // Named rather than left to auto-detection, which keys off CI environment
-        // variables and would pick nothing on a laptop — the dev server warned that
-        // there was no adapter and a build would fail.
-        //
-        // `server` and not `static` because the MCP route below is request-time.
-        output: "server",
+  deployment: {
+    site: 'https://sigiro.com',
+    // Named rather than left to auto-detection, which keys off CI environment
+    // variables and would pick nothing on a laptop — the dev server warned that
+    // there was no adapter and a build would fail.
+    //
+    // `server` and not `static` because the MCP route below is request-time.
+    adapter: 'cloudflare',
+    output: 'server',
 
-        /**
-         * `server` because the injected `/dl/[...key]` route and the MCP endpoint are
-         * both request-time. Every HTML route still prerenders.
-         *
-         * On the artifact-location defect this combination has, and what is and is not
-         * done about it, see the `integrations` note above.
-         */
-      }),
+    /**
+     * `server` because the injected `/dl/[...key]` route and the MCP endpoint are
+     * both request-time. Every HTML route still prerenders.
+     *
+     * On the artifact-location defect this combination has, and what is and is not
+     * done about it, see the `integrations` note above.
+     */
+  },
 
   /**
-   * shadcn/ui's neutral palette, so the docs match the rest of the site
-   * (theme.css). Geist is shadcn's default typeface too.
+   * The three ink/accent values from www/DESIGN.md, and nothing else.
+   *
+   * The accent is the one colour that means anything on this brand — §7 — and
+   * it flips with the theme. Geist is the pairing the design language is written
+   * for. Everything past this is Blume's own theme, on purpose: matching the
+   * landing page pixel for pixel was what the 182-line stylesheet did, and it is
+   * exactly the custom code this move is meant to delete.
    */
   theme: {
-    accent: { light: "#171717", dark: "#E5E5E5" },
-    background: { light: "#FFFFFF", dark: "#0A0A0A" },
-    fonts: { display: "geist", body: "geist", mono: "geist-mono" },
-    mode: "system",
+    accent: { light: '#4568FF', dark: '#93B0FF' },
+    background: { light: '#EFEEEA', dark: '#141312' },
+    // The roles are display/body/mono, and both Geist faces are in Blume's
+    // curated set — so the pairing the design language is written for comes
+    // across with no self-hosting to arrange.
+    fonts: { display: 'geist', body: 'geist', mono: 'geist-mono' },
+    mode: 'system',
   },
 
   /**
@@ -488,65 +401,89 @@ export default defineConfig({
    * design — `/openapi.json` is the entire discoverability surface — so it is
    * read from the live API rather than copied into this repo, and cannot drift.
    */
-  reference: [
-    openapi({
-      /**
-       * `/reference`, not `/api`, and the reason is the label rather than the URL.
-       *
-       * Blume humanizes the route segment when it has nothing better, and it cannot
-       * know `api` is an initialism — the same code renders `sql` as `Sql`, so the
-       * sidebar and breadcrumb both read "Api". `openapi.sources[].label` is
-       * documented as the nav label for a source and changes neither, so it was
-       * tried and reverted. Renaming the segment is the fix that works: `reference`
-       * humanizes to "Reference" with nothing to special-case.
-       *
-       * Checked against what mature references do before picking it. Stripe and
-       * Resend both label this section "API Reference"; Resend's slug is literally
-       * `api-reference`. Neither exposes the word "OpenAPI" in navigation — that
-       * names the file format, which is the publisher's concern and not the
-       * reader's.
-       *
-       * `/docs/api` and every operation path under it keep working: see the
-       * `redirects` block above, which now sends the old section root and the ten
-       * legacy per-operation URLs here.
-       */
-      route: "/reference",
-      spec: "https://sigiro.com/openapi.json",
-      codeSamples: ["curl", "javascript", "python"],
+  openapi: {
+    enabled: true,
+    /**
+     * `/reference`, not `/api`, and the reason is the label rather than the URL.
+     *
+     * Blume humanizes the route segment when it has nothing better, and it cannot
+     * know `api` is an initialism — the same code renders `sql` as `Sql`, so the
+     * sidebar and breadcrumb both read "Api". `openapi.sources[].label` is
+     * documented as the nav label for a source and changes neither, so it was
+     * tried and reverted. Renaming the segment is the fix that works: `reference`
+     * humanizes to "Reference" with nothing to special-case.
+     *
+     * Checked against what mature references do before picking it. Stripe and
+     * Resend both label this section "API Reference"; Resend's slug is literally
+     * `api-reference`. Neither exposes the word "OpenAPI" in navigation — that
+     * names the file format, which is the publisher's concern and not the
+     * reader's.
+     *
+     * `/docs/api` and every operation path under it keep working: see the
+     * `redirects` block above, which now sends the old section root and the ten
+     * legacy per-operation URLs here.
+     */
+    route: '/reference',
+    spec: 'https://api.sigiro.com/openapi.json',
+    codeSamples: ['curl', 'javascript', 'python'],
 
-      /**
-       * OFF. 1.5.2 added a "Try it" panel to every operation page and defaulted it
-       * on with the Blume renderer; on this spec it cannot complete a single
-       * request, so it is an affordance that fails for every reader.
-       *
-       * The live spec at `sigiro.com/openapi.json` declares no `servers`
-       *      block, and Blume's playground model is `servers: args.servers.map(…)`
-       *      with `server: model.servers[0] ?? ""`. The built page carries
-       *      `"servers":[]`, so the panel renders only its "Custom base URL"
-       *      field — placeholder `https://api.example.com` — and a reader who
-       *      presses Send without typing one sends to nothing.
-       *
-       * Nothing is lost against 1.4.3, which had no playground at all. The
-       * per-operation `codeSamples` above are unchanged and remain copy-pasteable,
-       * which is the affordance that actually works against an API that requires
-       * a token. Revisit if the API ever declares `servers`.
-       */
-      playground: false,
-    }),
-  ],
+    /**
+     * OFF. 1.5.2 added a "Try it" panel to every operation page and defaulted it
+     * on with the Blume renderer; on this spec it cannot complete a single
+     * request, so it is an affordance that fails for every reader.
+     *
+     * Two independent reasons, both measured against the live spec and the live
+     * API rather than assumed:
+     *
+     *   1. NO BASE URL. `api.sigiro.com/openapi.json` declares no `servers`
+     *      block, and Blume's playground model is `servers: args.servers.map(…)`
+     *      with `server: model.servers[0] ?? ""`. The built page carries
+     *      `"servers":[]`, so the panel renders only its "Custom base URL"
+     *      field — placeholder `https://api.example.com` — and a reader who
+     *      presses Send without typing one sends to nothing.
+     *   2. NO CORS. `curl -sI -H 'Origin: https://sigiro.com'
+     *      https://api.sigiro.com/openapi.json` returns 200 with zero
+     *      `access-control-allow-origin` headers, and an OPTIONS preflight on
+     *      `/v1/services` answers 401 with `Allow: GET,HEAD`. The panel fires
+     *      the request straight from the browser, so even with a base URL typed
+     *      in, the response is unreadable to the page.
+     *
+     * `playground.proxy` is the documented escape hatch for (2) — `true` mounts
+     * a built-in `/_api-proxy` server route. Deliberately not taken. Every
+     * hosted endpoint needs a tenant key, so a proxy turns the docs Worker into
+     * a credential-forwarding relay for the telemetry API: a reader pastes
+     * `sk_<tenant>_<random>` into a docs page and this origin ships it onward.
+     * That is a product and security decision about the API's trust boundary,
+     * not a docs-framework setting, and it is not one an upgrade should make.
+     *
+     * Nothing is lost against 1.4.3, which had no playground at all. The
+     * per-operation `codeSamples` above are unchanged and remain copy-pasteable,
+     * which is the affordance that actually works against an API that requires
+     * a key and speaks to no browser origin. Revisit if the API ever declares
+     * `servers` and sends CORS headers for `sigiro.com`.
+     */
+    playground: false,
+  },
 
-  agents: {
+  ai: {
     /**
      * OFF, and this is the one setting on this site that a Blume upgrade forced
      * rather than offered.
      *
      * 1.6.2 gave every site a read-only JSON docs API under `/api/docs/` and
      * described it with a generated OpenAPI 3.1 document at `/openapi.json`.
-     * That path is already the telemetry API's own description: the website
-     * Worker proxies `/openapi.json` to the API origin, and
-     * `public/.well-known/integrations.json` declares it as the canonical spec.
+     * That path is already spoken for here, twice over:
      *
-     * Leaving `api` on would publish a *different* document at that path. Three
+     *   - `public/_redirects` 301s `/openapi.json` to
+     *     `https://api.sigiro.com/openapi.json`, the telemetry API's own
+     *     description. The comment on that rule records why it is a 301 and not
+     *     a 302: integrations.sh probed the path, followed a 302, and recorded a
+     *     second HTTP surface at `sigiro.com` whose spec was this redirect.
+     *   - `public/.well-known/integrations.json` names that same api.sigiro.com
+     *     URL as the canonical spec for two of its four surfaces.
+     *
+     * Leaving `api` on published a *different* document at that path, and the
+     * damage is not confined to which of the two answers a request. Three
      * surfaces advertise the generated document as this site's machine-readable
      * service description, all verified in `dist/client` on 1.6.3:
      *
@@ -555,16 +492,18 @@ export default defineConfig({
      *   - the homepage `Link:` header → `rel="service-desc"`
      *
      * So an agent that reads any of those three is sent to a URL that either
-     * hand it the telemetry spec while calling it the docs API, or shadow the
-     * API proxy with a static file. Both are false statements about the service.
+     * hands it the telemetry spec while calling it the docs API, or — if the
+     * generated static file shadows the redirect at the edge — kills the 301
+     * that integrations.sh depends on. The second is the worse failure and the
+     * first is still a false statement about what sigiro's API is.
      *
      * MOVING IT WAS THE PREFERRED FIX AND IS NOT POSSIBLE. `OPENAPI_PATH` is a
      * module constant in `blume/src/ai/api/paths.ts` (`"/openapi.json"`), and
      * `planApi` reads it directly; no config key relocates it. The only other
      * escape hatch 1.6.2 documents is shipping a `public/openapi.json`, which
-     * this repo deliberately does not have — the API owns its description — and
-     * which would shadow the proxy with a static file rather than remove the
-     * conflict.
+     * this repo deliberately does not have — the API's description lives on the
+     * API, which is the only thing that can keep it honest — and which would
+     * shadow the redirect with a static file rather than remove the conflict.
      *
      * What is given up is a REST twin of tools we already serve. `ai.mcp` below
      * exposes the same page snapshot through the same four operations, and it is
@@ -573,8 +512,6 @@ export default defineConfig({
      * gated on their own flags, not on this one.
      */
     api: false,
-    /** The site owns one canonical eight-tool WebMCP catalog; do not also emit Blume's four-tool shim. */
-    webmcp: false,
     /**
      * Four read-only tools — search_docs, get_page, list_pages, get_navigation
      * — that Claude Code, Cursor and VS Code read directly. This is the reason
@@ -582,11 +519,10 @@ export default defineConfig({
      * already or did not want.
      */
     mcp: {
-      enabled: !BINARY,
-      route: "/mcp/docs",
-      name: "sigiro-docs",
+      enabled: true,
+      name: 'sigiro-docs',
       instructions:
-        "Documentation for sigiro, an observability data layer. For live telemetry, use the sigiro API at https://sigiro.com — its full surface is described at https://sigiro.com/openapi.json.",
+        'Documentation for sigiro, an observability data layer. For live telemetry, use the sigiro API at https://api.sigiro.com — its full surface is described at https://api.sigiro.com/openapi.json.',
     },
     /** Generated, including the API reference, replacing two route handlers. */
     llmsTxt: { enabled: true, openapi: true },
@@ -607,7 +543,7 @@ export default defineConfig({
      * Reading through the gitlink leaves one editable, public source.
      *
      * WHAT THE SKILL IS ALLOWED TO SAY. It restates neither the endpoint list
-     * (`sigiro.com/openapi.json` describes it, and a skill that duplicates
+     * (`api.sigiro.com/openapi.json` describes it, and a skill that duplicates
      * a spec is tokens without capability) nor the install and onboarding
      * pages (it links `/docs/how-to/install-with-ai` and
      * `/docs/how-to/hosted-onboarding`). What it carries is the ordering the
@@ -621,7 +557,7 @@ export default defineConfig({
      * readable at its URL without unpacking. `llms.txt` gains an "Agent skills"
      * section from the same collection pass, so the two cannot disagree.
      */
-    skills: "../skills/skills",
+    skills: '../skills/skills',
     /**
      * `ask` stays off. It needs an API key, a model provider and a per-query
      * bill, and the landing page already hands a reader's own assistant a
@@ -630,7 +566,7 @@ export default defineConfig({
   },
 
   /** Orama, local, no hosted service and no key. */
-  search: orama(),
+  search: { provider: 'orama' },
 
   /**
    * No `github` key, deliberately. It drove two surfaces and both were wrong:
@@ -650,7 +586,7 @@ export default defineConfig({
   navigation: {
     /**
      * One entry, and it names the file rather than a section. That is
-     * deliberate: it leaves the docs for the raw spec on `sigiro.com`, so
+     * deliberate: it leaves the docs for the raw spec on `api.sigiro.com`, so
      * "OpenAPI" is what a reader actually lands on. The generated reference is
      * a docs page and lives in the sidebar as "Reference" — see `openapi.route`.
      *
@@ -669,9 +605,7 @@ export default defineConfig({
      * `/docs/reference/operations/run-query` all carry `href="/"` on the
      * wordmark. Two links to one destination, one of them wrong.
      */
-    featured: [
-      { href: "https://sigiro.com/openapi.json", label: "openapi.json" },
-    ],
+    featured: [{ href: 'https://api.sigiro.com/openapi.json', label: 'openapi.json' }],
     /**
      * No explicit `sidebar` here on purpose. Listing the four pages did fix the
      * order, and it also silently dropped the generated API reference from the

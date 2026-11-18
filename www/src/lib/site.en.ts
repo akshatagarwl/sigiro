@@ -1,7 +1,7 @@
 /**
  * English landing-page copy — the source every translation is made from.
  *
- * Positioning, voice and the five claims live in the positioning brief —
+ * Positioning, voice and the five claims live in .agents/product-marketing.md —
  * read that before editing copy here. Three rules from it that bite hardest:
  *
  * 1. Say "you". Prose with nobody in it reads as machine-generated no matter how
@@ -61,27 +61,25 @@ type Widen<T> = T extends string
 export type LandingCopy = Widen<typeof EN>;
 
 export const EN = {
-  /** Keeps "observability" and "OpenTelemetry" in the title: they are the words
-      a reader searches for, and the h1 is written for the reader already here. */
-  title: "sigiro — OpenTelemetry observability you query with SQL",
+  /** Keeps "observability" in the title: the h1 is a category bet with no search
+      intent behind it, and this is the one place the category word still earns
+      its keep for search and for citation. */
+  title: 'sigiro — observability data layer for software that repairs itself',
 
-  /** The h1: what the product does, in the words a reader would use.
-
-      It was "The data layer for software that repairs itself.", a category bet
-      that leaned on the retired anomaly-ranking design (ranked results, the
-      suspect deploy). What ships today is storage and a query API, so the h1
-      says that. */
-  tagline: "Send OpenTelemetry. Query it with SQL.",
+  /** The h1: the category claim. */
+  tagline: 'The data layer for software that repairs itself.',
 
   /** Also the meta description, the OG description and the Twitter card, so it
       has to stay under ~155 characters or search results cut it mid-sentence.
 
-      Names only what ships: the four signals, the SQL API, the agent tools and
-      the dashboard. The ranked-results and suspect-deploy design is retired
-      (docs/explanation/evidence.md is kept as history), so do not bring
-      "ranked", "suspect deploy", "what changed and why" or "cause" back. */
+      It says "suspect deploy" and not "cause". sigiro correlates a deploy in
+      time with a shift, and correlation in time is not cause — see
+      docs/explanation/evidence.md, "What this design refuses to do". The claim
+      the product can keep is that each result carries the query that made it,
+      so you can check the result or disprove it. Do not put "cause", "proves"
+      or "proven" back in this string. */
   description:
-    "sigiro stores your traces, logs, metrics and profiles. Query them with SQL over one HTTP API, from your agent through the CLI and MCP, or in the dashboard.",
+    'Send OpenTelemetry to sigiro. When a service fails, you get ranked results, the suspect deploy, and the query for each result.',
 
   /** Nav labels. The hrefs are in site.shared.ts.
 
@@ -89,15 +87,14 @@ export const EN = {
       sidebars: this nav is lowercase `.meta` links in a footer row, so it takes
       the shortest honest word. */
   nav: {
-    docs: "Docs",
-    reference: "API",
-    dashboard: "Dashboard",
+    docs: 'Docs',
+    reference: 'API',
   },
 
   /** The hero's second action. "Talk to us", not "book a demo": there is no
       demo, since the product is a binary you run in one command, and "demo"
       promises a sales call that nobody here is staffed to give. */
-  callLabel: "Talk to us",
+  callLabel: 'Talk to us',
 
   /**
    * Strings that were hardcoded in the markup before the landing page was
@@ -110,31 +107,26 @@ export const EN = {
    * reader sees belongs here, not in the markup.
    */
   ui: {
-    /** The header's way back in for a reader who already has an account. */
-    signIn: "Sign in",
-    /** The header link's tooltip once signed in, before the account's email. */
-    signedInAs: "Signed in as",
-    signUp: "Sign up",
-    installCli: "Install CLI",
+    /** The hero's primary action, and the same label in the header. */
+    getStarted: 'Get started',
     /** The line under the hero loop. Restates the two claims that decide
         whether a reader keeps reading: it is free self-hosted, and nothing
         leaves their infrastructure. */
-    heroNote:
-      "Installed on your servers: free, and sigiro sends no data to us. Signed up: the hosted beta, which stores your telemetry on servers we run.",
+    heroNote: 'Free when you install it. sigiro sends no data to us.',
     /** The stepped-terminal section. `stepsAria` labels the step list for
         screen readers; `shellAria` names the transcript region. */
-    howLabel: "how you use it",
-    howTitle: "Four steps.",
-    howTail: "You connect, ask, correlate, and drill down.",
+    howLabel: 'how you use it',
+    howTitle: 'Four steps.',
+    howTail: 'You connect, ask, correlate, and prove.',
     howLede:
-      "Point your OpenTelemetry exporter at sigiro, then ask in SQL. Each step below is one shell session.",
-    stepsAria: "The four steps",
-    shellAria: "your shell",
+      'You send OpenTelemetry to sigiro. You ask one question. Each step below is one shell session.',
+    stepsAria: 'The four steps',
+    shellAria: 'your shell',
     /** The integrations section. "No migration" is a claim: sigiro speaks OTLP,
         so the reader keeps the instrumentation they already have. */
-    integrationsLabel: "what you get",
-    integrationsTitle: "No migration.",
-    integrationsTail: "sigiro connects to the tools you use.",
+    integrationsLabel: 'what you get',
+    integrationsTitle: 'No migration.',
+    integrationsTail: 'sigiro connects to the tools you use.',
   },
 
   /**
@@ -145,22 +137,24 @@ export const EN = {
    */
   how: {
     connect: {
-      title: "Connect",
-      say: "sigiro uses standard OTLP on the standard ports.",
+      title: 'Connect',
+      say: 'sigiro uses standard OTLP on the standard ports.',
     },
     ask: {
-      title: "Ask",
-      /* The transcript is a plain SQL query over HTTP. It used to say sigiro
-         ranks results and names a suspect deploy; that design is retired. */
-      say: "You ask in SQL over HTTP. The answer comes back as JSON rows.",
+      title: 'Ask',
+      /* "the suspect deploy", not "the deploy that caused the failure". The
+         payload says `"suspect"`, and the prose has to say what the payload
+         says. sigiro finds a deploy near the shift in time; a person or an
+         agent decides whether that deploy is the cause. */
+      say: 'sigiro ranks the results and names the suspect deploy.',
     },
     correlate: {
-      title: "Correlate",
-      say: "An agent is a service that calls a model. One trace holds both.",
+      title: 'Correlate',
+      say: 'An agent is a service that calls a model. One trace holds both.',
     },
     prove: {
-      title: "Drill down",
-      say: "List the failing requests. Each row carries a trace_id you can fetch whole from /v1/traces.",
+      title: 'Prove',
+      say: 'Run the query again. Make the query wider. Show that the result is wrong.',
     },
   },
 
@@ -172,12 +166,12 @@ export const EN = {
    * because it is still the last beat of a sequence the reader has been walking.
    */
   discover: {
-    n: "01",
-    lead: "Discover.",
-    rest: "Your agent reads the API description without help.",
-    say: "One public document describes all of the endpoints.",
-    artifactTitle: "GET /openapi.json",
-    artifactMeta: "public, no key",
+    n: '01',
+    lead: 'Discover.',
+    rest: 'Your agent reads the API description without help.',
+    say: 'One public document describes all of the endpoints.',
+    artifactTitle: 'GET /openapi.json',
+    artifactMeta: 'public, no key',
   },
 
   /**
@@ -190,29 +184,29 @@ export const EN = {
    */
   loop: {
     detect: {
-      title: "Detect",
-      owner: "sigiro",
-      say: "Your agent counts failed spans with one SQL query.",
+      title: 'Detect',
+      owner: 'sigiro',
+      say: 'sigiro compares each service with its own history. You set no thresholds.',
     },
     diagnose: {
-      title: "Diagnose",
-      owner: "sigiro",
-      say: "A second query shows which operations fail, and how often.",
+      title: 'Diagnose',
+      owner: 'sigiro',
+      say: 'One call gives ranked results, the suspect deploy, and the query for each result.',
     },
     fix: {
-      title: "Fix",
-      owner: "your agent",
-      say: "Your agent writes the patch. sigiro does not do this step.",
+      title: 'Fix',
+      owner: 'your agent',
+      say: 'Your agent writes the patch. sigiro does not do this step.',
     },
     verify: {
-      title: "Verify",
-      owner: "your pipeline, on our evidence",
-      say: "A test that passes is not the same as a service that recovers. Run the query again and check the errors are gone.",
+      title: 'Verify',
+      owner: 'your pipeline, on our evidence',
+      say: 'A test that passes is not the same as a service that recovers. Ask again, and read what is gone.',
     },
     learn: {
-      title: "Learn",
-      owner: "your memory",
-      say: "Keep the fix with the evidence. Use it when the same failure occurs again.",
+      title: 'Learn',
+      owner: 'your memory',
+      say: 'Keep the fix with the evidence. Use it when the same failure occurs again.',
     },
   },
 
@@ -225,38 +219,37 @@ export const EN = {
    */
   promises: [
     {
-      /* An answer is a query, so anyone can run it again. sigiro makes no
-         verdicts of its own; the ranked-results design that did is retired. */
-      title: "Answers you can rerun",
-      body: "Every answer is a SQL query. You, your agent or a teammate can run it again.",
+      /* "Prove it yourself", not "Proof with each result". The old title put the
+         proof on us, and sigiro proves nothing: it measures a shift and names a
+         deploy near it in time. What you get is a result you can check, and the
+         check is yours to run. */
+      title: 'Prove it yourself',
+      body: 'Each result contains the query that made it.',
     },
     {
-      /* Replaces "Nothing to maintain / no thresholds", which described the
-         retired anomaly detector. */
-      title: "Every signal in one place",
-      body: "Traces, logs, metrics and profiles are tables you can join in one query.",
+      title: 'Nothing to maintain',
+      body: 'You set no thresholds and no rules. sigiro uses the history of each service.',
     },
     {
       /* "One command", not "one container": the binary is the lead install path
          now that `/install` works. */
-      title: "Installation in five minutes",
-      body: "One command and two environment variables. You change no code.",
+      title: 'Installation in five minutes',
+      body: 'One command and two environment variables. You change no code.',
     },
     {
-      /* The self-hosted product is free. Hosted is a beta with a real sign-up
-         now (the hero's "Sign up") but no published price, so the body says
-         exactly that and points to a conversation. Do not quote a number here
-         until one is decided. */
-      title: "Free when you install it",
-      body: "No fees for hosts, seats or data when you run it. The hosted beta has no published price yet; talk to us.",
+      /* The site sells the self-hosted product. Hosted is a hand-built beta, so
+         it gets a conversation rather than a price: quoting ~$14/mo invited a
+         reader to sign up for something with no signup. */
+      title: 'Free when you install it',
+      body: 'No fees for hosts, seats or data. Talk to us if you want us to run it for you.',
     },
     {
-      title: "Your data stays with you",
-      body: "You install sigiro on your servers. sigiro sends no data to us. The hosted beta is the exception: it stores your telemetry with us.",
+      title: 'Your data stays with you',
+      body: 'You install sigiro on your servers. sigiro sends no data to us.',
     },
     {
-      title: "sigiro monitors sigiro",
-      body: "sigiro sends its telemetry to sigiro. This is how we find our own failures.",
+      title: 'sigiro monitors sigiro',
+      body: 'sigiro sends its telemetry to sigiro. This is how we find our own failures.',
     },
   ],
 
@@ -266,10 +259,10 @@ export const EN = {
    * lives in site.shared.ts.
    */
   integrations: {
-    emitLabel: "Send telemetry from",
-    runLabel: "Run it on",
-    readLabel: "Read by",
-    readAnySql: "Anything that speaks SQL",
+    emitLabel: 'Send telemetry from',
+    runLabel: 'Run it on',
+    readLabel: 'Read by',
+    readAnySql: 'Anything that speaks SQL',
   },
 
   /**
@@ -282,7 +275,7 @@ export const EN = {
    * twice.
    *
    * The situations are not invented here. They are the use cases and personas in
-   * the positioning brief. Adding a line means finding the persona it
+   * `.agents/product-marketing.md`. Adding a line means finding the persona it
    * serves, not thinking of a new question.
    *
    * Do not write "software factory". That frame was considered and **rejected**
@@ -317,33 +310,33 @@ export const EN = {
    */
   askAi: [
     // Coding agent in a loop — the primary use case in product-marketing.md.
-    "My coding agent writes patches blind because it cannot see production. Can sigiro close that loop?",
-    "I want my agent to detect a fault, patch it, and confirm the fix worked. How does sigiro fit that loop?",
-    "How does my agent query sigiro, and what does it get back?",
+    'My coding agent writes patches blind because it cannot see production. Can sigiro close that loop?',
+    'I want my agent to detect a fault, patch it, and confirm the fix worked. How does sigiro fit that loop?',
+    'What evidence does sigiro hand an agent that a dashboard cannot?',
 
     // Language and stack entry points — the "I have an X app" shape.
-    "I have a Go service with no instrumentation. What do I do to debug it with sigiro?",
-    "I have a Node app that already sends OpenTelemetry somewhere else. What changes if I point it at sigiro?",
-    "I run a few services on one box. Is sigiro too much or about right?",
+    'I have a Go service with no instrumentation. What do I do to debug it with sigiro?',
+    'I have a Node app that already sends OpenTelemetry somewhere else. What changes if I point it at sigiro?',
+    'I run a few services on one box. Is sigiro too much or about right?',
 
     // LLM app debugging — a named use case.
-    "My LLM app stalls and I cannot tell which model call did it. Does sigiro show that?",
+    'My LLM app stalls and I cannot tell which model call did it. Does sigiro show that?',
 
     // 3am incident with an agent on call.
-    "Production broke at 3am and nobody was awake. What would sigiro have told a scheduled agent?",
+    'Production broke at 3am and nobody was awake. What would sigiro have told a scheduled agent?',
 
     // Solo founder persona: price and setup time.
-    "I ship alone and cannot justify a per-seat observability bill. What does sigiro cost me?",
-    "How long does sigiro take to set up, and what do I have to maintain afterwards?",
+    'I ship alone and cannot justify a per-seat observability bill. What does sigiro cost me?',
+    'How long does sigiro take to set up, and what do I have to maintain afterwards?',
 
     // Privacy-conscious persona: data ownership.
-    "I do not want customer telemetry leaving my own infrastructure. Where does sigiro store it?",
+    'I do not want customer telemetry leaving my own infrastructure. Where does sigiro store it?',
 
     // Small platform team: dashboard rot.
-    "I spend hours a week on dashboards nobody reads. What does sigiro replace?",
+    'I spend hours a week on dashboards nobody reads. What does sigiro replace?',
 
     // The honest one. A reader who asks this and gets a straight answer trusts
     // the rest.
-    "Where is sigiro the wrong choice, and what does it not do yet?",
+    'Where is sigiro the wrong choice, and what does it not do yet?',
   ],
 } as const;

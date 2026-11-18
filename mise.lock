@@ -2,214 +2,277 @@
 
 lockfile_version = 1
 
+[[tools.ast-grep]]
+version = "0.45.3"
+backend = "aqua:ast-grep/ast-grep"
+specifiers = ["0.45.3"]
+
+[tools.ast-grep."platforms.linux-arm64"]
+checksum = "sha256:b39cfbc58da4b869a88b8a4bc57bd5deb0d24541e704cf7c257da7b53ec81c8f"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-aarch64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537333400"
+
+[tools.ast-grep."platforms.linux-x64"]
+checksum = "sha256:f8ac830881339d1edee6b2652f54798c0f4da5a827f2db38a08ee31117783ce8"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-x86_64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537332692"
+
+[tools.ast-grep."platforms.macos-arm64"]
+checksum = "sha256:6d2279dea5bea2ad79c66ea93f5fe54ba926e398a8a26de76c56db68fe59eac6"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-aarch64-apple-darwin.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537332514"
+
+[tools.ast-grep."platforms.macos-x64"]
+checksum = "sha256:b2ffd26f42810340326a9e8a084bdc3647a8795c1a3f21fc06bd7bef3c7c5b2c"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-x86_64-apple-darwin.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537333391"
+
+[tools.ast-grep."platforms.windows-x64"]
+checksum = "sha256:3751b7d6be7fd39a80df1180ffe7e053903dcf92d3190e5a8336ff1746af9059"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.3/app-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/537334241"
+
+[[tools."cargo:cargo-shear"]]
+version = "1.13.4"
+backend = "cargo:cargo-shear"
+specifiers = ["1.13.4"]
+
 [[tools."cargo:https://github.com/jdx/jdxld"]]
 version = "rev:8ef70b88c7f25da631aa2364076947752ecfa26d"
 backend = "cargo:https://github.com/jdx/jdxld"
 specifiers = ["rev:8ef70b88c7f25da631aa2364076947752ecfa26d"]
 
-[[tools.duckdb]]
-version = "2.0.0"
-backend = "aqua:duckdb/duckdb"
-specifiers = ["2.0.0"]
+[[tools."cargo:similarity-rs"]]
+version = "0.5.0"
+backend = "cargo:similarity-rs"
+specifiers = ["0.5.0"]
 
-[tools.duckdb."platforms.linux-arm64"]
-checksum = "sha256:859e1875d2a9515fbb4bf8871061437a14af82320da68c753f094c4b776348fe"
-checksum_source = "mise-versions"
-url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-arm64.tar.gz"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662550868"
+[[tools."cargo:tokei"]]
+version = "15.0.0"
+backend = "cargo:tokei"
+specifiers = ["15.0.0"]
 
-[tools.duckdb."platforms.linux-arm64-musl"]
-checksum = "sha256:859e1875d2a9515fbb4bf8871061437a14af82320da68c753f094c4b776348fe"
-checksum_source = "mise-versions"
-url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-arm64.tar.gz"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662550868"
+[[tools."github:astral-sh/hawk"]]
+version = "0.1.14"
+backend = "github:astral-sh/hawk"
+specifiers = ["0.1.14"]
 
-[tools.duckdb."platforms.linux-x64"]
-checksum = "sha256:c6507206baf7793c6013dbd82368469a45f20dc0e17a6f92f204602f652ed2bc"
-checksum_source = "mise-versions"
-url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662550663"
+[tools."github:astral-sh/hawk"."platforms.linux-arm64"]
+checksum = "sha256:2a36ed6244a7b646ada0c7e9bc90cbc1757f17cc4af6675ecb32eec29d7dde23"
+url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384043"
+provenance = "github-attestations"
 
-[tools.duckdb."platforms.linux-x64-musl"]
-checksum = "sha256:c6507206baf7793c6013dbd82368469a45f20dc0e17a6f92f204602f652ed2bc"
-checksum_source = "mise-versions"
-url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662550663"
+[tools."github:astral-sh/hawk"."platforms.linux-arm64-musl"]
+checksum = "sha256:2a36ed6244a7b646ada0c7e9bc90cbc1757f17cc4af6675ecb32eec29d7dde23"
+url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384043"
+provenance = "github-attestations"
 
-[tools.duckdb."platforms.macos-arm64"]
-checksum = "sha256:188a36fe8883ef52e69165a0cbb6031ef679c8e6c448a1ce22951964149b7f96"
-url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-osx-arm64.tar.gz"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662551052"
+[tools."github:astral-sh/hawk"."platforms.linux-x64"]
+checksum = "sha256:6cc8b57e0d91edbdf70388254c73e2dcf7653929d83081e47dc2a6d6c85b0369"
+url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384072"
+provenance = "github-attestations"
 
-[tools.duckdb."platforms.macos-x64"]
-checksum = "sha256:fbc7013ba09d117396dabf16783281c2add47fc01cdac4855464a03526dc96ee"
-checksum_source = "mise-versions"
-url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-osx-amd64.tar.gz"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662550955"
+[tools."github:astral-sh/hawk"."platforms.linux-x64-musl"]
+checksum = "sha256:6cc8b57e0d91edbdf70388254c73e2dcf7653929d83081e47dc2a6d6c85b0369"
+url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384072"
+provenance = "github-attestations"
 
-[tools.duckdb."platforms.windows-x64"]
-checksum = "sha256:91663c2f36c2a334b0e5e639006d8c29c29e013af0c477d80bb931df68870312"
-checksum_source = "mise-versions"
-url = "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-windows-amd64.tar.gz"
-url_api = "https://api.github.com/repos/duckdb/duckdb/releases/assets/662551276"
+[tools."github:astral-sh/hawk"."platforms.macos-arm64"]
+checksum = "sha256:a1379620245ba56d53bca3727f57b1db959b6085b4a64dc42a56f12367fd64c6"
+url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384048"
+provenance = "github-attestations"
+provenance_verified = true
+
+[tools."github:astral-sh/hawk"."platforms.macos-x64"]
+checksum = "sha256:73483c42cb80b880d3a407201216aa90df8808546f90ab1cdbe5cd678d891cda"
+url = "https://github.com/astral-sh/hawk/releases/download/0.1.14/cargo-hawk-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/544384063"
+provenance = "github-attestations"
+
+[[tools."http:duckdb"]]
+version = "v2.0.0-alpha41489"
+backend = "http:duckdb"
+specifiers = ["v2.0.0-alpha41489"]
+
+[tools."http:duckdb"."platforms.linux-arm64"]
+checksum = "sha256:e92f0ec283c983ec9b36f5abadeb03127b32ce360e2c3051fef9b1bdf331af9c"
+url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-arm64.tar.gz"
+
+[tools."http:duckdb"."platforms.linux-arm64-musl"]
+checksum = "sha256:e92f0ec283c983ec9b36f5abadeb03127b32ce360e2c3051fef9b1bdf331af9c"
+url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-arm64.tar.gz"
+
+[tools."http:duckdb"."platforms.linux-x64"]
+checksum = "sha256:57215243cde3a00b3f64f7bceb4f3a972b4f45f0770a8418b7977a65abba9290"
+url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-amd64.tar.gz"
+
+[tools."http:duckdb"."platforms.linux-x64-musl"]
+checksum = "sha256:57215243cde3a00b3f64f7bceb4f3a972b4f45f0770a8418b7977a65abba9290"
+url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-linux-amd64.tar.gz"
+
+[tools."http:duckdb"."platforms.macos-arm64"]
+checksum = "sha256:d71af9d28992a03f811792a56e2bb9b8776f3820455aa0006cedc2eda254d8f5"
+url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-osx-arm64.tar.gz"
+
+[tools."http:duckdb"."platforms.macos-x64"]
+checksum = "sha256:63d90c09c58f5ad788341859c18d62e6ba2d9fecf3c3035cbadde56257ed055a"
+url = "https://duckdb-staging.duckdb.org/10de957379/v2.0.0-alpha41489/duckdb/duckdb/github_release/duckdb-cli-osx-amd64.tar.gz"
 
 [[tools."packslip:github.com/aubepkg/aube"]]
-version = "2.8.4"
+version = "2.2.12"
 backend = "packslip:github.com/aubepkg/aube"
-specifiers = ["2.8.4"]
+specifiers = ["2.2.12"]
 
 [tools."packslip:github.com/aubepkg/aube"."platforms.linux-arm64"]
-checksum = "sha256:7cf94b73080d6604bf93e3e8d129c35264a851572a09a2b1236af75f592d87b5"
-url = "https://github.com/aubepkg/aube/releases/download/v2.8.4/aube-v2.8.4-aarch64-unknown-linux-gnu.tar.gz"
-signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release.yml"
+checksum = "sha256:831f212a8b3f2f7a2de891eed7c95856bffadb9e3ec5981377a157f32bcff730"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-aarch64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
 
 [tools."packslip:github.com/aubepkg/aube"."platforms.linux-arm64-musl"]
-checksum = "sha256:cd2035acdea72163e2fe745b8e890a12431ecebab418ec1bfc7cf6f32cc7d2c3"
-url = "https://github.com/aubepkg/aube/releases/download/v2.8.4/aube-v2.8.4-aarch64-unknown-linux-musl.tar.gz"
-signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release.yml"
+checksum = "sha256:b6df7f02c0e58257843c071efd14d65665cebb03fb3462633643c9aeaa36a61f"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-aarch64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
 
 [tools."packslip:github.com/aubepkg/aube"."platforms.linux-x64"]
-checksum = "sha256:7cdc99ea7a4ceced9ee174c2f2406abf6ed252b192b222a8a5ecb386b2dc2fe1"
-url = "https://github.com/aubepkg/aube/releases/download/v2.8.4/aube-v2.8.4-x86_64-unknown-linux-gnu.tar.gz"
-signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release.yml"
+checksum = "sha256:ad906bced7d1bf014a2dd8cfa1b03ad0e38a5764f92fe4b30e9e27e303bb7a03"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-x86_64-unknown-linux-gnu.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
 
 [tools."packslip:github.com/aubepkg/aube"."platforms.linux-x64-musl"]
-checksum = "sha256:36272090e3ec57b20e883f756e8c88cf5cd932c0244694f22cad21de25c3110a"
-url = "https://github.com/aubepkg/aube/releases/download/v2.8.4/aube-v2.8.4-x86_64-unknown-linux-musl.tar.gz"
-signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release.yml"
+checksum = "sha256:81a1e1c3d041ce0db51483ad3b892e66dec1e63fff6489ae847880fbd081b92d"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-x86_64-unknown-linux-musl.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
 
 [tools."packslip:github.com/aubepkg/aube"."platforms.macos-arm64"]
-checksum = "sha256:3c755c18237fcefbd4bf113ca7017bb1010cd12d7b756b6e2b5577862d294c71"
-url = "https://github.com/aubepkg/aube/releases/download/v2.8.4/aube-v2.8.4-aarch64-apple-darwin.tar.gz"
-signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release.yml"
+checksum = "sha256:30235658a0f328f095ff7f178f352a6bfef753a8fe505d991bd9f5db3825f2f6"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-aarch64-apple-darwin.tar.gz"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
 
 [tools."packslip:github.com/aubepkg/aube"."platforms.windows-x64"]
-checksum = "sha256:09309cb200c2b71f8968931d0651b3cab24dd5af645a6c8f241f05d457d0349c"
-url = "https://github.com/aubepkg/aube/releases/download/v2.8.4/aube-v2.8.4-x86_64-pc-windows-msvc.zip"
-signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release.yml"
+checksum = "sha256:c734783dfba99509b54dfaf49aa897dffa017a82128a45302e01812231dfeb11"
+url = "https://github.com/aubepkg/aube/releases/download/v2.2.12/aube-v2.2.12-x86_64-pc-windows-msvc.zip"
+signer = "sigstore-oidc:https://github.com/aubepkg/aube/.github/workflows/release-plz.yml"
 
 [[tools."packslip:github.com/jdx/hk"]]
-version = "2.9.0"
+version = "1.58.1"
 backend = "packslip:github.com/jdx/hk"
-specifiers = ["2.9.0"]
+specifiers = ["1.58.1"]
 
 [tools."packslip:github.com/jdx/hk"."platforms.linux-arm64"]
-checksum = "sha256:1ed0259505fab94bc4f90b42f36e38b61b316c20f2f6f7589d0b090cc42068d3"
-url = "https://github.com/jdx/hk/releases/download/v2.9.0/hk-aarch64-unknown-linux-gnu.tar.gz"
+checksum = "sha256:0972e05774ea3651fd521676c1bc6411333fe4404beb4a48067e10b54dfd1b4d"
+url = "https://github.com/jdx/hk/releases/download/v1.58.1/hk-aarch64-unknown-linux-gnu.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
 
 [tools."packslip:github.com/jdx/hk"."platforms.linux-arm64-musl"]
-checksum = "sha256:9f16526f08f9ed2835a3c50e6e5aa2baf32284e7325a799b5c9b250e3ede12f0"
-url = "https://github.com/jdx/hk/releases/download/v2.9.0/hk-aarch64-unknown-linux-musl.tar.gz"
+checksum = "sha256:a49cc7c21cf914c03fbda6289254bb704d424e91458afd91074f16921f9a5e84"
+url = "https://github.com/jdx/hk/releases/download/v1.58.1/hk-aarch64-unknown-linux-musl.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
 
 [tools."packslip:github.com/jdx/hk"."platforms.linux-x64"]
-checksum = "sha256:db1021a8920b71c161e26bef246c5b00a3ea6aa480b6cb837ee098ffeb8c41a1"
-url = "https://github.com/jdx/hk/releases/download/v2.9.0/hk-x86_64-unknown-linux-gnu.tar.gz"
+checksum = "sha256:8139133a70ed7cf1d4a0f2f19c26b1b68d714d81af91b2b1f42c4c524afc0fe5"
+url = "https://github.com/jdx/hk/releases/download/v1.58.1/hk-x86_64-unknown-linux-gnu.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
 
 [tools."packslip:github.com/jdx/hk"."platforms.linux-x64-musl"]
-checksum = "sha256:91136908087b35d1dba1caee108b577774223429546d8b28a9de57280fcc7d36"
-url = "https://github.com/jdx/hk/releases/download/v2.9.0/hk-x86_64-unknown-linux-musl.tar.gz"
+checksum = "sha256:df8a97c000d59756c14096a550d211d7346c41abf2a20d394aaa0d9bc9695ef5"
+url = "https://github.com/jdx/hk/releases/download/v1.58.1/hk-x86_64-unknown-linux-musl.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
 
 [tools."packslip:github.com/jdx/hk"."platforms.macos-arm64"]
-checksum = "sha256:c7c4d85fd44e88d54b2bf8f9fc38165e278983f54210c095a3e3e8c593e4b720"
-url = "https://github.com/jdx/hk/releases/download/v2.9.0/hk-aarch64-apple-darwin.tar.gz"
+checksum = "sha256:5529d95c63ea3ba9318f551e19760998a9ddf7ed926a14daf39dc46717ab32bf"
+url = "https://github.com/jdx/hk/releases/download/v1.58.1/hk-aarch64-apple-darwin.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
 
 [tools."packslip:github.com/jdx/hk"."platforms.windows-x64"]
-checksum = "sha256:f0b6f181eecd9c784901122a3d4be15bb13156a839b36021a173b366756804dd"
-url = "https://github.com/jdx/hk/releases/download/v2.9.0/hk-x86_64-pc-windows-msvc.zip"
+checksum = "sha256:fb11cf7aa477f3f0546cf66a05ac9a8563322500e5766f63c011ffb97f5c708d"
+url = "https://github.com/jdx/hk/releases/download/v1.58.1/hk-x86_64-pc-windows-msvc.zip"
 signer = "sigstore-oidc:https://github.com/jdx/hk/.github/workflows/release.yml"
 
 [[tools."packslip:github.com/jdx/mr-boxington"]]
-version = "1.28.0"
+version = "1.9.0"
 backend = "packslip:github.com/jdx/mr-boxington"
-specifiers = ["1.28.0"]
+specifiers = ["1.9.0"]
 
 [tools."packslip:github.com/jdx/mr-boxington"."platforms.linux-arm64"]
-checksum = "sha256:9056d34520991f80c9f708d36008fcc732e500d735591a8649029d476cb566bd"
-url = "https://github.com/jdx/mr-boxington/releases/download/v1.28.0/mbx-aarch64-unknown-linux-gnu.tar.gz"
+checksum = "sha256:ae29794ecfd2888fa12bbcd591e10fd9d2d3d8ec41ceb8a1c3e1990110ed6557"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-aarch64-unknown-linux-gnu.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
 
 [tools."packslip:github.com/jdx/mr-boxington"."platforms.linux-arm64-musl"]
-checksum = "sha256:7b4336a5800847fee9e9f0082ca65091020bafdb4ff9d50f15d9ce4eaeb368b6"
-url = "https://github.com/jdx/mr-boxington/releases/download/v1.28.0/mbx-aarch64-unknown-linux-musl.tar.gz"
+checksum = "sha256:e3cb0c600ae829fee503fc572bb88588e5ffd557581833b64e73d961fb63f18f"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-aarch64-unknown-linux-musl.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
 
 [tools."packslip:github.com/jdx/mr-boxington"."platforms.linux-x64"]
-checksum = "sha256:50ce9360221d9274a73d70c9d2d5285dc2d8353a101de0845e3da5bb0083bcfb"
-url = "https://github.com/jdx/mr-boxington/releases/download/v1.28.0/mbx-x86_64-unknown-linux-gnu.tar.gz"
+checksum = "sha256:7e44a912962c68ef90616315dc3b62f4bdab3407569b6db2704410f020dc19ac"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-x86_64-unknown-linux-gnu.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
 
 [tools."packslip:github.com/jdx/mr-boxington"."platforms.linux-x64-musl"]
-checksum = "sha256:0093c725fb031dd5b0db547298901aaffb1ff93ebf903f6adf9c72b0611f2bf0"
-url = "https://github.com/jdx/mr-boxington/releases/download/v1.28.0/mbx-x86_64-unknown-linux-musl.tar.gz"
+checksum = "sha256:b3f69c48845d93f42ed6a354bd53a3917d0e9cc24c8cdb46b28295b0b5769c11"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-x86_64-unknown-linux-musl.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
 
 [tools."packslip:github.com/jdx/mr-boxington"."platforms.macos-arm64"]
-checksum = "sha256:ac73ba0637a443ba9c43354008f6bcd5d9e8a84b703e46f23202025c1f849472"
-url = "https://github.com/jdx/mr-boxington/releases/download/v1.28.0/mbx-aarch64-apple-darwin.tar.gz"
+checksum = "sha256:405ff4c3fd007c6eb980a39409f102a9ad6d6582dfa92a0bf8ec90b76903d780"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-aarch64-apple-darwin.tar.gz"
 signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
 
 [tools."packslip:github.com/jdx/mr-boxington"."platforms.windows-x64"]
-checksum = "sha256:3fdecc44d68f37215079f6b6fa8c1e2ad95ee9dd30668759ed9dfd98e02bc95d"
-url = "https://github.com/jdx/mr-boxington/releases/download/v1.28.0/mbx-x86_64-pc-windows-msvc.zip"
+checksum = "sha256:37ddcad90564f36697e1c3520a004fa420dc13b2455d305f6a3cc7ac302ae5e3"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-x86_64-pc-windows-msvc.zip"
 signer = "sigstore-oidc:https://github.com/jdx/mr-boxington/.github/workflows/release.yml"
 
 [[tools.rust]]
-version = "1.99.1"
+version = "1.98.1"
 backend = "core:rust"
-specifiers = ["1.99.1"]
+specifiers = ["1.98.1"]
 
 [tools.rust.options]
 components = "clippy,rustfmt"
-targets = "aarch64-unknown-linux-gnu,wasm32-unknown-unknown,x86_64-apple-darwin,x86_64-unknown-linux-gnu"
+targets = "aarch64-unknown-linux-gnu"
 
 [[tools.sccache]]
-version = "0.19.0"
+version = "0.17.0"
 backend = "aqua:mozilla/sccache"
-specifiers = ["0.19.0"]
+specifiers = ["0.17.0"]
 
 [tools.sccache."platforms.linux-arm64"]
-checksum = "sha256:3e47fc4a71b1ddd1b4294a0de9d34498922fdf41e3cd0bda5df3954e3d6deb9d"
-checksum_source = "mise-versions"
-url = "https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/671950692"
+checksum = "sha256:821a86343191aa1cbab74bd42f9e93c9a63bf85e4742945f40d3ae84193c1c77"
+url = "https://github.com/mozilla/sccache/releases/download/v0.17.0/sccache-v0.17.0-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/493678924"
 
 [tools.sccache."platforms.linux-arm64-musl"]
-checksum = "sha256:3e47fc4a71b1ddd1b4294a0de9d34498922fdf41e3cd0bda5df3954e3d6deb9d"
-checksum_source = "mise-versions"
-url = "https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/671950692"
+checksum = "sha256:821a86343191aa1cbab74bd42f9e93c9a63bf85e4742945f40d3ae84193c1c77"
+url = "https://github.com/mozilla/sccache/releases/download/v0.17.0/sccache-v0.17.0-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/493678924"
 
 [tools.sccache."platforms.linux-x64"]
-checksum = "sha256:aa73c7270c997894038c0d8f0d297865f57569e1687883322bc431713d4bb9dd"
-checksum_source = "mise-versions"
-url = "https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/671951070"
+checksum = "sha256:67c4a96dd237c1f518f6b36083f270f9976d516f1e57fce891755ea782e50006"
+url = "https://github.com/mozilla/sccache/releases/download/v0.17.0/sccache-v0.17.0-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/493679099"
 
 [tools.sccache."platforms.linux-x64-musl"]
-checksum = "sha256:aa73c7270c997894038c0d8f0d297865f57569e1687883322bc431713d4bb9dd"
-checksum_source = "mise-versions"
-url = "https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/671951070"
+checksum = "sha256:67c4a96dd237c1f518f6b36083f270f9976d516f1e57fce891755ea782e50006"
+url = "https://github.com/mozilla/sccache/releases/download/v0.17.0/sccache-v0.17.0-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/493679099"
 
 [tools.sccache."platforms.macos-arm64"]
-checksum = "sha256:a35a0b7d622618774bc1bb8102d72562dfb21e619f88b153b370d7f89bc286af"
-checksum_source = "mise-versions"
-url = "https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-aarch64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/671950630"
+checksum = "sha256:0c560bfba31aef5bdfb4fb3d2677f6e61d71c5c00952f2a83344f47aa31f00f1"
+url = "https://github.com/mozilla/sccache/releases/download/v0.17.0/sccache-v0.17.0-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/493678886"
 
 [tools.sccache."platforms.macos-x64"]
-checksum = "sha256:2db7344bb96de350df79cd9f0124dd4e9baa47b3de2fac1e63e1346b66b20684"
-checksum_source = "mise-versions"
-url = "https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/671951000"
+checksum = "sha256:c2144cafbfe3d22e34ae637f9974ce53613543ac19477fdb287df22ea3668261"
+url = "https://github.com/mozilla/sccache/releases/download/v0.17.0/sccache-v0.17.0-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/493679070"
 
 [tools.sccache."platforms.windows-x64"]
-checksum = "sha256:130e4f8eb672e76590e9993c2ab890c4763b88238577bb11d8062158c7698353"
-checksum_source = "mise-versions"
-url = "https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc.tar.gz"
-url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/671951037"
+checksum = "sha256:caf1932d76a909c909b7a2e41443cdfe3c79a49a380da1a22fa422e1d00d3ca7"
+url = "https://github.com/mozilla/sccache/releases/download/v0.17.0/sccache-v0.17.0-x86_64-pc-windows-msvc.tar.gz"
+url_api = "https://api.github.com/repos/mozilla/sccache/releases/assets/493679085"

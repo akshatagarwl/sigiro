@@ -2,8 +2,8 @@
  * Announce this site's URLs to IndexNow (Bing, Yandex, Seznam, Naver).
  *
  * Why this is a script and not an Astro integration. `astro-indexnow` exists and
- * submits "at build time", which is the wrong trigger here: `aube run build` and
- * `aube run deploy` are separate steps, so a build-time submission announces URLs
+ * submits "at build time", which is the wrong trigger here: `bun run build` and
+ * `bun run deploy` are separate steps, so a build-time submission announces URLs
  * that are not live yet, and announces them again for every build that is never
  * deployed. IndexNow rate-limits and de-prioritises noisy hosts, so submitting a
  * URL before it changed is not free. This runs after a deploy instead.
@@ -22,17 +22,17 @@
  * the Worker. This is the same reason `robots.txt` is a static asset here.
  */
 
-const HOST = "sigiro.com";
-const KEY = "1fcd9653aa5a4e26d24e76ecb4e1d3c1";
+const HOST = 'sigiro.com';
+const KEY = '1fcd9653aa5a4e26d24e76ecb4e1d3c1';
 const SITEMAP = `https://${HOST}/sitemap-0.xml`;
-const ENDPOINT = "https://api.indexnow.org/IndexNow";
+const ENDPOINT = 'https://api.indexnow.org/IndexNow';
 
 async function readSitemapUrls(): Promise<string[]> {
   const res = await fetch(SITEMAP);
   if (!res.ok) throw new Error(`sitemap ${SITEMAP} returned ${res.status}`);
   const xml = await res.text();
   const urls = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]!);
-  if (urls.length === 0) throw new Error("sitemap parsed to zero URLs");
+  if (urls.length === 0) throw new Error('sitemap parsed to zero URLs');
   return urls;
 }
 
@@ -45,14 +45,10 @@ async function assertKeyIsLive(): Promise<void> {
   const url = `https://${HOST}/${KEY}.txt`;
   const res = await fetch(url);
   if (!res.ok)
-    throw new Error(
-      `key file ${url} returned ${res.status} — deploy it before submitting`
-    );
+    throw new Error(`key file ${url} returned ${res.status} — deploy it before submitting`);
   const body = (await res.text()).trim();
   if (body !== KEY)
-    throw new Error(
-      `key file body is ${JSON.stringify(body)}, expected ${JSON.stringify(KEY)}`
-    );
+    throw new Error(`key file body is ${JSON.stringify(body)}, expected ${JSON.stringify(KEY)}`);
 }
 
 /**
@@ -74,21 +70,16 @@ async function keepLiveUrls(urls: string[]): Promise<string[]> {
   const checked = await Promise.all(
     urls.map(async (url) => {
       try {
-        const res = await fetch(url, { method: "HEAD", redirect: "manual" });
-        return {
-          url,
-          status: res.status,
-          ok: res.status >= 200 && res.status < 400,
-        };
+        const res = await fetch(url, { method: 'HEAD', redirect: 'manual' });
+        return { url, status: res.status, ok: res.status >= 200 && res.status < 400 };
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
         return { url, status: `unreachable (${message})`, ok: false };
       }
-    })
+    }),
   );
 
-  for (const c of checked)
-    if (!c.ok) console.warn(`  skipped ${c.url} -> ${c.status}`);
+  for (const c of checked) if (!c.ok) console.warn(`  skipped ${c.url} -> ${c.status}`);
   return checked.filter((c) => c.ok).map((c) => c.url);
 }
 
@@ -100,17 +91,15 @@ async function main(): Promise<void> {
   const urlList = await keepLiveUrls(candidates);
   const skipped = candidates.length - urlList.length;
   if (urlList.length === 0)
-    throw new Error(
-      `no live URLs to submit (all ${candidates.length} failed their status check)`
-    );
+    throw new Error(`no live URLs to submit (all ${candidates.length} failed their status check)`);
   if (skipped > 0)
     console.warn(
-      `warning: ${skipped} of ${candidates.length} URLs are not serving and were not submitted`
+      `warning: ${skipped} of ${candidates.length} URLs are not serving and were not submitted`,
     );
 
   const res = await fetch(ENDPOINT, {
-    method: "POST",
-    headers: { "content-type": "application/json; charset=utf-8" },
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
     body: JSON.stringify({
       host: HOST,
       key: KEY,
@@ -120,9 +109,7 @@ async function main(): Promise<void> {
   });
 
   const text = await res.text();
-  console.log(
-    `submitted ${urlList.length} URLs -> ${res.status} ${res.statusText}`
-  );
+  console.log(`submitted ${urlList.length} URLs -> ${res.status} ${res.statusText}`);
   if (text) console.log(text);
 
   // 200 accepted, 202 accepted-pending-key-validation. Anything else is a real

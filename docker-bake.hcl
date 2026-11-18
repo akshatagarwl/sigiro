@@ -63,4 +63,3 @@ target "sigiro" {
   cache-from = PUSH_CACHE == "true" ? ["type=registry,ref=${REGISTRY}/sigiro:buildcache"] : []
   cache-to   = PUSH_CACHE == "true" ? ["type=registry,ref=${REGISTRY}/sigiro:buildcache,mode=max"] : []
 }
-

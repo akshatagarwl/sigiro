@@ -1,4 +1,4 @@
-amends "package://github.com/jdx/hk/releases/download/v2.9.0/hk@2.9.0#/Config.pkl"
+amends "package://github.com/jdx/hk/releases/download/v1.58.1/hk@1.58.1#/Config.pkl"
 
 local rustInputs = List(
   "**/*.rs",
@@ -6,6 +6,7 @@ local rustInputs = List(
   "Cargo.lock",
   "rust-toolchain*",
   ".cargo/**",
+  "hawk.toml",
   "clippy.toml",
   "mise.toml",
   "mise.lock",

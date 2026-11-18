@@ -2,7 +2,7 @@
 title: Send your agent's own telemetry to sigiro
 description: Point Claude Code, Codex, Hermes Agent, or Pi at sigiro to inspect sessions, model latency, tokens, tools, errors, and retries.
 sidebar:
-  order: 4
+  order: 3
 ---
 
 This guide records what your coding agent does, rather than what the application
@@ -18,10 +18,10 @@ _your application_ at sigiro. Use both when you need both views.
 Install the public skill before you start the agent:
 
 ```bash
-npx skills add Arnav12114/skills
+npx skills add sigiroai/skills
 ```
 
-The [`debug-with-sigiro` skill](https://github.com/Arnav12114/skills) teaches the
+The [`debug-with-sigiro` skill](https://github.com/sigiroai/skills) teaches the
 agent how to inspect telemetry in sigiro. It does not change the telemetry
 settings in this guide.
 
@@ -36,8 +36,7 @@ curl http://127.0.0.1:9999/health
 
 The local receiver accepts OTLP/HTTP on `4318` and OTLP/gRPC on `4317`. It has no
 request authentication, so do not expose it to an untrusted network. For the
-the hosted service, run `sigiro signup --name "Your Name" --email you@example.com`
-for a new account (or `sigiro auth login` for an existing account), and follow [Send telemetry to hosted
+hosted service, follow [Send telemetry to hosted
 sigiro](/docs/how-to/hosted-onboarding) instead.
 
 Telemetry can contain prompts, responses, file contents, commands, user
@@ -46,224 +45,49 @@ capture settings. Review every exporter before enabling richer payloads.
 
 ## Claude Code
 
-Claude Code has built-in OpenTelemetry export. Add these keys to the `env` object
-in `~/.claude/settings.json`. Then every session sends telemetry, including
-sessions that an IDE starts:
-
-```json
-{
-  "env": {
-    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
-    "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
-    "OTEL_TRACES_EXPORTER": "otlp",
-    "OTEL_METRICS_EXPORTER": "otlp",
-    "OTEL_LOGS_EXPORTER": "otlp",
-    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318",
-    "OTEL_METRIC_EXPORT_INTERVAL": "10000"
-  }
-}
-```
-
-If the file already has an `env` object, merge the keys into it. The same
-variables also work as `export` statements in the shell that starts `claude`.
-
-Tracing is beta in Claude Code. `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` and
-`OTEL_TRACES_EXPORTER=otlp` turn it on. Without traces, the `gen_ai` and
-`operation_summaries` sections of a diagnosis are empty, but `/v1/services`
-still lists a service that sent logs or metrics. See
-[Claude Code monitoring](https://code.claude.com/docs/en/monitoring-usage) for the
-version you run.
-
-Start a new Claude Code session, run one prompt, wait ten seconds, then use the
-verification steps below.
-
-### What Claude Code sends by default
-
-Every metric, log, and span has `user.email`, `user.account_uuid`,
-`user.account_id`, `user.id`, `organization.id`, `session.id`, and
-`terminal.type`. Think about these identity attributes before you send telemetry
-to a shared or hosted server.
-
-Without the settings in the next section, telemetry names each tool but not its
-arguments:
-
-- **Tool calls:** tool name, success, duration, input and result size in bytes,
-  and the permission decision.
-- **Bash commands:** only the first program, from a fixed list (`bash_argv0`, for
-  example `git`, or `other`), and its category (`bash_command_class`).
-- **Tool failures:** only a category, such as `ShellError` or
-  `TelemetrySafeError`.
-- **Prompts:** `<REDACTED>` and the prompt length.
-- **Model requests:** model, tokens, time to first token, and `cost_usd` on
-  `claude_code.api_request` events.
-
-### Capture more detail
-
-Each setting below exports more content, such as commands, file contents, and
-conversation text. Enable only the settings whose exposure you accept, then start
-a new session.
-
-| Setting                                | What it adds                                                                                                                                                                              |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OTEL_LOG_TOOL_DETAILS=1`              | `full_command`, `file_path`, `skill_name`, and `subagent_type` on tool spans. `tool_input` and `tool_parameters` on tool events. Full error text. MCP server names and connection errors. |
-| `OTEL_LOG_TOOL_CONTENT=1`              | A `tool.output` span event with the input and output of each tool. Requires traces.                                                                                                       |
-| `OTEL_LOG_USER_PROMPTS=1`              | Prompt text on `claude_code.user_prompt` events and `claude_code.interaction` spans.                                                                                                      |
-| `OTEL_LOG_ASSISTANT_RESPONSES=1`       | Response text on `claude_code.assistant_response` events. If you do not set it, it follows `OTEL_LOG_USER_PROMPTS`. Set it to `0` to keep responses redacted.                             |
-| `OTEL_LOG_RAW_API_BODIES=1`            | The full API request and response JSON as `claude_code.api_request_body` and `claude_code.api_response_body` events. Request bodies include the conversation history.                     |
-| `OTEL_METRICS_INCLUDE_VERSION=true`    | `app.version` on metrics and events.                                                                                                                                                      |
-| `OTEL_METRICS_INCLUDE_ENTRYPOINT=true` | `app.entrypoint` on metrics and events.                                                                                                                                                   |
-
-A failed tool shows the difference. With the default settings, a failed Read
-reports `TelemetrySafeError` and a failed Bash command reports `ShellError`. With
-`OTEL_LOG_TOOL_DETAILS=1`, the same failures report
-`File does not exist. Note: your current working directory is …` and
-`Shell command failed`, with the command or path that failed.
-
-Claude Code truncates content attributes at
-`CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH`, which is 61,440 characters by default. A
-request body for a long conversation arrives cut off at that length. Sigiro
-stores values of that size. Larger limits are not tested.
-
-### Detailed beta tracing
-
-Detailed beta tracing also records what the model received and returned at each
-step. Add these keys to the same `env` object:
-
-```json
-"ENABLE_BETA_TRACING_DETAILED": "1",
-"BETA_TRACING_ENDPOINT": "http://127.0.0.1:4318"
-```
-
-With these keys, Claude Code sends logs and traces to `BETA_TRACING_ENDPOINT`
-instead of `OTEL_EXPORTER_OTLP_ENDPOINT`. Metrics still go to
-`OTEL_EXPORTER_OTLP_ENDPOINT`. Use the same sigiro base URL for both.
-
-Detailed beta tracing adds:
-
-- a `claude_code.hook` span for each hook run, with the hook configuration if
-  `OTEL_LOG_TOOL_DETAILS=1`;
-- `new_context` on interaction, model request, and tool spans: the text that
-  Claude Code added to the model context at that step;
-- `response.model_output`, `query_source`, `system_prompt_preview`,
-  `system_prompt_length`, `system_prompt_hash`, `system_reminders`, and `tools`
-  on model request spans;
-- `claude_code.system_prompt` log events.
-
-`system_reminders` can be tens of kilobytes on each model request. Claude Code
-does not include these attributes in its stable span schema, so their names can
-change. Interactive sessions get them only if your organization is on Anthropic's
-allowlist. `claude -p` and Agent SDK sessions do not need the allowlist. Claude
-Code ignores both keys in project and local settings files.
-
-### Traces from a subprocess
-
-Claude Code gives each Bash command a `TRACEPARENT` variable. A `claude -p` run
-that a Claude Code Bash tool starts joins the trace of the parent session. Its
-`claude_code.interaction` span has `parent.source: env`, and
-`/v1/traces/{trace_id}` returns the spans of both sessions. Filter on
-`session.id` to separate them.
-
-### Read Claude Code telemetry
-
-```text
-claude_code.interaction                  one user prompt
-├── claude_code.llm_request              one model request
-├── claude_code.tool                     permission wait and execution
-│   ├── claude_code.tool.blocked_on_user permission wait
-│   │   └── claude_code.llm_request      auto mode permission check
-│   └── claude_code.tool.execution       execution
-└── claude_code.hook                     detailed beta tracing only
-```
-
-- The duration of `claude_code.tool` includes the permission wait. Use
-  `claude_code.tool.execution` for run time and `claude_code.tool.blocked_on_user`
-  for wait time.
-- In auto mode, Claude Code checks some tool calls with a separate model request.
-  That request is a `claude_code.llm_request` span under
-  `claude_code.tool.blocked_on_user`, with `query_source_safe = 'auto_mode'`. In
-  Claude Code 2.1.273, each check added about 1.4 seconds. The span has token
-  counts, but Claude Code sends no `claude_code.api_request` event and no
-  `claude_code.cost.usage` point for it. Claude Code cost totals do not include
-  these checks.
-- A failed tool sets span status and `success = false` on its
-  `claude_code.tool_result` event. Claude Code sends no ERROR-severity log for
-  it.
-- `claude_code.api_request` events and the `claude_code.cost.usage` metric report
-  the same total cost.
-
-Replace the timestamps in these queries with literal UTC bounds around your
-sessions. Cost by day and model:
+Claude Code has built-in OpenTelemetry export. Configure the process that starts
+`claude`:
 
 ```bash
-curl -sS -X POST http://127.0.0.1:9999/v1/query \
-  -H 'content-type: text/plain' \
-  --data "SELECT strftime(timestamp, '%Y-%m-%d') AS usage_date,
-                 json_extract_string(log_attributes, 'model') AS model,
-                 count(*) AS requests,
-                 round(sum(CAST(json_extract_string(log_attributes, 'cost_usd') AS DOUBLE)), 2) AS cost_usd
-          FROM sigiro_logs
-          WHERE service_name = 'claude-code'
-            AND body = 'claude_code.api_request'
-            AND timestamp >= TIMESTAMP '2026-09-10 00:00:00'
-            AND timestamp <  TIMESTAMP '2026-09-11 00:00:00'
-          GROUP BY usage_date, model
-          ORDER BY usage_date, cost_usd DESC"
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://127.0.0.1:4318/v1/metrics
+
+export OTEL_LOGS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:4318/v1/logs
+
+# Short intervals are useful while proving a new local setup.
+export OTEL_METRIC_EXPORT_INTERVAL=10000
+export OTEL_LOGS_EXPORT_INTERVAL=5000
+
+claude
 ```
 
-Calls, failures, and p95 duration for each tool:
+Run one prompt, wait ten seconds, then use the verification steps below. Claude
+Code omits prompt text, assistant text, tool details, tool contents, and raw API
+bodies by default. Do not enable `OTEL_LOG_USER_PROMPTS`,
+`OTEL_LOG_ASSISTANT_RESPONSES`, `OTEL_LOG_TOOL_CONTENT`, or
+`OTEL_LOG_RAW_API_BODIES` unless the additional exposure is intentional.
+
+By default, a failed tool may only report a generic status such as
+`TelemetrySafeError` or `ShellError`. To see why a tool failed while debugging,
+opt in to its details:
 
 ```bash
-curl -sS -X POST http://127.0.0.1:9999/v1/query \
-  -H 'content-type: text/plain' \
-  --data "SELECT json_extract_string(log_attributes, 'tool_name') AS tool,
-                 count(*) AS calls,
-                 count(*) FILTER (WHERE json_extract_string(log_attributes, 'success') = 'false') AS failures,
-                 quantile_cont(CAST(json_extract_string(log_attributes, 'duration_ms') AS DOUBLE), 0.95) AS p95_ms
-          FROM sigiro_logs
-          WHERE service_name = 'claude-code'
-            AND body = 'claude_code.tool_result'
-            AND timestamp >= TIMESTAMP '2026-09-10 00:00:00'
-            AND timestamp <  TIMESTAMP '2026-09-11 00:00:00'
-          GROUP BY tool
-          ORDER BY calls DESC"
+export OTEL_LOG_TOOL_DETAILS=1
 ```
 
-Permission wait compared with execution time:
+This can export commands, file paths, and error text. Enable it only when that
+additional privacy exposure is acceptable.
 
-```bash
-curl -sS -X POST http://127.0.0.1:9999/v1/query \
-  -H 'content-type: text/plain' \
-  --data "SELECT span_name,
-                 count(*) AS spans,
-                 round(sum(duration) / 60000000.0, 1) AS total_minutes,
-                 median(duration) / 1000 AS p50_ms
-          FROM sigiro_spans
-          WHERE service_name = 'claude-code'
-            AND span_name IN ('claude_code.tool.blocked_on_user', 'claude_code.tool.execution')
-            AND timestamp >= TIMESTAMP '2026-09-10 00:00:00'
-            AND timestamp <  TIMESTAMP '2026-09-11 00:00:00'
-          GROUP BY span_name"
-```
-
-Auto mode permission checks, which are not in Claude Code cost totals:
-
-```bash
-curl -sS -X POST http://127.0.0.1:9999/v1/query \
-  -H 'content-type: text/plain' \
-  --data "SELECT json_extract_string(span_attributes, 'model') AS model,
-                 count(*) AS checks,
-                 round(sum(duration) / 60000000.0, 1) AS total_minutes,
-                 sum(CAST(json_extract_string(span_attributes, 'cache_read_tokens') AS BIGINT)) AS cache_read_tokens,
-                 sum(CAST(json_extract_string(span_attributes, 'output_tokens') AS BIGINT)) AS output_tokens
-          FROM sigiro_spans
-          WHERE service_name = 'claude-code'
-            AND span_name = 'claude_code.llm_request'
-            AND json_extract_string(span_attributes, 'query_source_safe') = 'auto_mode'
-            AND timestamp >= TIMESTAMP '2026-09-10 00:00:00'
-            AND timestamp <  TIMESTAMP '2026-09-11 00:00:00'
-          GROUP BY model"
-```
+Claude Code documents distributed traces as beta, but its current public setup
+guide does not give a complete stable trace configuration. The settings above
+therefore export the documented metrics and events without relying on an old beta
+flag. See [Claude Code monitoring](https://docs.anthropic.com/en/docs/claude-code/monitoring-usage)
+for the version you run.
 
 ## Codex
 
@@ -381,14 +205,8 @@ Run one real prompt in the configured agent, then discover the service name:
 curl http://127.0.0.1:9999/v1/services
 ```
 
-Find the agent's entry and inspect `signals.spans`, `signals.logs`, and
-`signals.metrics`. A service with zero spans but nonzero logs or metrics is
-sending telemetry; it is not a failed install. Only expect span-based diagnosis
-(`gen_ai` and `operation_summaries`) when `signals.spans` is nonzero. If you
-enabled traces but see zero spans, check the agent's trace exporter settings.
-Do not guess the emitted vocabulary: query only the signal tables with nonzero
-counts. Replace the two timestamps with literal UTC bounds around your test
-session. For spans:
+Do not guess the emitted vocabulary. Inspect span and metric names first. Replace
+the two timestamps with literal UTC bounds around your test session:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:9999/v1/query \
@@ -401,20 +219,7 @@ curl -sS -X POST http://127.0.0.1:9999/v1/query \
           ORDER BY occurrences DESC"
 ```
 
-If `signals.logs` is nonzero, inspect the logs:
-
-```bash
-curl -sS -X POST http://127.0.0.1:9999/v1/query \
-  -H 'content-type: text/plain' \
-  --data "SELECT service_name, count(*) AS records
-          FROM sigiro_logs
-          WHERE timestamp >= TIMESTAMP '2026-09-10 12:00:00'
-            AND timestamp <  TIMESTAMP '2026-09-10 13:00:00'
-          GROUP BY service_name ORDER BY records DESC"
-```
-
-If `signals.metrics` is nonzero, discover metric names across the OpenTelemetry
-table types:
+Metrics can use several OpenTelemetry table types, so discover all of them:
 
 ```bash
 for table in gauge sum histogram exp_histogram; do

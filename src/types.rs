@@ -1,7 +1,7 @@
 //! Shared types that span multiple modules, avoiding circular dependencies.
 
+use crate::otlp::MetricBatches;
 use arrow::record_batch::RecordBatch;
-use sigiro_segments::{MetricBatches, TraceId};
 
 // --------------------------------------------------------------------------
 // IngestMsg — carried across modules for routing
@@ -105,6 +105,13 @@ pub enum StatusCode {
     Error = 2,
 }
 
+impl StatusCode {
+    /// Convert back to i32 for SQL queries.
+    pub(crate) fn as_i32(self) -> i32 {
+        self as i32
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TenantId — prevents invalid identifiers reaching storage and SQL boundaries
 // ---------------------------------------------------------------------------
@@ -155,8 +162,47 @@ pub struct TenantId(String);
 pub struct TimestampMicros(i64);
 
 // ---------------------------------------------------------------------------
+// ApiKeyHashPrefix — validated identity for key revocation
+// ---------------------------------------------------------------------------
+
+/// Unambiguous hexadecimal prefix of a SHA-256 API-key hash.
+///
+/// Eight characters is the control-plane minimum for avoiding accidental broad
+/// matches; 64 is the full hash width. Checked deserialization keeps malformed
+/// path values out of the revocation operation.
+#[nutype::nutype(
+    validate(predicate = |prefix: &str| {
+        (8..=64).contains(&prefix.len()) && prefix.bytes().all(|b| b.is_ascii_hexdigit())
+    }),
+    derive(Debug, Clone, PartialEq, Eq, Hash, Into, AsRef, Display, Serialize, Deserialize)
+)]
+pub struct ApiKeyHashPrefix(String);
+
+#[nutype::nutype(
+    validate(predicate = |id: &str| {
+        id.len() == 32
+            && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            && id.bytes().any(|b| b != b'0')
+    }),
+    derive(Debug, Clone, PartialEq, Eq, Hash, Into, AsRef, Display, Serialize, Deserialize)
+)]
+pub struct TraceId(String);
+
+/// Canonical 8-byte OpenTelemetry span identifier encoded as lowercase hex.
+#[nutype::nutype(
+    validate(predicate = |id: &str| {
+        id.len() == 16
+            && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            && id.bytes().any(|b| b != b'0')
+    }),
+    derive(Debug, Clone, PartialEq, Eq, Hash, Into, AsRef, Display, Serialize, Deserialize)
+)]
+pub struct SpanId(String);
+
+// ---------------------------------------------------------------------------
 // Typed path structs — compile-time route checking for axum router
 // ---------------------------------------------------------------------------
+// Used with axum_extra::routing::TypedPath for compile-time route verification.
 
 use axum_extra::routing::TypedPath;
 use serde::{Deserialize, Serialize};
@@ -166,20 +212,42 @@ use serde::{Deserialize, Serialize};
 #[typed_path("/query")]
 pub struct QueryPath;
 
+/// Route: GET /diagnose
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/diagnose")]
+pub struct DiagnosePath;
+
 /// Route: GET /services
 #[derive(Debug, Clone, TypedPath)]
 #[typed_path("/services")]
 pub struct ServicesPath;
+
+/// Route: GET /anomalies
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/anomalies")]
+pub struct AnomaliesPath;
 
 /// Route: GET /alerts
 #[derive(Debug, Clone, TypedPath)]
 #[typed_path("/alerts")]
 pub struct AlertsPath;
 
-/// Route: POST /alerts/replay
+/// Route: GET /keys
 #[derive(Debug, Clone, TypedPath)]
-#[typed_path("/alerts/replay")]
-pub struct AlertsReplayPath;
+#[typed_path("/keys")]
+pub struct AdminKeysPath;
+
+/// Route: GET /tenants
+#[derive(Debug, Clone, TypedPath)]
+#[typed_path("/tenants")]
+pub struct AdminTenantsPath;
+
+/// Route: GET /keys/{short_token}
+#[derive(Debug, Clone, Deserialize, TypedPath)]
+#[typed_path("/keys/{short_token}")]
+pub struct AdminKeyPath {
+    pub(crate) short_token: ApiKeyHashPrefix,
+}
 
 /// Route: GET /status
 #[derive(Debug, Clone, TypedPath)]
