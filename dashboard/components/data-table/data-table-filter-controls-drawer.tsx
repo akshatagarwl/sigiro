@@ -18,7 +18,6 @@ import {
 } from "@/components/ui/tooltip";
 import { useHotKey } from "@/hooks/use-hot-key";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { FilterIcon } from "lucide-react";
 import React from "react";
 import { DataTableFilterControls } from "./data-table-filter-controls";
@@ -62,12 +61,12 @@ export function DataTableFilterControlsDrawer({ showLabel = false, shortcut = tr
         </Tooltip>
       </TooltipProvider>
       <DrawerContent className="max-h-[calc(100dvh-4rem)]">
-        <VisuallyHidden>
+        <div className="sr-only">
           <DrawerHeader>
             <DrawerTitle>Filters</DrawerTitle>
             <DrawerDescription>Adjust your table filters</DrawerDescription>
           </DrawerHeader>
-        </VisuallyHidden>
+        </div>
         <div className="flex-1 overflow-y-auto px-4">
           <DataTableFilterControls />
         </div>

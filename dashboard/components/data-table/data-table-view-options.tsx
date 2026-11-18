@@ -57,10 +57,8 @@ export function DataTableViewOptions() {
         </Button>
       </PopoverTrigger>
       <PopoverContent side="bottom" align="end" className="w-[200px] p-0">
-        <Command>
+        <Command query={search} onQueryChange={setSearch}>
           <CommandInput
-            value={search}
-            onValueChange={setSearch}
             placeholder="Search options..."
           />
           <CommandList>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@ui-sdk/react/toast";
 
 export function useCopyToClipboard() {
   const [text, setText] = useState<string | null>(null);

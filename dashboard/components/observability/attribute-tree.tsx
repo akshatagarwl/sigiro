@@ -1,6 +1,6 @@
 "use client";
 
-import { Collapsible } from "@base-ui/react/collapsible";
+import { Collapsible } from "@/components/ui/parts";
 import { useState } from "react";
 
 import { ActionMenu, Button, Input } from "./primitives";

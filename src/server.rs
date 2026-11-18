@@ -43,6 +43,7 @@ use tracing_attributes::instrument;
         description = "Send OpenTelemetry to sigiro and query tenant-scoped raw telemetry."
     ),
     paths(
+        dashboard_auth_config,
         query_handler,
         services_handler,
         alerts_handler,
@@ -55,6 +56,7 @@ use tracing_attributes::instrument;
             ),
     components(
         schemas(
+            crate::auth::DashboardAuthConfig,
             ServicesResponse,
             ServiceEntry,
             AlertsResponse,
@@ -82,6 +84,7 @@ use tracing_attributes::instrument;
      * `query` tag described the transport and grouped everything into one
      * heading). The API has two genuine areas. */
     tags(
+        (name = "Authentication", description = "Discover the server's authentication mode."),
         (name = "Telemetry", description = "Read the telemetry of your workspace."),
         (name = "Ingest keys", description = "Fixed, revocable keys that let a long-running service send telemetry."),
     ),
@@ -553,6 +556,7 @@ pub fn build_http_router(app_state: Arc<AppState>) -> Router {
     let public = Router::new()
         .typed_get(health)
         .typed_get(healthz)
+        .route("/v1/auth/config", axum::routing::get(dashboard_auth_config))
         .route("/openapi.json", axum::routing::get(openapi_json));
     let public = match app_state.auth_mode.protected_resource_metadata_path() {
         Some(path) => public.route(path, axum::routing::get(oauth_protected_resource_metadata)),
@@ -684,7 +688,8 @@ pub async fn run_servers(
     } else {
         None
     };
-    // Outside quack, SIGIRO_BIND (loopback by default on Android) narrows the listeners.
+    // Open-mode servers default to loopback on every platform. Network exposure
+    // must be explicit (SIGIRO_BIND), with authentication at the network perimeter.
     let listener_bind = match (edge_bind, crate::config::BIND.value()) {
         (Some(bind), _) => Some(bind),
         (None, Ok(raw_bind)) => Some(
@@ -692,6 +697,9 @@ pub async fn run_servers(
                 .parse()
                 .with_context(|| format!("SIGIRO_BIND {raw_bind:?} is not a valid IP address"))?,
         ),
+        (None, Err(_)) if !auth_mode.requires_auth() => {
+            Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
+        }
         (None, Err(_)) => None,
     };
     let (http_bind_ip, grpc_bind_ip) = resolve_listener_bind_ips(listener_bind);
@@ -1169,6 +1177,25 @@ fn spawn_storage_maintenance_task(
             }
         }
     })))
+}
+
+/// Read dashboard authentication mode
+///
+/// Public bootstrap: a failed query is never evidence of an authentication mode.
+#[utoipa::path(
+    get,
+    path = "/v1/auth/config",
+    tag = "Authentication",
+    responses((status = 200, description = "Explicit dashboard authentication mode", body = crate::auth::DashboardAuthConfig)),
+    security([])
+)]
+async fn dashboard_auth_config(
+    State(state): State<Arc<AppState>>,
+) -> impl axum::response::IntoResponse {
+    (
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(state.auth_mode.dashboard_config()),
+    )
 }
 
 #[instrument(skip(state))]

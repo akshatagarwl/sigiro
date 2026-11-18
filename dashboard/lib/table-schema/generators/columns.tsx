@@ -190,25 +190,8 @@ function sizingFor(config: {
   return { size: config.size, minSize: config.size, maxSize: config.size };
 }
 
-/**
- * The header checkbox's third state, spelled for both libraries.
- *
- * `ui/checkbox` resolves from whichever library the project was initialized
- * with, and they disagree: Radix takes `checked="indeterminate"`, Base UI
- * types `checked` as a boolean and takes a separate `indeterminate` flag.
- * Setting both is the only form that compiles and renders on either — hence
- * the cast, the one place this file steps around a props type. In the partial
- * state Radix does receive the extra `indeterminate` and forwards it to its
- * `<button>` as `indeterminate="true"`, which is inert; setting it only when
- * it applies is what avoids `indeterminate="false"`, which React warns about
- * on a non-boolean attribute.
- */
-function selectionState(allSelected: boolean, someSelected: boolean) {
-  const indeterminate = !allSelected && someSelected;
-  return {
-    checked: allSelected || (someSelected && "indeterminate"),
-    ...(indeterminate ? { indeterminate: true } : {}),
-  } as ComponentProps<typeof Checkbox>;
+function selectionState(allSelected: boolean, someSelected: boolean): Pick<ComponentProps<typeof Checkbox>, "checked"> {
+  return { checked: allSelected ? true : someSelected ? "indeterminate" : false };
 }
 
 /**

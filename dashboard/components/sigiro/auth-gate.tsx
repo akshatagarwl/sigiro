@@ -10,15 +10,18 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { auth, detectOpenMode, localToken } from "@/lib/sigiro/query";
+import { auth, loadAuthConfig } from "@/lib/sigiro/query";
 
 type Phase =
   | { kind: "starting" }
+  | { kind: "unavailable"; reason: string; unsupported?: boolean }
   | { kind: "signed-out"; reason?: string }
-  | { kind: "signed-in"; workspace?: string };
+  | { kind: "signed-in"; workspace?: string; local?: boolean };
 
 const WorkspaceContext = React.createContext<string | undefined>(undefined);
 export const useWorkspace = () => React.useContext(WorkspaceContext);
+const LocalContext = React.createContext(false);
+export const useLocalMode = () => React.useContext(LocalContext);
 
 /** The `tid` claim names the workspace the query API scopes to. Display only. */
 const tenantOf = (token: string): string | undefined => {
@@ -90,9 +93,48 @@ const autoSignIn = async (): Promise<boolean> => {
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [phase, setPhase] = React.useState<Phase>({ kind: "starting" });
+  const [signingIn, setSigningIn] = React.useState(false);
+  const [attempt, setAttempt] = React.useState(0);
+
+  const signIn = async () => {
+    setSigningIn(true);
+    setPhase({ kind: "signed-out" });
+    try {
+      await auth.beginAuthorization();
+    } catch (error) {
+      // Navigation deliberately rejects; only real failures belong in the UI.
+      if (String(error).includes("sign-in flow has started")) return;
+      setPhase({
+        kind: "signed-out",
+        reason: `Unable to sign in: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      setSigningIn(false);
+    }
+  };
 
   React.useEffect(() => {
     const start = async () => {
+      setPhase({ kind: "starting" });
+      let config;
+      try {
+        config = await loadAuthConfig();
+      } catch (error) {
+        setPhase({
+          kind: "unavailable",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+      if (config.mode === "open") {
+        // Local operation never contacts the hosted identity service.
+        auth.forget();
+        setPhase({ kind: "signed-in", workspace: "Local Sigiro", local: true });
+        return;
+      }
+      if (config.issuer !== "https://sigiro.com/api/auth") {
+        setPhase({ kind: "unavailable", unsupported: true, reason: "This server requires authentication from an issuer this dashboard does not support." });
+        return;
+      }
       try {
         await auth.handleCallback();
       } catch (error) {
@@ -102,9 +144,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         });
         return;
       }
-      const token =
-        auth.currentToken() ??
-        ((await detectOpenMode()) ? localToken() : undefined);
+      const token = auth.currentToken();
       if (!token) {
         if (await autoSignIn().catch(() => false)) return;
         setPhase({ kind: "signed-out" });
@@ -120,12 +160,32 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       }
     };
     void start();
-  }, []);
+  }, [attempt]);
+
+  if (phase.kind === "unavailable")
+    return (
+      <div className="flex min-h-svh items-center justify-center p-6">
+        <Card className="w-full max-w-sm" data-state="unavailable">
+          <CardHeader>
+            <CardTitle>{phase.unsupported ? "Authentication setup required" : "Cannot connect to Sigiro"}</CardTitle>
+            <CardDescription>
+              {phase.unsupported
+                ? "Use a dashboard compatible with this server's authentication configuration."
+                : "Start your Sigiro server and connect this dashboard to it. Local mode does not require sign-in."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <p className="text-destructive text-sm" role="alert">{phase.reason}</p>
+            <Button onClick={() => setAttempt(value => value + 1)}>Retry connection</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
 
   if (phase.kind === "starting")
     return (
       <div className="text-muted-foreground p-6 text-sm" data-state="starting">
-        Signing in…
+        Connecting to Sigiro…
       </div>
     );
 
@@ -148,11 +208,10 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             )}
             <Button
               data-action="sign-in"
-              onClick={() =>
-                void auth.beginAuthorization().catch(() => undefined)
-              }
+              disabled={signingIn}
+              onClick={() => void signIn()}
             >
-              Sign in
+              {signingIn ? "Signing in…" : "Sign in"}
             </Button>
           </CardContent>
         </Card>
@@ -160,8 +219,10 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     );
 
   return (
-    <WorkspaceContext.Provider value={phase.workspace}>
-      {children}
-    </WorkspaceContext.Provider>
+    <LocalContext.Provider value={phase.local ?? false}>
+      <WorkspaceContext.Provider value={phase.workspace}>
+        {children}
+      </WorkspaceContext.Provider>
+    </LocalContext.Provider>
   );
 }
