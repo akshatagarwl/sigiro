@@ -121,6 +121,7 @@ export interface DataTableInfiniteProps<TData extends RowData> {
   toolbarActions?: React.ReactNode;
   chartSlot?: React.ReactNode;
   footerSlot?: React.ReactNode;
+  resultsSlot?: React.ReactNode;
   floatingBarSlot?: React.ReactNode;
   className?: string;
 }
@@ -152,6 +153,7 @@ export function DataTableInfinite<TData extends RowData>({
   toolbarActions,
   chartSlot,
   footerSlot,
+  resultsSlot,
   floatingBarSlot,
   className,
 }: DataTableInfiniteProps<TData>) {
@@ -415,7 +417,7 @@ export function DataTableInfinite<TData extends RowData>({
           </div>
           {/* `min-h-0` lets the flex item shrink so the table container scrolls instead of the page. */}
           <div className="z-0 min-h-0 flex-1">
-            <Table
+            {resultsSlot ?? <Table
               ref={tableRef}
               onScroll={onScroll}
               // REMINDER: https://stackoverflow.com/questions/50361698/border-style-do-not-work-with-sticky-position-element
@@ -539,7 +541,7 @@ export function DataTableInfinite<TData extends RowData>({
                   </TableCell>
                 </TableRow>
               </TableBody>
-            </Table>
+            </Table>}
           </div>
         </div>
       </div>

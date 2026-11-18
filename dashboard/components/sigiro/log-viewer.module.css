@@ -1,0 +1,22 @@
+.console {
+  background: var(--background) !important;
+  color: var(--foreground) !important;
+  scrollbar-gutter: stable;
+}
+
+.console :global(.log-part) {
+  color: inherit;
+}
+
+.console a {
+  color: var(--muted-foreground) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console,
+  .console * {
+    scroll-behavior: auto !important;
+    animation: none !important;
+    transition: none !important;
+  }
+}

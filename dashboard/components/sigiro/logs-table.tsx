@@ -5,6 +5,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import Link from "next/link";
 
 import { createExplorer } from "@/components/sigiro/explorer";
+import { LogViewer } from "@/components/sigiro/log-viewer";
 import { LEVEL_CHART } from "@/lib/sigiro/palette";
 import { fromMicros, type Level, LEVEL_SQL, LEVELS } from "@/lib/sigiro/query";
 import {
@@ -81,6 +82,7 @@ type LogRow = InferTableType<typeof schema.definition>;
 
 export const LogsTable = createExplorer<LogRow>({
   id: "logs",
+  renderResults: (rows) => <LogViewer entries={rows} />,
   definition: schema.definition,
   chart: LEVEL_CHART,
   source: {

@@ -3,6 +3,7 @@
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 
+import { Button } from "@/components/ui/button";
 import { DataTableFilterCommand } from "@/components/data-table/data-table-filter-command";
 import { DataTableInfinite } from "@/components/data-table/data-table-infinite";
 import { useDataTable } from "@/components/data-table/data-table-provider";
@@ -56,6 +57,7 @@ type Explorer<TRow> = {
   title: (row: TRow) => string;
   rowClassName?: (row: TRow) => string;
   detail?: boolean;
+  renderResults?: (rows: TRow[]) => React.ReactNode;
 };
 
 export function createExplorer<TRow extends { timestamp: Date }>(
@@ -107,6 +109,7 @@ export function createExplorer<TRow extends { timestamp: Date }>(
   }
 
   function Table() {
+    const [consoleView, setConsoleView] = React.useState(true);
     const search = useFilterState<Record<string, unknown>>();
     const options = useOptions();
     const queryClient = useQueryClient();
@@ -170,6 +173,7 @@ export function createExplorer<TRow extends { timestamp: Date }>(
           </div>
         )}
         <DataTableInfinite
+          resultsSlot={consoleView ? explorer.renderResults?.(flatData) : undefined}
           columns={columns}
           data={flatData}
           totalRows={meta?.totalRowCount}
@@ -213,7 +217,10 @@ export function createExplorer<TRow extends { timestamp: Date }>(
             </div>
           }
           toolbarActions={
-            <DataTableRefreshButton onClick={() => void refresh()} />
+            <>
+              {explorer.renderResults && <Button size="sm" variant="outline" aria-pressed={consoleView} onClick={() => setConsoleView(!consoleView)}>{consoleView ? "Table view" : "Console view"}</Button>}
+              <DataTableRefreshButton onClick={() => void refresh()} />
+            </>
           }
           commandSlot={
             <DataTableFilterCommand
