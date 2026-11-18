@@ -3,7 +3,6 @@ import { Logo } from '@/components/site/logo';
 import ThemeToggle from '@/components/site/ThemeToggle.astro';
 import { COMPACT } from '@/components/site/action';
 import { getCopy, type Locale } from '@/lib/site';
-import { NAV_HREFS } from '@/lib/site.shared';
 
 /**
  * Both compartments of the page panel are divided from the content with a
@@ -38,12 +37,22 @@ const home = locale === 'en' ? '/' : `/${locale}`;
  */
 const localize = (href: string) =>
   locale === 'en' || !href.startsWith('/docs') ? href : href.replace('/docs', `/docs/${locale}`);
+/**
+ * The quickstart, on the reader's own docs locale.
+ *
+ * Must match the hero's link in `Landing.astro`. It did not on the first pass:
+ * this was a bare `/docs/tutorials/quickstart`, so a localized page offered the
+ * Chinese quickstart in the hero and the English one in the header — two buttons
+ * with the same label going to different languages.
+ */
+const quickstart
+  = locale === 'en' ? '/docs/tutorials/quickstart' : `/docs/${locale}/tutorials/quickstart`;
 ---
 
 <header
-  class="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4 sm:gap-4 sm:px-5"
+  class="flex h-12 shrink-0 items-center gap-4 border-b border-hairline px-4 sm:px-5"
 >
-  <a href={home} aria-label={`${SITE.name} home`} class="shrink-0 rounded-md">
+  <a href={home} aria-label={`${SITE.name} home`} class="shrink-0 rounded-[6px]">
     <Logo />
   </a>
 
@@ -56,7 +65,7 @@ const localize = (href: string) =>
       NAV.map((item) => (
         <a
           href={localize(item.href)}
-          class="transition-colors inline-flex h-7 items-center rounded-md px-2 text-[12.5px] text-muted-foreground hover:text-foreground"
+          class="press inline-flex h-7 items-center rounded-[6px] px-2 text-[12.5px] text-ink-3 hover:text-ink"
         >
           {item.label}
         </a>
@@ -69,48 +78,15 @@ const localize = (href: string) =>
   <ThemeToggle />
 
   {/*
-    "Sign in" shows at every width: it is the only way back in for someone who
-    already has an account, and the hero's "Sign up" goes to the same page. The
-    CLI install is the hero's second action, one screen away at most, so below sm
-    this row has no width to spare for a copy of it.
+    Below sm the hero's own action is one screen away at most, and this row has no
+    width to spare for a second copy of it.
 
     The wrapper carries the breakpoint, not the link: COMPACT already sets
     `inline-flex`, and two unprefixed display utilities on one element are decided
     by their order in the generated stylesheet rather than by which one you wrote
     last — so `hidden` lost and the button showed on a phone anyway.
   */}
-  <div class="flex items-center gap-1">
-    <a
-      id="header-account"
-      href={copy.signin.href}
-      class={`${COMPACT} max-w-[14rem]`}
-      data-signed-in-as={copy.ui.signedInAs}
-      data-dashboard-href={NAV_HREFS.dashboard}
-    >
-      <span class="truncate">{copy.signin.label}</span>
-    </a>
-    <span class="hidden sm:block">
-      <a href={copy.install.href} class={COMPACT}>{copy.install.label}</a>
-    </span>
+  <div class="hidden sm:block">
+    <a href={quickstart} class={COMPACT}>{copy.ui.getStarted}</a>
   </div>
 </header>
-
-{/*
-  Signed in, the header names the account and links to the dashboard instead of
-  offering "Sign in" again. The page is static, so this asks the auth API once
-  after load; signed out (or on any error) the link stays "Sign in". The session
-  cookie is HttpOnly, so there is no cheaper local check.
-*/}
-<script is:inline>
-  fetch('/api/auth/get-session', { credentials: 'same-origin' })
-    .then((r) => (r.ok ? r.json() : null))
-    .then((s) => {
-      const who = s && s.user && (s.user.email || s.user.name);
-      const a = document.getElementById('header-account');
-      if (!who || !a) return;
-      a.href = a.dataset.dashboardHref;
-      a.title = `${a.dataset.signedInAs} ${who}`;
-      a.firstElementChild.textContent = who;
-    })
-    .catch(() => {});
-</script>

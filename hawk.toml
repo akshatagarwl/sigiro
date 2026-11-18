@@ -1,0 +1,9 @@
+# Hawk (astral-sh/hawk): workspace-aware lint for unnecessary `pub` APIs.
+# sigiro is a single bin+lib crate whose only shipped artifact is the `sigiro`
+# binary — so anything `pub` that the binary doesn't reach is a candidate for
+# `pub(crate)` or removal. Keeps the surface minimal (Zig Zen: minimize what
+# one must remember).
+[[production]]
+package = "sigiro"
+bin = "sigiro"
+reason = "the single shipped sigiro binary (gRPC/HTTP server + CLI)"

@@ -1,6 +1,4 @@
 /target
-node_modules/
-__pycache__/
 .buildx-cache*
 .env
 fuzz/target/
@@ -23,7 +21,6 @@ car
 out.something
 trace-waterfall.html
 AGENTS.md
-hk.local.pkl
 
 # Downloadable binaries produced by `docker buildx bake dist`.
 dist-bin/
@@ -35,26 +32,3 @@ www/.source/
 
 # Letta worktree admin state
 .letta/
-
-# Locally issued dev-stack TLS material (scripts/dev-certs.sh). Machine-local
-# by construction — mkcert's root only exists in this machine's trust store.
-.dev/
-
-# Local Worker secrets and env overrides (wrangler/celld convention). These
-# carry BETTER_AUTH_SECRET and must never be committed.
-.dev.vars
-.dev.vars.*
-
-# celld's local runtime state (D1 sqlite, replication working dir).
-.celld/
-
-# Alchemy's local state and bundled worker output.
-**/.alchemy/
-
-# Local design-review screenshots (www/scripts/shoot-auth.ts)
-.shots/
-
-# Wrangler's local cache holds the account it last used; never commit it.
-.wrangler/
-# Local agent worktrees and per-user editor state.
-.worktrees/

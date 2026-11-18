@@ -1,0 +1,125 @@
+name: sigiro-agent
+
+services:
+  celld-deploy:
+    build:
+      context: .
+      dockerfile: celld-deploy.Dockerfile
+    command:
+      - deploy
+      - /app/coordinator
+      - --bucket
+      - ${CELLD_BUCKET:?set CELLD_BUCKET}
+      - --endpoint
+      - ${S3_ENDPOINT:?set S3_ENDPOINT}
+      - --region
+      - ${AWS_REGION:-auto}
+    environment:
+      AWS_ACCESS_KEY_ID: ${CELLD_AWS_ACCESS_KEY_ID:?set CELLD_AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${CELLD_AWS_SECRET_ACCESS_KEY:?set CELLD_AWS_SECRET_ACCESS_KEY}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    volumes:
+      - ../coordinator:/app/coordinator:ro
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [control, egress]
+    restart: "no"
+
+  celld:
+    image: ghcr.io/denoland/celld:v0.4.0@sha256:f73157548ed8e54a4b50e9cecfcb0fb8e209fb4d35cf78b7c45815ce78a7929f
+    command:
+      - --bucket
+      - ${CELLD_BUCKET:?set CELLD_BUCKET}
+      - --endpoint
+      - ${S3_ENDPOINT:?set S3_ENDPOINT}
+      - --region
+      - ${AWS_REGION:-auto}
+      - --listen
+      - 0.0.0.0:8080
+      - --internal-listen
+      - 127.0.0.1:8081
+    depends_on:
+      celld-deploy:
+        condition: service_completed_successfully
+    environment:
+      AWS_ACCESS_KEY_ID: ${CELLD_AWS_ACCESS_KEY_ID:?set CELLD_AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${CELLD_AWS_SECRET_ACCESS_KEY:?set CELLD_AWS_SECRET_ACCESS_KEY}
+      CELLD_DURABILITY: bucket
+      CELLD_MAX_REQUEST_BODY_BYTES: "1048576"
+      CELLD_VARS_FILE: /run/secrets/coordinator_vars
+      CELLD_WATCH: /var/lib/celld
+    user: "65532:65532"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    volumes:
+      - type: bind
+        source: ${CELLD_STATE_DIR:?set CELLD_STATE_DIR}
+        target: /var/lib/celld
+    secrets:
+      - coordinator_vars
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 0.75
+    networks: [control, egress]
+    ports:
+      - 127.0.0.1:${CELLD_PUBLIC_PORT:-8080}:8080
+    restart: unless-stopped
+    stop_grace_period: 45s
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/executor.Dockerfile
+    environment:
+      COORDINATOR_URL: http://celld:8080
+      WORKER_ID: ${WORKER_ID:?set WORKER_ID}
+      WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-2}
+      WORKER_TOKEN_FILE: /run/secrets/worker_token
+      EXECUTOR_STATE_DIR: /var/lib/sigiro-agent/jobs
+      EXECUTOR_WORKSPACE_DIR: /var/lib/sigiro-agent/workspaces
+      CLAUDE_BIN: ${CLAUDE_BIN:-claude}
+      CODEX_BIN: ${CODEX_BIN:-codex}
+      HOME: /home/agent
+    user: "65532:65532"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+    volumes:
+      - type: bind
+        source: ${EXECUTOR_STATE_DIR:?set EXECUTOR_STATE_DIR}
+        target: /var/lib/sigiro-agent/jobs
+      - type: bind
+        source: ${EXECUTOR_WORKSPACE_DIR:?set EXECUTOR_WORKSPACE_DIR}
+        target: /var/lib/sigiro-agent/workspaces
+      - type: bind
+        source: ${EXECUTOR_AUTH_DIR:?set EXECUTOR_AUTH_DIR}/claude
+        target: /home/agent/.claude
+      - type: bind
+        source: ${EXECUTOR_AUTH_DIR:?set EXECUTOR_AUTH_DIR}/codex
+        target: /home/agent/.codex
+    secrets:
+      - worker_token
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 512
+    mem_limit: 2g
+    cpus: 2
+    networks: [control, egress]
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+networks:
+  control:
+    internal: true
+  egress: {}
+
+secrets:
+  coordinator_vars:
+    file: ${COORDINATOR_VARS_FILE:?set COORDINATOR_VARS_FILE}
+  worker_token:
+    file: ${WORKER_TOKEN_FILE:?set WORKER_TOKEN_FILE}

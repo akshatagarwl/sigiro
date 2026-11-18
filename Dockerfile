@@ -3,71 +3,39 @@
 # Toolchain image, bookworm/glibc 2.36 to match the distroless runtime. Pinned to
 # $BUILDPLATFORM so rustc runs NATIVELY and cross-links to the target arch (no
 # QEMU). Carries both GNU cross toolchains + cargo-chef for dep-layer caching.
-FROM --platform=$BUILDPLATFORM rust:1.99.1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400 AS chef
-ARG TARGETARCH
+FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS chef
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      pkg-config protobuf-compiler git binutils libssl-dev make mold \
+      pkg-config protobuf-compiler git curl unzip xz-utils binutils libssl-dev mold \
       gcc-x86-64-linux-gnu g++-x86-64-linux-gnu \
       gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-    && dpkg --add-architecture "$TARGETARCH" \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends "libssl-dev:$TARGETARCH" \
     && rm -rf /var/lib/apt/lists/*
+# UPX (from GitHub release; not in this base's apt). Runs on $BUILDPLATFORM and
+# can pack cross-arch ELF, so it compresses either target binary.
+ARG UPX_VERSION=4.2.4
+RUN curl -fsSL "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-$(dpkg --print-architecture)_linux.tar.xz" \
+      | tar -xJ -C /tmp && cp /tmp/upx-${UPX_VERSION}-*/upx /usr/local/bin/upx && rm -rf /tmp/upx-*
 RUN cargo install cargo-chef --locked && \
     rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
 WORKDIR /build
 
 # Prebuilt DuckDB static libs for the TARGET arch: download + ar-merge, NO
-# compile. All build surfaces use the same pinned preparation script.
+# compile. Runs on $BUILDPLATFORM (ar/unzip are arch-agnostic). All fragments
+# are merged: the bundle's generated_extension_loader references every extension,
+# so it's link-all-or-nothing.
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS duckdb-static
+ARG DUCKDB_VERSION=1.5.3
 ARG TARGETARCH
-COPY scripts/prepare-duckdb-static.sh /usr/local/bin/prepare-duckdb-static
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl binutils && rm -rf /var/lib/apt/lists/* && \
-    case "$TARGETARCH" in amd64) T=x86_64-unknown-linux-gnu ;; arm64) T=aarch64-unknown-linux-gnu ;; *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; esac && \
-    eval "$(DUCKDB_STATIC_CACHE=/opt/duckdb-cache /usr/local/bin/prepare-duckdb-static "$T")" && \
-    mkdir -p /opt/duckdb && cp "$DUCKDB_LIB_DIR/libduckdb_static.a" "$DUCKDB_INCLUDE_DIR/duckdb.h" /opt/duckdb/
-
-# Node and aube for the two static exports the binary embeds, the dashboard
-# (src/dashboard.rs) and the docs (src/docs.rs). Platform-independent output,
-# so both build once on $BUILDPLATFORM. Aube is the version and checksum pinned
-# in mise.lock.
-FROM --platform=$BUILDPLATFORM node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS node-aube
-ARG BUILDARCH
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/* && \
-    set -eux; \
-    case "$BUILDARCH" in \
-      amd64) A=x86_64; SUM=7cdc99ea7a4ceced9ee174c2f2406abf6ed252b192b222a8a5ecb386b2dc2fe1 ;; \
-      arm64) A=aarch64; SUM=7cf94b73080d6604bf93e3e8d129c35264a851572a09a2b1236af75f592d87b5 ;; \
-      *) echo "unsupported BUILDARCH=$BUILDARCH" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /tmp/aube.tgz "https://github.com/aubepkg/aube/releases/download/v2.8.4/aube-v2.8.4-${A}-unknown-linux-gnu.tar.gz"; \
-    echo "${SUM}  /tmp/aube.tgz" | sha256sum -c -; \
-    tar -xzf /tmp/aube.tgz -C /usr/local/bin aube; \
-    rm /tmp/aube.tgz
-
-FROM node-aube AS dashboard
-WORKDIR /build/dashboard
-COPY dashboard/package.json dashboard/aube-lock.yaml ./
-RUN aube install --frozen-lockfile
-COPY dashboard/ ./
-RUN aube run build && test -f dist/dashboard/index.html
-
-# The docs (sigiro.com/docs) as a static export. The build reads the API
-# reference from https://sigiro.com/openapi.json, as the sigiro.com build does.
-FROM node-aube AS docs
-WORKDIR /build
-COPY www/package.json www/aube-lock.yaml www/
-COPY www/patches/ www/patches/
-RUN aube -C www install --frozen-lockfile
-COPY www/ www/
-COPY scripts/build-docs-export.sh scripts/
-RUN scripts/build-docs-export.sh && test -f www/dist-binary/index.html \
-    && test -f www/dist-mcp/mcp-data.json.gz
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip binutils && rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /opt/duckdb /tmp/d && cd /tmp/d && \
+    curl -fSL --retry 3 "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/static-libs-linux-${TARGETARCH}.zip" -o s.zip && \
+    unzip -q s.zip && test -f libduckdb_static.a && test -f duckdb.h && \
+    { echo "create m.a"; for a in *.a; do echo "addlib $a"; done; echo save; echo end; } | ar -M && \
+    ranlib m.a && cp m.a /opt/duckdb/libduckdb_static.a && cp duckdb.h /opt/duckdb/ && cd / && rm -rf /tmp/d
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
-COPY crates/ crates/
+COPY benches/ benches/
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
@@ -100,18 +68,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGE
       *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
     esac; \
     V=$(echo "$T" | tr 'a-z-' 'A-Z_'); Tu=$(echo "$T" | tr '-' '_'); \
-    export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar" \
-      PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_SYSROOT_DIR=/ \
-      PKG_CONFIG_PATH="/usr/lib/${P}/pkgconfig:/usr/share/pkgconfig" \
-      OPENSSL_LIB_DIR="/usr/lib/${P}" OPENSSL_INCLUDE_DIR="/usr/include/${P}"; \
+    export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar"; \
     mold -run cargo chef cook --release --target "$T" --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src/ src/
-COPY crates/ crates/
-COPY --from=dashboard /build/dashboard/dist/dashboard dashboard/dist/dashboard
-COPY --from=docs /build/www/dist-binary www/dist-binary
-COPY --from=docs /build/www/dist-mcp www/dist-mcp
-ENV SIGIRO_REQUIRE_DASHBOARD=1 SIGIRO_REQUIRE_DOCS=1
+COPY benches/ benches/
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGETARCH \
     set -eux; \
     case "$TARGETARCH" in \
@@ -119,38 +80,54 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-$TARGE
       arm64) T=aarch64-unknown-linux-gnu; P=aarch64-linux-gnu ;; \
     esac; \
     V=$(echo "$T" | tr 'a-z-' 'A-Z_'); Tu=$(echo "$T" | tr '-' '_'); \
-    export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar" \
-      PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_SYSROOT_DIR=/ \
-      PKG_CONFIG_PATH="/usr/lib/${P}/pkgconfig:/usr/share/pkgconfig" \
-      OPENSSL_LIB_DIR="/usr/lib/${P}" OPENSSL_INCLUDE_DIR="/usr/include/${P}"; \
+    export CARGO_TARGET_${V}_LINKER="${P}-gcc" CC_${Tu}="${P}-gcc" CXX_${Tu}="${P}-g++" AR_${Tu}="${P}-ar"; \
     mold -run cargo build --release --target "$T" --bin sigiro && \
-    cp "target/${T}/release/sigiro" /build/sigiro && \
-    mkdir -p /build/data-dir
+    cp "target/${T}/release/sigiro" /build/sigiro.raw && \
+    cp /build/sigiro.raw /build/sigiro && \
+    upx -6 /build/sigiro
 
 # The Linux binaries we publish for download, uncompressed.
 #
 # Same build as the image — same pinned DuckDB static archive, same cross-gcc,
 # same mold link — so a downloaded binary and the one in the container are the
-# same artifact.
+# same artifact. The only difference is UPX, which the image keeps and this does
+# not: compression pays for itself across image layers and pulls, and costs a
+# decompression stub on every start plus the odd endpoint-scanner false positive
+# for a binary a person puts on their laptop.
 #
 # `scratch`, so `--output type=local` writes exactly one file per platform and
 # nothing else.
 FROM scratch AS dist
-COPY --from=builder /build/sigiro /sigiro
+COPY --from=builder /build/sigiro.raw /sigiro
+
+# Runtime-prep (has a shell): bake the loadable extensions that aren't static in
+# the binary. Runs the TARGET binary, so pinned to $TARGETPLATFORM.
+FROM --platform=$TARGETPLATFORM debian:bookworm-slim AS runtime-prep
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/sigiro /usr/local/bin/sigiro
+ENV SIGIRO_EXTENSION_DIR=/opt/sigiro/extensions
+RUN /usr/local/bin/sigiro fetch-extensions
+# An empty data dir to COPY --chown into distroless, which has no shell to mkdir
+# with. Without this, `docker run <image>` dies on "failed to create data
+# directory /var/lib/sigiro: Permission denied" because nonroot can't write /var/lib.
+RUN mkdir -p /var/lib/sigiro
 
 # Final image: distroless/cc (glibc 2.36 + libstdc++ + ca-certificates), no shell,
 # runs as the built-in nonroot user.
 FROM gcr.io/distroless/cc-debian12
 COPY --from=builder /build/sigiro /usr/local/bin/sigiro
-COPY --from=builder --chown=nonroot:nonroot /build/data-dir /var/lib/sigiro
-ENV SIGIRO_DATA_DIR=/var/lib/sigiro
+COPY --from=runtime-prep /opt/sigiro/extensions /opt/sigiro/extensions
+COPY --from=runtime-prep --chown=nonroot:nonroot /var/lib/sigiro /var/lib/sigiro
+# Keep the extension dir OUTSIDE the data dir: a hosted volume mounts over
+# SIGIRO_DATA_DIR and would mask baked extensions, forcing a cold re-download.
+ENV SIGIRO_DATA_DIR=/var/lib/sigiro \
+    SIGIRO_EXTENSION_DIR=/opt/sigiro/extensions
 USER nonroot
-WORKDIR /var/lib/sigiro
 EXPOSE 4317 4318 9999
 # Shell-free healthcheck: distroless has no curl/sh, so the usual
 # `curl -f /health` can't run. `sigiro healthcheck` exits 0 only when Ready.
-# Deployment health checks must use this exec form too, not a curl string, or
-# the container is wrongly reported unhealthy.
+# Deploy configs (e.g. kamal accessory health-cmd) must use this exec form too,
+# not a curl string, or the container is wrongly reported unhealthy.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=120s --retries=6 \
   CMD ["/usr/local/bin/sigiro", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/sigiro"]

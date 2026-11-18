@@ -7,7 +7,7 @@
 //! Two independent guards, both required:
 //! - [`load_and_pin`]: refuses to serve an unpinned/unexpected quack build.
 //! - [`install_authorization_gate`]: the actual security boundary — a Rust
-//!   scalar UDF that runs the SAME [`sigiro_segments::validate_read_only`]
+//!   scalar UDF that runs the SAME [`crate::sql::validate_read_only`]
 //!   firewall `/v1/query` enforces (SELECT-only + `sigiro_*` table allowlist
 //!   + reader-function denylist), fail-closed.
 
@@ -24,20 +24,23 @@ use duckdb::vtab::arrow::WritableVector;
 /// authorization semantics underneath this gate without a deliberate,
 /// re-verified bump here.
 ///
-/// Empirically, against the pinned DuckDB v2.0.0: quack is NOT in
+/// Empirically, against the DuckDB build actually vendored by this crate's
+/// `duckdb = "1.10503.1"` dependency (DuckDB v1.5.3): quack is NOT in
 /// DuckDB's autoloadable "known extensions" list, so a bare `LOAD quack;`
 /// always fails with "Extension \"quack\" is an existing extension. Install
 /// it first" — [`load_and_pin`] must always `INSTALL` it explicitly. The
 /// `core` repository (DuckDB's default, i.e. plain `INSTALL quack;` with no
-/// `FROM` clause) serves this pinned version.
-///
-/// `core` serves a different quack build per DuckDB version, so a DuckDB
-/// bump moves this constant too. Never fall back to
-/// `core_nightly`. If `core` stops serving this exact version, that is
-/// exactly the drift this pin exists to catch — re-verify the authorization
-/// gate against the new build and bump this constant deliberately, rather
-/// than widening the install source.
-pub(crate) const EXPECTED_QUACK_VERSION: &str = "f96420ed46";
+/// `FROM` clause) serves this pinned version. **`core_nightly` serves a
+/// DIFFERENT, newer, UNVERIFIED build** (confirmed empirically: version
+/// `40de7ba` vs. this pin's `1693647`, for the same DuckDB v1.5.3/platform)
+/// — using it as a fallback here was the actual root cause of a boot failure
+/// (`quack extension version mismatch: installed "40de7ba", pinned
+/// "1693647"`) once `core_nightly`'s build drifted away from what this gate
+/// was verified against. Never fall back to `core_nightly`; if `core` stops
+/// serving this exact version, that is exactly the drift this pin exists to
+/// catch — re-verify the authorization gate against the new build and bump
+/// this constant deliberately, rather than widening the install source.
+pub(crate) const EXPECTED_QUACK_VERSION: &str = "1693647";
 
 /// Scalar UDF name installed as the quack authorization gate. Re-registered
 /// from this Rust source on every server boot (see
@@ -45,20 +48,13 @@ pub(crate) const EXPECTED_QUACK_VERSION: &str = "f96420ed46";
 /// run may have left in the catalog.
 const AUTH_FUNCTION_NAME: &str = "sigiro_quack_authorize";
 
-/// Optional credential shared by quack servers and federated clients.
-///
-/// Quack rejects tokens shorter than four bytes. Keeping that rule in a
-/// non-displayable type prevents either side from carrying an unusable token
-/// and avoids accidentally formatting the credential outside the SQL boundary.
-#[nutype::nutype(
-    validate(predicate = |token: &str| token.len() >= 4),
-    derive(Clone, AsRef)
-)]
-pub(crate) struct QuackToken(String);
-
 /// Install (if needed) and load the `quack` DuckDB extension on `conn`, then
 /// assert the loaded build matches [`EXPECTED_QUACK_VERSION`]. Fails loud on
 /// a mismatch — refuses to serve rather than trust an unpinned extension.
+///
+/// Also called by [`crate::storage::prewarm_extensions`] so `sigiro
+/// fetch-extensions` and the quack E2E test warm (and version-verify) this
+/// exact same pinned build ahead of time, not just at serve-time.
 pub(crate) fn load_and_pin(conn: &Connection) -> Result<()> {
     if let Err(bare_load_error) = conn.execute_batch("LOAD quack;") {
         // `FROM core` is required, not merely the default: see
@@ -98,7 +94,7 @@ pub(crate) fn load_and_pin(conn: &Connection) -> Result<()> {
 /// Signature: `sigiro_quack_authorize(connection_id VARCHAR, query VARCHAR) ->
 /// BOOLEAN` — matches quack's authorization-callback contract exactly.
 /// `connection_id` is ignored: sigiro's guard is per-query, not
-/// per-connection. Returns `true` iff [`sigiro_segments::validate_read_only`]
+/// per-connection. Returns `true` iff [`crate::sql::validate_read_only`]
 /// — the SAME firewall `/v1/query` enforces — accepts `query`: SELECT-only,
 /// `sigiro_*` table allowlist, reader-function denylist.
 ///
@@ -131,7 +127,7 @@ struct QuackAuthorizeScalar;
 impl VScalar for QuackAuthorizeScalar {
     type State = ();
 
-    fn invoke(
+    unsafe fn invoke(
         _: &Self::State,
         input: &mut DataChunkHandle,
         output: &mut dyn WritableVector,
@@ -148,7 +144,7 @@ impl VScalar for QuackAuthorizeScalar {
                 false
             } else {
                 let query = DuckString::new(&mut { *ptr }).as_str().to_string();
-                std::panic::catch_unwind(|| sigiro_segments::validate_read_only(&query).is_ok())
+                std::panic::catch_unwind(|| crate::sql::validate_read_only(&query).is_ok())
                     .unwrap_or(false)
             };
         }
@@ -175,7 +171,7 @@ impl VScalar for QuackAuthorizeScalar {
 ///
 /// Uses a non-NULL placeholder for `connection_id` (never literal SQL
 /// `NULL`, and never something a real quack call would send): the
-/// `duckdb` crate's `VScalar` API has no hook for DuckDB's
+/// `duckdb = "1.10503.1"` crate's `VScalar` API has no hook for DuckDB's
 /// "special" null handling, so a registered scalar UDF gets DEFAULT null
 /// handling — DuckDB substitutes SQL NULL as the *whole row's output*
 /// whenever ANY argument is NULL, without ever calling into
@@ -253,6 +249,54 @@ fn self_test_authorization_gate(conn: &Connection) -> Result<()> {
         "authorization gate self-test FAILED: a known-bad SELECT current_setting(...) was \
          ALLOWED — refusing to serve the quack query surface"
     );
+
+    // The `sys_*` host-statistics functions are a DELIBERATE, NAMED exception
+    // to the config-leak denials asserted immediately above: federated fleet
+    // queries (crate::federate) reach them through this surface, so they must
+    // be permitted here — while `getenv`/`current_setting` stay denied. Both
+    // halves are asserted so the pairing can never drift: widening the gate
+    // far enough to leak process env or DuckDB config still refuses to bind a
+    // port, and narrowing it far enough to break fleet queries fails at boot
+    // instead of at the first query.
+    let sys_stats_allowed: bool = conn
+        .query_row(
+            &format!("SELECT {AUTH_FUNCTION_NAME}('self-test', 'SELECT * FROM sys_disk_info()')"),
+            [],
+            |row| row.get(0),
+        )
+        .context(
+            "authorization gate self-test: failed to invoke the gate on a known-good \
+             sys_disk_info() query",
+        )?;
+    anyhow::ensure!(
+        sys_stats_allowed,
+        "authorization gate self-test FAILED: SELECT * FROM sys_disk_info() was DENIED — \
+         federated fleet queries would fail at every edge. server::SAFE_FUNCTIONS and \
+         federate::SYS_STATS_FUNCTIONS must agree; refusing to serve the quack query surface"
+    );
+
+    // A `sys_*` call carrying arguments is NOT part of that exception. The
+    // allowlist matches on function NAME, so this asserts the surrounding
+    // structural checks still reject a call shape the coordinator never
+    // produces, rather than trusting the name alone.
+    let sys_stats_args_denied: bool = conn
+        .query_row(
+            &format!(
+                "SELECT {AUTH_FUNCTION_NAME}('self-test', 'SELECT * FROM sys_disk_info(''/etc/passwd'')')"
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .context(
+            "authorization gate self-test: failed to invoke the gate on a known-bad \
+             argument-carrying sys_disk_info() query",
+        )?;
+    anyhow::ensure!(
+        !sys_stats_args_denied,
+        "authorization gate self-test FAILED: sys_disk_info() WITH AN ARGUMENT was ALLOWED — \
+         refusing to serve the quack query surface"
+    );
+
     Ok(())
 }
 
@@ -306,11 +350,8 @@ pub(crate) fn install_authorization_gate(conn: &Connection) -> Result<()> {
 pub(crate) struct QuackUri(String);
 
 impl QuackUri {
-    pub(crate) fn new(bind_addr: std::net::IpAddr, port: u16) -> Self {
-        Self(format!(
-            "quack://{}",
-            std::net::SocketAddr::new(bind_addr, port)
-        ))
+    pub(crate) fn new(bind_addr: &str, port: u16) -> Self {
+        Self(format!("quack://{bind_addr}:{port}"))
     }
 }
 
@@ -335,16 +376,23 @@ pub(crate) struct QuackListen {
 pub(crate) fn start_server(
     conn: &Connection,
     uri: &QuackUri,
-    token: Option<&QuackToken>,
+    token: Option<&str>,
 ) -> Result<QuackListen> {
+    if let Some(t) = token {
+        anyhow::ensure!(
+            t.len() >= 4,
+            "SIGIRO_QUACK_TOKEN must be at least 4 characters (quack's own minimum)"
+        );
+    }
+
     let mut sql = format!(
         "SELECT listen_uri FROM quack_serve('{}'",
-        sigiro_core::sql::escape_sql_string(&uri.0)
+        crate::sql::escape_sql_string(&uri.0)
     );
     if let Some(t) = token {
         sql.push_str(&format!(
             ", token := '{}'",
-            sigiro_core::sql::escape_sql_string(t.as_ref())
+            crate::sql::escape_sql_string(t)
         ));
     }
     sql.push_str(", allow_other_hostname := true, disable_ssl := true);");
@@ -363,7 +411,7 @@ pub(crate) fn start_server(
 pub(crate) fn stop_server(conn: &Connection, uri: &QuackUri) -> Result<()> {
     conn.execute_batch(&format!(
         "CALL quack_stop('{}');",
-        sigiro_core::sql::escape_sql_string(&uri.0)
+        crate::sql::escape_sql_string(&uri.0)
     ))
     .context("failed to stop the quack server cleanly")?;
     Ok(())

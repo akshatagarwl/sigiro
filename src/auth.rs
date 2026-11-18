@@ -1,655 +1,553 @@
-use crate::types::TenantId;
-use anyhow::Context;
 use axum::{
     extract::{Request, State},
-    http::{HeaderMap, HeaderValue, header},
+    http::HeaderMap,
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
 };
-use axum_anyhow::ApiError;
+use axum_anyhow::{ApiError, IntoApiError};
+use camino::Utf8Path;
+use duckdb::Connection;
 use headers::{Authorization, HeaderMapExt, authorization::Bearer};
-use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashSet,
-    sync::Arc,
-    time::{Duration, Instant},
-};
-use tokio::sync::{Mutex as AsyncMutex, RwLock};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
-pub(crate) const TELEMETRY_INGEST_SCOPE: &str = "telemetry:ingest";
-pub(crate) const QUERY_READ_SCOPE: &str = "query:read";
-pub(crate) const SERVICES_READ_SCOPE: &str = "services:read";
-pub(crate) const TRACES_READ_SCOPE: &str = "traces:read";
-pub(crate) const ALERTS_READ_SCOPE: &str = "alerts:read";
-/// Verified-token-only routes use no operation-specific permission.
-pub(crate) const AUTHENTICATED_SCOPE: &str = "";
-const SUPPORTED_SCOPES: &[&str] = &[
-    TELEMETRY_INGEST_SCOPE,
-    SERVICES_READ_SCOPE,
-    TRACES_READ_SCOPE,
-    QUERY_READ_SCOPE,
-    ALERTS_READ_SCOPE,
-];
-
-const JWKS_CACHE_TTL: Duration = Duration::from_secs(300);
-const JWKS_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
-const UNKNOWN_KID_REFRESH_COOLDOWN: Duration = Duration::from_secs(5);
-const MAX_JWKS_BYTES: usize = 64 * 1024;
-const MAX_JWKS_KEYS: usize = 16;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AuthContext {
-    pub(crate) tenant_id: TenantId,
-    pub(crate) subject: String,
-    pub(crate) scopes: HashSet<String>,
-    pub(crate) kind: CredentialKind,
+/// Auth context extracted from the API key — attached to request extensions.
+/// Self-hosted: all requests route to the default project.
+#[derive(Clone, Debug)]
+pub struct AuthContext {
+    pub tenant_id: String,
+    pub project_id: String,
 }
 
-/// Which kind of credential authenticated a request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CredentialKind {
-    /// A user's OAuth access token.
-    User,
-    /// An Agent Auth token.
-    Agent,
-    /// A fixed ingest key (see `crate::ingest_keys`).
-    IngestKey,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum AuthError {
-    #[error("invalid access token")]
-    InvalidToken,
-    #[error("access token expired")]
-    TokenExpired,
-    #[error("access token lacks required scope {0}")]
-    InsufficientScope(&'static str),
-    #[error("authorization service is unavailable")]
-    JwksUnavailable,
-    #[error("malformed ingest key")]
-    IngestKeyMalformed,
-    #[error("unknown ingest key")]
-    IngestKeyUnknown,
-    #[error("revoked ingest key")]
-    IngestKeyRevoked,
-    #[error("ingest keys cannot use scope {0}")]
-    IngestKeyNotAllowed(&'static str),
-}
-
-impl AuthError {
-    /// HTTP status for this failure. An unavailable authorization service is
-    /// a 503 so OTLP exporters retry instead of dropping the batch.
-    pub(crate) fn status(&self) -> axum::http::StatusCode {
-        use axum::http::StatusCode;
-        match self {
-            AuthError::InsufficientScope(_) | AuthError::IngestKeyNotAllowed(_) => {
-                StatusCode::FORBIDDEN
-            }
-            AuthError::JwksUnavailable => StatusCode::SERVICE_UNAVAILABLE,
-            AuthError::InvalidToken
-            | AuthError::TokenExpired
-            | AuthError::IngestKeyMalformed
-            | AuthError::IngestKeyUnknown
-            | AuthError::IngestKeyRevoked => StatusCode::UNAUTHORIZED,
-        }
+impl AuthContext {
+    fn default_project() -> Self {
+        Self::for_tenant("default".to_string())
     }
 
-    /// One sentence a person reading an exporter's log can act on.
-    pub(crate) fn reason(&self) -> String {
-        match self {
-            AuthError::InvalidToken => "The bearer access token could not be verified.".to_owned(),
-            AuthError::TokenExpired => "The access token has expired. Tokens from `sigiro auth token` last 15 minutes; a long-running service should send an ingest key instead (`sigiro ingest-keys create`).".to_owned(),
-            AuthError::InsufficientScope(scope) => {
-                format!("The access token requires scope {scope}.")
-            }
-            AuthError::JwksUnavailable => {
-                "The authorization service is unavailable; retry shortly.".to_owned()
-            }
-            AuthError::IngestKeyMalformed => {
-                "The ingest key is malformed; expected sigiro_<id>_<secret>.".to_owned()
-            }
-            AuthError::IngestKeyUnknown => {
-                "The ingest key is not valid: no key with this id and secret exists.".to_owned()
-            }
-            AuthError::IngestKeyRevoked => "The ingest key has been revoked. Create a new one with `sigiro ingest-keys create`.".to_owned(),
-            AuthError::IngestKeyNotAllowed(_) => "Ingest keys can only send telemetry. Read data with `sigiro auth token` or `sigiro mcp`.".to_owned(),
-        }
-    }
-
-    fn title(&self) -> &'static str {
-        match self {
-            AuthError::InvalidToken => "Invalid access token",
-            AuthError::TokenExpired => "Expired access token",
-            AuthError::InsufficientScope(_) => "Insufficient scope",
-            AuthError::JwksUnavailable => "Authorization unavailable",
-            AuthError::IngestKeyMalformed
-            | AuthError::IngestKeyUnknown
-            | AuthError::IngestKeyRevoked => "Invalid ingest key",
-            AuthError::IngestKeyNotAllowed(_) => "Ingest key not allowed",
-        }
-    }
-
-    pub(crate) fn into_api_error(self) -> ApiError {
-        ApiError::builder()
-            .status(self.status())
-            .title(self.title())
-            .detail(self.reason())
-            .build()
-    }
-}
-
-impl From<crate::ingest_keys::KeyRejection> for AuthError {
-    fn from(rejection: crate::ingest_keys::KeyRejection) -> Self {
-        use crate::ingest_keys::KeyRejection;
-        match rejection {
-            KeyRejection::Malformed => AuthError::IngestKeyMalformed,
-            KeyRejection::Unknown => AuthError::IngestKeyUnknown,
-            KeyRejection::Revoked => AuthError::IngestKeyRevoked,
-            KeyRejection::Unavailable => AuthError::JwksUnavailable,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct AccessTokenClaims {
-    sub: String,
-    tid: String,
-    scope: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentSessionResponse {
-    active: bool,
-    agent_id: Option<String>,
-    tenant_id: Option<String>,
-    agent_capability_grants: Option<Vec<AgentCapabilityGrant>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentCapabilityGrant {
-    capability: String,
-    status: String,
-}
-
-#[derive(Debug)]
-struct CachedJwks {
-    keys: JwkSet,
-    expires_at: Instant,
-}
-
-pub struct JwtVerifier {
-    issuer: String,
-    audience: String,
-    resource_metadata_url: String,
-    resource_metadata_path: String,
-    jwks_url: String,
-    agent_session_url: String,
-    client: reqwest::Client,
-    cache: RwLock<Option<CachedJwks>>,
-    refresh: AsyncMutex<()>,
-    last_unknown_kid_refresh: RwLock<Option<(String, Instant)>>,
-}
-
-impl std::fmt::Debug for JwtVerifier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("JwtVerifier")
-            .field("issuer", &self.issuer)
-            .field("audience", &self.audience)
-            .field("jwks_url", &self.jwks_url)
-            .finish_non_exhaustive()
-    }
-}
-
-impl JwtVerifier {
-    pub(crate) async fn new(
-        issuer: String,
-        audience: String,
-        jwks_url: String,
-    ) -> anyhow::Result<Self> {
-        for (name, value) in [
-            ("SIGIRO_AUTH_ISSUER", issuer.as_str()),
-            ("SIGIRO_AUTH_AUDIENCE", audience.as_str()),
-            ("SIGIRO_AUTH_JWKS_URL", jwks_url.as_str()),
-        ] {
-            anyhow::ensure!(!value.trim().is_empty(), "{name} must not be empty");
-            validate_auth_url(name, value)?;
-        }
-        let resource_metadata_url = protected_resource_metadata_url(&audience)?;
-        let resource_metadata_path = resource_metadata_url.path().to_owned();
-        let agent_session_url = format!("{}/sigiro/agent/session", issuer.trim_end_matches('/'));
-        let verifier = Self {
-            issuer,
-            audience,
-            resource_metadata_url: resource_metadata_url.to_string(),
-            resource_metadata_path,
-            jwks_url,
-            agent_session_url,
-            client: reqwest::Client::builder()
-                .timeout(JWKS_FETCH_TIMEOUT)
-                .build()
-                .context("failed to build JWKS HTTP client")?,
-            cache: RwLock::new(None),
-            refresh: AsyncMutex::new(()),
-            last_unknown_kid_refresh: RwLock::new(None),
-        };
-        verifier
-            .refresh_jwks(None)
-            .await
-            .map_err(|_| anyhow::anyhow!("failed to fetch Better Auth JWKS during startup"))?;
-        Ok(verifier)
-    }
-
-    pub(crate) async fn verify(
-        &self,
-        token: &str,
-        required_scope: &'static str,
-        scheme: CredentialScheme,
-    ) -> Result<AuthContext, AuthError> {
-        let header = decode_header(token).map_err(|_| AuthError::InvalidToken)?;
-        let is_agent = header.typ.as_deref() == Some("agent+jwt");
-        if is_agent {
-            return self.verify_agent(token, required_scope).await;
-        }
-        if scheme == CredentialScheme::AgentAuth {
-            return Err(AuthError::InvalidToken);
-        }
-        if header.alg != Algorithm::EdDSA {
-            return Err(AuthError::InvalidToken);
-        }
-        let kid = header.kid.ok_or(AuthError::InvalidToken)?;
-        let key = self.key_for(&kid).await?;
-        let mut validation = Validation::new(Algorithm::EdDSA);
-        validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
-        validation.set_issuer(&[&self.issuer]);
-        validation.set_audience(&[&self.audience]);
-        validation.validate_nbf = true;
-        let claims = decode::<AccessTokenClaims>(token, &key, &validation)
-            .map_err(|error| match error.kind() {
-                jsonwebtoken::errors::ErrorKind::ExpiredSignature => AuthError::TokenExpired,
-                _ => AuthError::InvalidToken,
-            })?
-            .claims;
-        let tenant_id = TenantId::try_new(claims.tid).map_err(|_| AuthError::InvalidToken)?;
-        if claims.sub.trim().is_empty() {
-            return Err(AuthError::InvalidToken);
-        }
-        let scopes = claims
-            .scope
-            .split_ascii_whitespace()
-            .map(str::to_owned)
-            .collect::<HashSet<_>>();
-        if !required_scope.is_empty() && !scopes.contains(required_scope) {
-            return Err(AuthError::InsufficientScope(required_scope));
-        }
-        Ok(AuthContext {
+    fn for_tenant(tenant_id: String) -> Self {
+        Self {
+            project_id: tenant_id.clone(),
             tenant_id,
-            subject: claims.sub,
-            scopes,
-            kind: CredentialKind::User,
-        })
-    }
-
-    async fn verify_agent(
-        &self,
-        token: &str,
-        required_capability: &'static str,
-    ) -> Result<AuthContext, AuthError> {
-        let response = self
-            .client
-            .get(&self.agent_session_url)
-            .bearer_auth(token)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|_| AuthError::JwksUnavailable)?;
-        let session = response
-            .json::<AgentSessionResponse>()
-            .await
-            .map_err(|_| AuthError::InvalidToken)?;
-        if !session.active {
-            return Err(AuthError::InvalidToken);
         }
-        let subject = session
-            .agent_id
-            .filter(|id| !id.trim().is_empty())
-            .ok_or(AuthError::InvalidToken)?;
-        let tenant_id = TenantId::try_new(session.tenant_id.ok_or(AuthError::InvalidToken)?)
-            .map_err(|_| AuthError::InvalidToken)?;
-        let scopes = session
-            .agent_capability_grants
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|grant| grant.status == "active")
-            .map(|grant| grant.capability)
-            .collect::<HashSet<_>>();
-        if !scopes.contains(required_capability) {
-            return Err(AuthError::InsufficientScope(required_capability));
-        }
-        Ok(AuthContext {
-            tenant_id,
-            subject,
-            scopes,
-            kind: CredentialKind::Agent,
-        })
-    }
-
-    async fn key_for(&self, kid: &str) -> Result<DecodingKey, AuthError> {
-        if let Some(key) = self.cached_key(kid).await? {
-            return Ok(key);
-        }
-        self.refresh_jwks(Some(kid)).await?;
-        self.cached_key(kid).await?.ok_or(AuthError::InvalidToken)
-    }
-
-    async fn cached_key(&self, kid: &str) -> Result<Option<DecodingKey>, AuthError> {
-        let cache = self.cache.read().await;
-        let Some(cache) = cache
-            .as_ref()
-            .filter(|cache| cache.expires_at > Instant::now())
-        else {
-            return Ok(None);
-        };
-        cache
-            .keys
-            .find(kid)
-            .map(DecodingKey::from_jwk)
-            .transpose()
-            .map_err(|_| AuthError::InvalidToken)
-    }
-
-    async fn refresh_jwks(&self, unknown_kid: Option<&str>) -> Result<(), AuthError> {
-        let _guard = self.refresh.lock().await;
-        if let Some(unknown_kid) = unknown_kid
-            && self
-                .last_unknown_kid_refresh
-                .read()
-                .await
-                .as_ref()
-                .is_some_and(|(kid, last)| {
-                    kid == unknown_kid && last.elapsed() < UNKNOWN_KID_REFRESH_COOLDOWN
-                })
-        {
-            return Ok(());
-        }
-        if unknown_kid.is_none()
-            && self
-                .cache
-                .read()
-                .await
-                .as_ref()
-                .is_some_and(|cache| cache.expires_at > Instant::now())
-        {
-            return Ok(());
-        }
-        let mut response = self
-            .client
-            .get(&self.jwks_url)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|_| AuthError::JwksUnavailable)?;
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_JWKS_BYTES as u64)
-        {
-            return Err(AuthError::JwksUnavailable);
-        }
-        let mut body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| AuthError::JwksUnavailable)?
-        {
-            if body.len().saturating_add(chunk.len()) > MAX_JWKS_BYTES {
-                return Err(AuthError::JwksUnavailable);
-            }
-            body.extend_from_slice(&chunk);
-        }
-        let keys: JwkSet = serde_json::from_slice(&body).map_err(|_| AuthError::JwksUnavailable)?;
-        if keys.keys.is_empty() || keys.keys.len() > MAX_JWKS_KEYS {
-            return Err(AuthError::JwksUnavailable);
-        }
-        *self.cache.write().await = Some(CachedJwks {
-            keys,
-            expires_at: Instant::now() + JWKS_CACHE_TTL,
-        });
-        if let Some(unknown_kid) = unknown_kid {
-            *self.last_unknown_kid_refresh.write().await =
-                Some((unknown_kid.to_owned(), Instant::now()));
-        }
-        Ok(())
     }
 }
 
-fn validate_auth_url(name: &str, value: &str) -> anyhow::Result<url::Url> {
-    let parsed =
-        url::Url::parse(value).map_err(|error| anyhow::anyhow!("invalid {name}: {error}"))?;
-    let loopback = match parsed.host() {
-        Some(url::Host::Domain("localhost")) => true,
-        Some(url::Host::Ipv4(address)) => address.is_loopback(),
-        Some(url::Host::Ipv6(address)) => address.is_loopback(),
-        _ => false,
-    };
-    anyhow::ensure!(
-        parsed.scheme() == "https" || loopback,
-        "{name} must use HTTPS unless it targets loopback"
-    );
-    Ok(parsed)
-}
-
-fn protected_resource_metadata_url(resource: &str) -> anyhow::Result<url::Url> {
-    let mut metadata_url = validate_auth_url("SIGIRO_AUTH_AUDIENCE", resource)?;
-    anyhow::ensure!(
-        metadata_url.username().is_empty()
-            && metadata_url.password().is_none()
-            && metadata_url.query().is_none()
-            && metadata_url.fragment().is_none(),
-        "SIGIRO_AUTH_AUDIENCE must not contain credentials, a query, or a fragment"
-    );
-    let resource_path = metadata_url.path().trim_matches('/');
-    let metadata_path = if resource_path.is_empty() {
-        "/.well-known/oauth-protected-resource".to_owned()
-    } else {
-        format!("/.well-known/oauth-protected-resource/{resource_path}")
-    };
-    metadata_url.set_path(&metadata_path);
-    Ok(metadata_url)
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct ProtectedResourceMetadata {
-    resource: String,
-    authorization_servers: [String; 1],
-    scopes_supported: &'static [&'static str],
-    bearer_methods_supported: [&'static str; 1],
-}
-
-#[derive(Clone, Copy)]
-enum BearerChallenge {
-    Missing,
-    InvalidToken,
-    InsufficientScope(&'static str),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CredentialScheme {
-    Bearer,
-    AgentAuth,
-}
-
-pub(crate) struct ApiCredential {
-    pub(crate) scheme: CredentialScheme,
-    pub(crate) token: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CredentialParseError {
-    MissingScheme,
-    UnsupportedScheme,
-    InvalidToken,
-}
-
-/// Explicit auth mode — Open for local self-host/edge, JWT for hosted storage.
+/// Explicit auth mode — never implicit. The dual-mode auth axis:
+/// - `Open`: no per-request auth (self-host / edge / quack, protected by the
+///   network perimeter). Selected when `SIGIRO_CATALOG_URL` is unset, or on any
+///   quack edge regardless of catalog.
+/// - `TenantKeys`: per-tenant bearer keys hashed and resolved through the
+///   HOSTED control plane. Selected when `SIGIRO_CATALOG_URL` is set (and the
+///   node is not a quack edge).
 #[derive(Clone, Debug)]
 pub enum AuthMode {
     /// No auth required. Any request is accepted.
     Open,
-    /// Hosted mode: Better Auth OAuth access tokens verified against its JWKS,
-    /// plus the workspace ingest keys that may send telemetry.
-    Jwt {
-        verifier: Arc<JwtVerifier>,
-        ingest_keys: crate::ingest_keys::IngestKeys,
-    },
+    /// Distributed mode: bearer keys are hashed and resolved through the control plane.
+    TenantKeys { control: Arc<ControlPlane> },
 }
+
+pub(crate) const CONTROL_SCHEMA: &str = "sigiro_control";
 
 impl AuthMode {
     /// Build auth for the current storage mode.
     ///
-    /// Local no-catalog and quack edge deployments remain Open. Distributed
-    /// storage is hosted-only and must have a complete Better Auth resource
-    /// server configuration; there is no legacy key fallback.
-    pub async fn from_runtime_config(
+    /// `query_surface == Quack` is a single-tenant self-host edge: one
+    /// operator's own dataset, reachable only behind a mandatory network
+    /// perimeter (see `SIGIRO_QUACK_BIND` docs). It always uses `Open` auth,
+    /// even when `SIGIRO_CATALOG_URL` (and S3) are configured for its DuckLake
+    /// storage — `TenantKeys` is the control-plane, per-tenant auth model for
+    /// the HOSTED multi-tenant product (`query_surface == None`) and does not
+    /// apply here. Without this branch, a quack edge configured against a
+    /// distributed catalog would demand a control-plane Bearer token on ingest
+    /// that its own OTLP senders never carry, so no telemetry would ever land.
+    ///
+    /// Otherwise: distributed storage (`SIGIRO_CATALOG_URL`) uses control-plane
+    /// tenant keys; local storage is `Open`.
+    pub fn from_runtime_config(
+        data_dir: &Utf8Path,
         query_surface: crate::config::QuerySurface,
         storage_mode: &crate::storage::StorageMode,
-        ingest_keys: crate::ingest_keys::IngestKeys,
     ) -> anyhow::Result<Self> {
         if query_surface == crate::config::QuerySurface::Quack {
             tracing::info!("auth_mode=open — quack edge, protected by the network perimeter");
             return Ok(AuthMode::Open);
         }
-        if let Some((issuer, audience, jwks_url)) = crate::config::jwt_resource_server_config()? {
-            let verifier = JwtVerifier::new(issuer, audience, jwks_url).await?;
-            tracing::info!("auth_mode=jwt — Better Auth access tokens required");
-            return Ok(AuthMode::Jwt {
-                verifier: Arc::new(verifier),
-                ingest_keys,
-            });
+        match storage_mode.distributed_config() {
+            Some(storage_config) => {
+                let ext_dir = crate::storage::resolve_extension_dir(data_dir);
+                let control = ControlPlane::open(&storage_config.catalog_url, &ext_dir)?;
+                tracing::info!(
+                    "auth_mode=tenant_keys — bearer tokens resolve through sigiro_control"
+                );
+                Ok(AuthMode::TenantKeys {
+                    control: Arc::new(control),
+                })
+            }
+            None => {
+                tracing::warn!(
+                    "sigiro running in OPEN auth mode — no per-request authentication; \
+                     protect the network perimeter (tailnet/private network/reverse-proxy)"
+                );
+                Ok(AuthMode::Open)
+            }
         }
-        ensure_open_mode_allowed(storage_mode)?;
-        tracing::warn!(
-            "sigiro running in OPEN auth mode — no per-request authentication; protect the network perimeter"
-        );
-        Ok(AuthMode::Open)
     }
 
     /// True if this mode requires an Authorization header.
     pub fn requires_auth(&self) -> bool {
-        !matches!(self, AuthMode::Open)
+        matches!(self, AuthMode::TenantKeys { .. })
     }
 
-    pub(crate) fn protected_resource_metadata_path(&self) -> Option<&str> {
+    pub(crate) fn control_plane(&self) -> Option<Arc<ControlPlane>> {
         match self {
+            AuthMode::TenantKeys { control } => Some(Arc::clone(control)),
             AuthMode::Open => None,
-            AuthMode::Jwt { verifier, .. } => Some(&verifier.resource_metadata_path),
         }
     }
 
-    pub(crate) fn protected_resource_metadata(&self) -> Option<ProtectedResourceMetadata> {
+    /// Verify a raw bearer token against this auth mode.
+    /// Open mode: always succeeds.
+    /// TenantKeys mode: token must resolve to an active tenant via the control plane.
+    pub fn verify(&self, raw_key: &str) -> Result<AuthContext, ApiError> {
         match self {
-            AuthMode::Open => None,
-            AuthMode::Jwt { verifier, .. } => Some(ProtectedResourceMetadata {
-                resource: verifier.audience.clone(),
-                authorization_servers: [verifier.issuer.clone()],
-                scopes_supported: SUPPORTED_SCOPES,
-                bearer_methods_supported: ["header"],
-            }),
-        }
-    }
-
-    fn authorization_challenge(
-        &self,
-        scheme: CredentialScheme,
-        challenge: BearerChallenge,
-    ) -> Option<HeaderValue> {
-        let AuthMode::Jwt { verifier, .. } = self else {
-            return None;
-        };
-        let suffix = match challenge {
-            BearerChallenge::Missing => String::new(),
-            BearerChallenge::InvalidToken => ", error=\"invalid_token\"".to_owned(),
-            BearerChallenge::InsufficientScope(scope) => {
-                format!(", error=\"insufficient_scope\", scope=\"{scope}\"")
+            AuthMode::Open => Ok(AuthContext::default_project()),
+            AuthMode::TenantKeys { control } => {
+                let tenant_id = control.resolve_tenant(raw_key).map_err(|e| {
+                    tracing::warn!("tenant API key rejected: {e:#}");
+                    axum_anyhow::unauthorized(
+                        "Invalid API Key",
+                        "The provided API key is unknown or revoked",
+                    )
+                })?;
+                Ok(AuthContext::for_tenant(tenant_id))
             }
-        };
-        let scheme = match scheme {
-            CredentialScheme::Bearer => "Bearer",
-            CredentialScheme::AgentAuth => "AgentAuth",
-        };
-        Some(
-            HeaderValue::from_str(&format!(
-                "{scheme} resource_metadata=\"{}\"{suffix}",
-                verifier.resource_metadata_url
-            ))
-            .expect("validated resource metadata URL produces a valid challenge header"),
-        )
-    }
-
-    pub(crate) async fn authenticate(
-        &self,
-        token: &str,
-        required_scope: &'static str,
-        scheme: CredentialScheme,
-    ) -> Result<AuthContext, AuthError> {
-        match self {
-            AuthMode::Open => Ok(AuthContext {
-                tenant_id: TenantId::try_new("default".to_owned())
-                    .expect("default is a valid tenant id"),
-                subject: "local".to_owned(),
-                scopes: HashSet::new(),
-                kind: CredentialKind::User,
-            }),
-            AuthMode::Jwt {
-                verifier,
-                ingest_keys,
-            } => {
-                if crate::ingest_keys::is_ingest_key(token) {
-                    return authenticate_ingest_key(ingest_keys, token, required_scope, scheme)
-                        .await;
-                }
-                verifier.verify(token, required_scope, scheme).await
-            }
-        }
-    }
-
-    /// The ingest-key store, in hosted mode.
-    pub(crate) fn ingest_keys(&self) -> Option<&crate::ingest_keys::IngestKeys> {
-        match self {
-            AuthMode::Open => None,
-            AuthMode::Jwt { ingest_keys, .. } => Some(ingest_keys),
         }
     }
 }
 
-/// An ingest key authorizes ingest and nothing else, whatever the route.
-async fn authenticate_ingest_key(
-    ingest_keys: &crate::ingest_keys::IngestKeys,
-    token: &str,
-    required_scope: &'static str,
-    scheme: CredentialScheme,
-) -> Result<AuthContext, AuthError> {
-    if scheme == CredentialScheme::AgentAuth {
-        return Err(AuthError::InvalidToken);
-    }
-    if required_scope != TELEMETRY_INGEST_SCOPE {
-        return Err(AuthError::IngestKeyNotAllowed(required_scope));
-    }
-    let tenant_id = ingest_keys.verify(token).await?;
-    let id = token.split('_').nth(1).unwrap_or_default();
-    Ok(AuthContext {
-        tenant_id,
-        subject: format!("ingest-key:{id}"),
-        scopes: HashSet::from([TELEMETRY_INGEST_SCOPE.to_owned()]),
-        kind: CredentialKind::IngestKey,
-    })
+/// Errors from the hosted control-plane provisioning surface. The non-`Internal`
+/// variants are DETERMINISTIC CLIENT-INPUT failures — they depend only on what
+/// the admin caller sent, not on server/DB state — so the admin HTTP handlers
+/// map them to 4xx (via [`ControlPlaneError::into_api_error`]) instead of the
+/// blanket 500 a raw `anyhow` error would produce. `Internal` stays a genuine
+/// server error (5xx): it wraps a real control-DB/connection failure.
+///
+/// The mapping is an inherent method, NOT `From<_> for ApiError`, because
+/// `axum_anyhow` already blankets `From<E: Into<anyhow::Error>> for ApiError`
+/// (→ 500); a specific `From` would conflict, and a bare `?` on this error in a
+/// handler would silently take that blanket 500 path. Handlers therefore call
+/// `.map_err(ControlPlaneError::into_api_error)?`.
+#[derive(Debug, thiserror::Error)]
+pub enum ControlPlaneError {
+    /// Malformed admin input — bad tenant id (empty, illegal chars, too long,
+    /// or a reserved system name) or a bad key-hash prefix. Maps to 400.
+    #[error("{0}")]
+    InvalidInput(String),
+    /// Request conflicts with a reserved name or an ambiguous match: the edge
+    /// name `default` on the hosted provisioning path, or a key-hash prefix
+    /// that matches more than one live key. Maps to 409.
+    #[error("{0}")]
+    Conflict(String),
+    /// The target tenant does not exist or is suspended. Maps to 404.
+    #[error("{0}")]
+    TenantNotActive(String),
+    /// A genuine control-plane/database failure. Maps to 500.
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
 }
 
-fn ensure_open_mode_allowed(storage_mode: &crate::storage::StorageMode) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !storage_mode.is_distributed(),
-        "distributed/PostgreSQL storage requires SIGIRO_AUTH_ISSUER, SIGIRO_AUTH_AUDIENCE, and SIGIRO_AUTH_JWKS_URL"
-    );
-    Ok(())
+impl ControlPlaneError {
+    /// Map to the HTTP error: deterministic client-input failures → 4xx, a real
+    /// control-plane/DB failure → 500 (with the cause attached, unchanged from
+    /// the previous `context_internal` behavior).
+    pub(crate) fn into_api_error(self) -> ApiError {
+        match self {
+            ControlPlaneError::InvalidInput(detail) => {
+                axum_anyhow::bad_request("Invalid request", &detail)
+            }
+            ControlPlaneError::Conflict(detail) => axum_anyhow::conflict("Conflict", &detail),
+            ControlPlaneError::TenantNotActive(detail) => {
+                axum_anyhow::not_found("Tenant not found", &detail)
+            }
+            ControlPlaneError::Internal(e) => {
+                e.context_internal("Admin", "control-plane operation failed")
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ControlPlane {
+    conn: Arc<Mutex<Connection>>,
+    qualified_schema: String,
+    postgres_alias: Option<&'static str>,
+}
+
+impl std::fmt::Debug for ControlPlane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlPlane")
+            .field("qualified_schema", &self.qualified_schema)
+            .field("postgres_alias", &self.postgres_alias)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MintedApiKey {
+    pub key: String,
+    pub key_hash: String,
+    pub(crate) tenant_id: String,
+}
+
+impl ControlPlane {
+    const POSTGRES_ALIAS: &'static str = "sigiro_control_pg";
+
+    pub(crate) fn open(catalog_url: &str, ext_dir: &Utf8Path) -> anyhow::Result<Self> {
+        let conn = Connection::open_in_memory()
+            .map_err(|e| anyhow::anyhow!("failed to open in-memory DuckDB for auth: {e}"))?;
+        conn.execute_batch(&format!(
+            "SET extension_directory = '{}';",
+            crate::sql::escape_sql_string(ext_dir.as_str())
+        ))
+        .map_err(|e| anyhow::anyhow!("failed to set auth DuckDB extension_directory: {e}"))?;
+        crate::storage::install_extensions_with_progress(&conn, &["postgres"])?;
+
+        let catalog_path = crate::storage::postgres_uri_to_libpq(catalog_url)?;
+        let attach_sql = format!(
+            "ATTACH '{}' AS {} (TYPE postgres)",
+            crate::sql::escape_sql_string(&catalog_path),
+            Self::POSTGRES_ALIAS
+        );
+        conn.execute_batch(&attach_sql).map_err(|_| {
+            // Do NOT include the DuckDB error — a Postgres ATTACH failure can
+            // echo the connection string (with password). Secret-free message.
+            anyhow::anyhow!(
+                "failed to attach control-plane PostgreSQL catalog — verify \
+                 SIGIRO_CATALOG_URL host/port/credentials and PostgreSQL reachability"
+            )
+        })?;
+
+        let control = Self {
+            conn: Arc::new(Mutex::new(conn)),
+            qualified_schema: CONTROL_SCHEMA.to_string(),
+            postgres_alias: Some(Self::POSTGRES_ALIAS),
+        };
+        control.create_schema()?;
+        Ok(control)
+    }
+
+    #[doc(hidden)]
+    pub fn open_in_memory_for_tests() -> anyhow::Result<Self> {
+        let conn = Connection::open_in_memory()
+            .map_err(|e| anyhow::anyhow!("failed to open in-memory DuckDB for auth test: {e}"))?;
+        let control = Self {
+            conn: Arc::new(Mutex::new(conn)),
+            qualified_schema: CONTROL_SCHEMA.to_string(),
+            postgres_alias: None,
+        };
+        control.create_schema()?;
+        Ok(control)
+    }
+
+    pub(crate) fn create_schema(&self) -> anyhow::Result<()> {
+        for sql in control_plane_ddl() {
+            self.execute_control_sql(sql)?;
+        }
+        // Partial indexes are a PostgreSQL feature the DuckDB in-memory test
+        // control plane cannot parse, so they only run against a real hosted
+        // Postgres catalog (`postgres_alias.is_some()`).
+        if self.postgres_alias.is_some() {
+            for sql in HOSTED_CONTROL_PLANE_DDL {
+                self.execute_control_sql(sql)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Create or reactivate a HOSTED tenant. Idempotent + concurrency-safe: the
+    /// `ON CONFLICT (id)` upsert means a retried or concurrent admin call
+    /// converges on exactly one `active` row (never a duplicate/ambiguous one).
+    pub fn create_tenant(&self, tenant_id: &str) -> Result<(), ControlPlaneError> {
+        let tenant_id = ensure_hosted_tenant_id(tenant_id)?;
+        let tenant = quote_sql_literal(&tenant_id);
+        self.execute_control_sql(&format!(
+            "INSERT INTO {CONTROL_SCHEMA}.tenants (id, status) VALUES ({tenant}, 'active') \
+             ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status"
+        ))?;
+        Ok(())
+    }
+
+    pub fn mint_key(&self, tenant_id: &str) -> Result<MintedApiKey, ControlPlaneError> {
+        let tenant_id = ensure_hosted_tenant_id(tenant_id)?;
+        if !self.tenant_is_active(&tenant_id)? {
+            return Err(ControlPlaneError::TenantNotActive(format!(
+                "tenant {tenant_id} does not exist or is not active"
+            )));
+        }
+
+        let key = generate_api_key(&tenant_id)?;
+        let key_hash = hash_api_key(&key);
+        self.execute_control_sql(&format!(
+            "INSERT INTO {CONTROL_SCHEMA}.api_keys (key_hash, tenant_id) VALUES ({}, {})",
+            quote_sql_literal(&key_hash),
+            quote_sql_literal(&tenant_id)
+        ))?;
+
+        Ok(MintedApiKey {
+            key,
+            key_hash,
+            tenant_id,
+        })
+    }
+
+    pub(crate) fn resolve_tenant(&self, raw_key: &str) -> anyhow::Result<String> {
+        anyhow::ensure!(
+            raw_key.starts_with("sk_"),
+            "tenant API key must use the sk_<tenant>_<random> format"
+        );
+        let key_hash = hash_api_key(raw_key);
+        match self.postgres_alias {
+            Some(alias) => {
+                let sql = format!(
+                    "SELECT k.tenant_id \
+                     FROM {CONTROL_SCHEMA}.api_keys k \
+                     JOIN {CONTROL_SCHEMA}.tenants t ON t.id = k.tenant_id \
+                     WHERE k.key_hash = {} AND k.revoked_at IS NULL AND t.status = 'active' \
+                     LIMIT 1",
+                    quote_sql_literal(&key_hash)
+                );
+                self.query_postgres_strings(alias, &sql)?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("API key hash not found or revoked"))
+            }
+            None => {
+                let conn = self.conn.lock();
+                let sql = format!(
+                    "SELECT k.tenant_id \
+                     FROM {}.api_keys k \
+                     JOIN {}.tenants t ON t.id = k.tenant_id \
+                     WHERE k.key_hash = ? AND k.revoked_at IS NULL AND t.status = 'active' \
+                     LIMIT 1",
+                    self.qualified_schema, self.qualified_schema
+                );
+                conn.query_row(&sql, duckdb::params![key_hash], |row| row.get(0))
+                    .map_err(|e| anyhow::anyhow!("API key hash not found or revoked: {e}"))
+            }
+        }
+    }
+
+    pub fn revoke_key_hash_prefix(&self, key_hash_prefix: &str) -> Result<bool, ControlPlaneError> {
+        if !((8..=64).contains(&key_hash_prefix.len())
+            && key_hash_prefix.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err(ControlPlaneError::InvalidInput(
+                "key hash prefix must be 8-64 hexadecimal characters".to_string(),
+            ));
+        }
+        let matches = self.matching_unrevoked_hashes(key_hash_prefix)?;
+        match matches.as_slice() {
+            [] => Ok(false),
+            [key_hash] => {
+                self.execute_control_sql(&format!(
+                    "UPDATE {CONTROL_SCHEMA}.api_keys SET revoked_at = now() WHERE key_hash = {}",
+                    quote_sql_literal(key_hash)
+                ))?;
+                Ok(true)
+            }
+            _ => Err(ControlPlaneError::Conflict(format!(
+                "key hash prefix matched {} active keys; provide a longer prefix",
+                matches.len()
+            ))),
+        }
+    }
+
+    fn tenant_is_active(&self, tenant_id: &str) -> anyhow::Result<bool> {
+        match self.postgres_alias {
+            Some(alias) => {
+                let sql = format!(
+                    "SELECT count(*)::BIGINT \
+                     FROM {CONTROL_SCHEMA}.tenants \
+                     WHERE id = {} AND status = 'active'",
+                    quote_sql_literal(tenant_id)
+                );
+                Ok(self.query_postgres_i64(alias, &sql)? > 0)
+            }
+            None => {
+                let conn = self.conn.lock();
+                let sql = format!(
+                    "SELECT count(*) FROM {}.tenants WHERE id = ? AND status = 'active'",
+                    self.qualified_schema
+                );
+                let count: i64 = conn
+                    .query_row(&sql, duckdb::params![tenant_id], |row| row.get(0))
+                    .map_err(|e| anyhow::anyhow!("failed to check tenant status: {e}"))?;
+                Ok(count > 0)
+            }
+        }
+    }
+
+    fn matching_unrevoked_hashes(&self, key_hash_prefix: &str) -> anyhow::Result<Vec<String>> {
+        match self.postgres_alias {
+            Some(alias) => {
+                let sql = format!(
+                    "SELECT key_hash FROM {CONTROL_SCHEMA}.api_keys \
+                     WHERE key_hash LIKE {} AND revoked_at IS NULL \
+                     ORDER BY key_hash",
+                    quote_sql_literal(&format!("{key_hash_prefix}%"))
+                );
+                self.query_postgres_strings(alias, &sql)
+            }
+            None => {
+                let conn = self.conn.lock();
+                let sql = format!(
+                    "SELECT key_hash FROM {}.api_keys \
+                     WHERE key_hash LIKE ? AND revoked_at IS NULL \
+                     ORDER BY key_hash",
+                    self.qualified_schema
+                );
+                let mut stmt = conn
+                    .prepare(&sql)
+                    .map_err(|e| anyhow::anyhow!("failed to prepare key revoke lookup: {e}"))?;
+                let rows = stmt
+                    .query_map(duckdb::params![format!("{key_hash_prefix}%")], |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .map_err(|e| anyhow::anyhow!("failed to query key revoke lookup: {e}"))?;
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| anyhow::anyhow!("failed to read key revoke lookup row: {e}"))
+            }
+        }
+    }
+
+    fn execute_control_sql(&self, postgres_sql: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock();
+        if let Some(alias) = self.postgres_alias {
+            let sql = format!(
+                "CALL postgres_execute('{}', '{}')",
+                alias,
+                crate::sql::escape_sql_string(postgres_sql)
+            );
+            conn.execute_batch(&sql)
+                .map_err(|e| anyhow::anyhow!("control-plane Postgres statement failed: {e}"))
+        } else {
+            conn.execute_batch(postgres_sql)
+                .map_err(|e| anyhow::anyhow!("control-plane statement failed: {e}"))
+        }
+    }
+
+    fn query_postgres_strings(
+        &self,
+        alias: &str,
+        postgres_sql: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        let conn = self.conn.lock();
+        let sql = format!(
+            "SELECT * FROM postgres_query('{}', '{}')",
+            alias,
+            crate::sql::escape_sql_string(postgres_sql)
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| anyhow::anyhow!("failed to prepare control-plane Postgres query: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| anyhow::anyhow!("failed to query control-plane Postgres: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("failed to read control-plane Postgres row: {e}"))
+    }
+
+    fn query_postgres_i64(&self, alias: &str, postgres_sql: &str) -> anyhow::Result<i64> {
+        let conn = self.conn.lock();
+        let sql = format!(
+            "SELECT * FROM postgres_query('{}', '{}')",
+            alias,
+            crate::sql::escape_sql_string(postgres_sql)
+        );
+        conn.query_row(&sql, [], |row| row.get(0))
+            .map_err(|e| anyhow::anyhow!("failed to query control-plane Postgres count: {e}"))
+    }
+}
+
+/// `"default"` is reserved in the HOSTED control plane: it names the local/edge
+/// project (pre-created by `run_serve`, reachable via Open auth), so
+/// a hosted operator must never provision a control-plane tenant literally
+/// named `default`. `sanitize_tenant_id` deliberately still ACCEPTS `"default"`
+/// (the edge depends on it) — this extra rejection applies only on the hosted
+/// provisioning path.
+fn ensure_hosted_tenant_id(tenant_id: &str) -> Result<String, ControlPlaneError> {
+    let tenant_id = crate::storage::sanitize_tenant_id(tenant_id)
+        .map_err(|e| ControlPlaneError::InvalidInput(format!("{e:#}")))?;
+    if tenant_id == "default" {
+        return Err(ControlPlaneError::Conflict(
+            "tenant id \"default\" is reserved for the local/edge project and cannot be provisioned in the hosted control plane".to_string(),
+        ));
+    }
+    Ok(tenant_id)
+}
+
+/// Portable control-plane DDL — runs against BOTH the real hosted PostgreSQL
+/// catalog and the DuckDB in-memory test control plane, so every statement must
+/// parse under both engines (no PostgreSQL-only features here; those live in
+/// [`HOSTED_CONTROL_PLANE_DDL`]).
+///
+/// Hardening over the original bare PK/FK schema:
+/// - `tenants.status` gets a `CHECK` allowing only `active`/`suspended`, so an
+///   unknown status can never enter the table (the key-resolution join treats
+///   anything other than `active` as unusable).
+/// - `api_keys.key_hash` stays the PRIMARY KEY (uniqueness), with `revoked_at`
+///   as the explicit revocation timestamp — `NULL` = live, non-`NULL` = revoked.
+/// - `api_keys(tenant_id)` is indexed to support the FK join / per-tenant
+///   lookups without a table scan.
+pub(crate) fn control_plane_ddl() -> &'static [&'static str] {
+    &[
+        "CREATE SCHEMA IF NOT EXISTS sigiro_control",
+        "CREATE TABLE IF NOT EXISTS sigiro_control.tenants (
+            id TEXT PRIMARY KEY,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+            status TEXT NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active', 'suspended'))
+        )",
+        "CREATE TABLE IF NOT EXISTS sigiro_control.api_keys (
+            key_hash TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+            revoked_at TIMESTAMP WITH TIME ZONE NULL,
+            FOREIGN KEY (tenant_id) REFERENCES sigiro_control.tenants(id)
+        )",
+        "CREATE INDEX IF NOT EXISTS api_keys_tenant_id_idx \
+         ON sigiro_control.api_keys (tenant_id)",
+    ]
+}
+
+/// PostgreSQL-only control-plane DDL — applied only when a real hosted Postgres
+/// catalog is attached (see [`ControlPlane::create_schema`]). The partial index
+/// mirrors the key-resolution predicate (`key_hash = ? AND revoked_at IS NULL`),
+/// keeping the hot auth lookup on live keys only; DuckDB cannot parse the
+/// `WHERE` clause, so it never runs on the in-memory test control plane.
+pub(crate) const HOSTED_CONTROL_PLANE_DDL: &[&str] =
+    &["CREATE INDEX IF NOT EXISTS api_keys_live_key_hash_idx \
+     ON sigiro_control.api_keys (key_hash) WHERE revoked_at IS NULL"];
+
+pub fn hash_api_key(raw_key: &str) -> String {
+    use prefixed_api_key::sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(raw_key.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+pub(crate) fn generate_api_key(tenant_id: &str) -> anyhow::Result<String> {
+    let tenant_id = crate::storage::sanitize_tenant_id(tenant_id)?;
+    let mut bytes = [0_u8; 32];
+    let mut rng = prefixed_api_key::rand::rngs::OsRng;
+    prefixed_api_key::rand::RngCore::try_fill_bytes(&mut rng, &mut bytes)
+        .map_err(|e| anyhow::anyhow!("failed to generate API key randomness: {e}"))?;
+    Ok(format!("sk_{tenant_id}_{}", hex::encode(bytes)))
+}
+
+fn quote_sql_literal(value: &str) -> String {
+    format!("'{}'", crate::sql::escape_sql_string(value))
 }
 
 /// Extract bearer token from Authorization header.
@@ -663,66 +561,24 @@ pub fn extract_bearer_token(headers: &HeaderMap) -> Result<String, ApiError> {
     Ok(auth.token().to_string())
 }
 
-pub(crate) fn is_agent_jwt(token: &str) -> bool {
-    decode_header(token)
-        .ok()
-        .and_then(|header| header.typ)
-        .as_deref()
-        == Some("agent+jwt")
-}
-
-pub(crate) fn parse_api_credential(value: &str) -> Result<ApiCredential, CredentialParseError> {
-    let (scheme, token) = value
-        .split_once(' ')
-        .ok_or(CredentialParseError::MissingScheme)?;
-    let mut scheme = if scheme.eq_ignore_ascii_case("Bearer") {
-        CredentialScheme::Bearer
-    } else if scheme.eq_ignore_ascii_case("AgentAuth") {
-        CredentialScheme::AgentAuth
-    } else {
-        return Err(CredentialParseError::UnsupportedScheme);
-    };
-    if token.is_empty() || token.contains(char::is_whitespace) {
-        return Err(CredentialParseError::InvalidToken);
-    }
-    if scheme == CredentialScheme::Bearer && is_agent_jwt(token) {
-        scheme = CredentialScheme::AgentAuth;
-    }
-    Ok(ApiCredential {
-        scheme,
-        token: token.to_owned(),
-    })
-}
-
-pub(crate) fn extract_api_credential(headers: &HeaderMap) -> Result<ApiCredential, ApiError> {
-    let value = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| {
-            axum_anyhow::unauthorized(
-                "Missing Authentication",
-                "Missing or malformed Authorization header",
-            )
-        })?;
-    parse_api_credential(value).map_err(|error| {
-        let detail = if error == CredentialParseError::UnsupportedScheme {
-            "Unsupported Authorization scheme"
-        } else {
-            "Missing or malformed Authorization header"
-        };
-        axum_anyhow::unauthorized("Missing Authentication", detail)
-    })
-}
-
-/// axum middleware: verify the configured authentication mode.
+/// axum middleware: verify API key against the configured mode.
 /// Open mode: injects default context without checking headers.
+/// TenantKeys mode: requires a valid Bearer token.
 /// Admin-token gate for `/admin/*`, as a LAYER — the counterpart to
 /// [`auth_middleware`] for `/v1/*`.
 ///
-/// Applying the gate as a layer keeps authorization at the router boundary, so
-/// adding an admin handler without an explicit check cannot expose it.
+/// Every admin handler used to call a `require_admin_token(&headers)` helper as
+/// its first line, which meant the gate was only as good as the author of the
+/// next handler remembering to write it. A route added without that line is an
+/// unauthenticated admin endpoint — tenant provisioning and key minting live
+/// here, so the failure mode is silent and total. Making it a layer means the
+/// router, not the handler, enforces it: forgetting is no longer expressible.
 ///
-/// Admin auth remains a separate credential and middleware from hosted JWT auth.
+/// Admin auth is deliberately a DIFFERENT credential from tenant auth (an admin
+/// token mints tenant keys; it is not one), so this stays a separate middleware
+/// rather than a mode inside `auth_middleware`. What is now shared is the shape:
+/// both are layers applied to a nested router, both use
+/// [`extract_bearer_token`], and neither is a per-handler call.
 pub(crate) async fn admin_auth_middleware(req: Request, next: Next) -> Result<Response, ApiError> {
     let expected = crate::config::ADMIN_TOKEN.value().map_err(|_| {
         axum_anyhow::unauthorized(
@@ -759,320 +615,19 @@ pub(crate) async fn auth_middleware(
     State(state): State<Arc<crate::server::AppState>>,
     req: Request,
     next: Next,
-) -> Response {
+) -> Result<Response, ApiError> {
     match &state.auth_mode {
         AuthMode::Open => {
             let mut req = req;
-            req.extensions_mut().insert(
-                TenantId::try_new("default".to_owned()).expect("default is a valid tenant id"),
-            );
-            next.run(req).await
+            req.extensions_mut().insert(AuthContext::default_project());
+            Ok(next.run(req).await)
         }
-        AuthMode::Jwt { .. } => {
-            let scheme_hint = req
-                .headers()
-                .get(header::AUTHORIZATION)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.split_once(' '))
-                .map_or(CredentialScheme::Bearer, |(scheme, _)| {
-                    if scheme.eq_ignore_ascii_case("AgentAuth") {
-                        CredentialScheme::AgentAuth
-                    } else {
-                        CredentialScheme::Bearer
-                    }
-                });
-            let credential = match extract_api_credential(req.headers()) {
-                Ok(credential) => credential,
-                Err(error) => {
-                    let challenge = if req.headers().contains_key(header::AUTHORIZATION) {
-                        BearerChallenge::InvalidToken
-                    } else {
-                        BearerChallenge::Missing
-                    };
-                    return challenged_response(&state.auth_mode, error, scheme_hint, challenge);
-                }
-            };
-            let required_scope = match required_http_scope(req.method(), req.uri().path()) {
-                Ok(scope) => scope,
-                Err(error) => return error.into_response(),
-            };
-            let context = match state
-                .auth_mode
-                .authenticate(&credential.token, required_scope, credential.scheme)
-                .await
-            {
-                Ok(context) => context,
-                Err(error) => {
-                    let challenge = match error {
-                        AuthError::InsufficientScope(scope)
-                        | AuthError::IngestKeyNotAllowed(scope) => {
-                            BearerChallenge::InsufficientScope(scope)
-                        }
-                        AuthError::InvalidToken
-                        | AuthError::TokenExpired
-                        | AuthError::JwksUnavailable
-                        | AuthError::IngestKeyMalformed
-                        | AuthError::IngestKeyUnknown
-                        | AuthError::IngestKeyRevoked => BearerChallenge::InvalidToken,
-                    };
-                    return challenged_response(
-                        &state.auth_mode,
-                        error.into_api_error(),
-                        credential.scheme,
-                        challenge,
-                    );
-                }
-            };
+        AuthMode::TenantKeys { .. } => {
+            let token = extract_bearer_token(req.headers())?;
+            let ctx = state.auth_mode.verify(&token)?;
             let mut req = req;
-            req.extensions_mut().insert(context.tenant_id.clone());
-            req.extensions_mut().insert(context);
-            next.run(req).await
+            req.extensions_mut().insert(ctx);
+            Ok(next.run(req).await)
         }
-    }
-}
-
-fn challenged_response(
-    auth_mode: &AuthMode,
-    error: ApiError,
-    scheme: CredentialScheme,
-    challenge: BearerChallenge,
-) -> Response {
-    let mut response = error.into_response();
-    if let Some(value) = auth_mode.authorization_challenge(scheme, challenge) {
-        response
-            .headers_mut()
-            .insert(header::WWW_AUTHENTICATE, value);
-    }
-    response
-}
-
-fn required_http_scope(method: &axum::http::Method, path: &str) -> Result<&'static str, ApiError> {
-    use axum::http::Method;
-    match (method, path) {
-        (&Method::POST, "/v1/query" | "/query") => Ok(QUERY_READ_SCOPE),
-        (&Method::GET, "/v1/services" | "/services") => Ok(SERVICES_READ_SCOPE),
-        (&Method::GET, "/v1/auth/validate" | "/auth/validate") => Ok(AUTHENTICATED_SCOPE),
-        (&Method::GET, "/v1/alerts" | "/alerts") => Ok(ALERTS_READ_SCOPE),
-        // Replay re-sends webhooks the project already produced, so it needs
-        // the project's write scope rather than a read scope.
-        (&Method::POST, "/v1/alerts/replay" | "/alerts/replay") => Ok(TELEMETRY_INGEST_SCOPE),
-        // Managing ingest keys needs the power the keys grant. The handlers
-        // further require a user's own OAuth token: an agent or an ingest key
-        // must not mint credentials that outlive it.
-        (&Method::GET | &Method::POST, "/v1/ingest-keys" | "/ingest-keys") => {
-            Ok(TELEMETRY_INGEST_SCOPE)
-        }
-        (&Method::DELETE, path)
-            if path.starts_with("/v1/ingest-keys/") || path.starts_with("/ingest-keys/") =>
-        {
-            Ok(TELEMETRY_INGEST_SCOPE)
-        }
-        (&Method::GET, path) if path.starts_with("/v1/traces/") || path.starts_with("/traces/") => {
-            Ok(TRACES_READ_SCOPE)
-        }
-        _ => Err(axum_anyhow::forbidden(
-            "No authorization policy",
-            "The requested API route has no configured OAuth scope",
-        )),
-    }
-}
-
-#[cfg(test)]
-mod legacy_removal_tests {
-    use super::*;
-    use axum::http::Method;
-
-    #[test]
-    fn retired_routes_have_no_oauth_policy() {
-        for (method, path) in [
-            (Method::POST, "/v1/diagnose"),
-            (Method::GET, "/v1/anomalies"),
-        ] {
-            assert!(required_http_scope(&method, path).is_err(), "{path}");
-        }
-        assert_eq!(
-            required_http_scope(&Method::POST, "/v1/query").unwrap(),
-            QUERY_READ_SCOPE
-        );
-        assert_eq!(
-            required_http_scope(&Method::POST, "/v1/alerts/replay").unwrap(),
-            TELEMETRY_INGEST_SCOPE
-        );
-        assert!(required_http_scope(&Method::GET, "/v1/alerts/replay").is_err());
-    }
-}
-
-#[cfg(test)]
-pub(crate) mod test_support {
-    use super::*;
-
-    /// PKCS#8 DER of an Ed25519 key generated for these tests only.
-    const TEST_PRIVATE_KEY: &[u8] = &[
-        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
-        0x20, 0x16, 0xec, 0xa2, 0x03, 0x76, 0xac, 0x44, 0x3f, 0x74, 0xb5, 0x8f, 0x37, 0x61, 0xef,
-        0x9a, 0x6e, 0x20, 0xbb, 0x81, 0x12, 0x57, 0x7f, 0x74, 0xd3, 0xdc, 0xce, 0xe8, 0x56, 0x70,
-        0xa5, 0x4d, 0xc7,
-    ];
-    const TEST_PUBLIC_X: &str = "CLfQSFYvWk4IiB3lnmUB68uGDS8iXg3wlJlFGexY2pI";
-    const ISSUER: &str = "https://issuer.test/api/auth";
-    const AUDIENCE: &str = "https://sigiro.test";
-
-    /// Hosted auth with a pre-loaded JWKS (no network) and an in-memory
-    /// ingest-key store.
-    pub(crate) fn jwt_mode() -> (AuthMode, crate::ingest_keys::IngestKeys) {
-        let keys: JwkSet = serde_json::from_value(serde_json::json!({
-            "keys": [{"kty": "OKP", "crv": "Ed25519", "x": TEST_PUBLIC_X,
-                      "kid": "test", "alg": "EdDSA", "use": "sig"}]
-        }))
-        .unwrap();
-        let verifier = JwtVerifier {
-            issuer: ISSUER.to_owned(),
-            audience: AUDIENCE.to_owned(),
-            resource_metadata_url: format!("{AUDIENCE}/.well-known/oauth-protected-resource"),
-            resource_metadata_path: "/.well-known/oauth-protected-resource".to_owned(),
-            jwks_url: "http://127.0.0.1:9/jwks".to_owned(),
-            agent_session_url: "http://127.0.0.1:9/session".to_owned(),
-            client: reqwest::Client::new(),
-            cache: RwLock::new(Some(CachedJwks {
-                keys,
-                expires_at: Instant::now() + Duration::from_secs(3600),
-            })),
-            refresh: AsyncMutex::new(()),
-            last_unknown_kid_refresh: RwLock::new(None),
-        };
-        let ingest_keys = crate::ingest_keys::IngestKeys::new(Arc::new(parking_lot::Mutex::new(
-            crate::admin::test_connection().unwrap(),
-        )));
-        (
-            AuthMode::Jwt {
-                verifier: Arc::new(verifier),
-                ingest_keys: ingest_keys.clone(),
-            },
-            ingest_keys,
-        )
-    }
-
-    /// A user access token for `tenant`, expiring `expires_in` seconds from now.
-    pub(crate) fn user_token(tenant: &str, scope: &str, expires_in: i64) -> String {
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        let mut header = jsonwebtoken::Header::new(Algorithm::EdDSA);
-        header.kid = Some("test".to_owned());
-        jsonwebtoken::encode(
-            &header,
-            &serde_json::json!({
-                "sub": "user-1", "tid": tenant, "scope": scope,
-                "iss": ISSUER, "aud": AUDIENCE,
-                "iat": now - 1000, "exp": now + expires_in,
-            }),
-            &jsonwebtoken::EncodingKey::from_ed_der(TEST_PRIVATE_KEY),
-        )
-        .unwrap()
-    }
-}
-
-#[cfg(test)]
-mod ingest_key_auth_tests {
-    use super::test_support::{jwt_mode, user_token};
-    use super::*;
-    use axum::http::{Method, StatusCode};
-
-    fn tenant(id: &str) -> TenantId {
-        TenantId::try_new(id.to_owned()).unwrap()
-    }
-
-    #[tokio::test]
-    async fn an_ingest_key_sends_telemetry_and_reads_nothing() {
-        let (mode, keys) = jwt_mode();
-        let created = keys.create(&tenant("acme"), "svc", "user-1").await.unwrap();
-        let context = mode
-            .authenticate(
-                &created.key,
-                TELEMETRY_INGEST_SCOPE,
-                CredentialScheme::Bearer,
-            )
-            .await
-            .unwrap();
-        assert_eq!(context.tenant_id, tenant("acme"));
-        assert_eq!(context.kind, CredentialKind::IngestKey);
-
-        for scope in [
-            QUERY_READ_SCOPE,
-            SERVICES_READ_SCOPE,
-            TRACES_READ_SCOPE,
-            AUTHENTICATED_SCOPE,
-        ] {
-            let error = mode
-                .authenticate(&created.key, scope, CredentialScheme::Bearer)
-                .await
-                .unwrap_err();
-            assert!(
-                matches!(error, AuthError::IngestKeyNotAllowed(_)),
-                "{scope}"
-            );
-            assert_eq!(error.status(), StatusCode::FORBIDDEN);
-        }
-        assert!(matches!(
-            mode.authenticate(
-                &created.key,
-                TELEMETRY_INGEST_SCOPE,
-                CredentialScheme::AgentAuth
-            )
-            .await,
-            Err(AuthError::InvalidToken)
-        ));
-
-        keys.revoke(&tenant("acme"), &created.info.id)
-            .await
-            .unwrap();
-        let error = mode
-            .authenticate(
-                &created.key,
-                TELEMETRY_INGEST_SCOPE,
-                CredentialScheme::Bearer,
-            )
-            .await
-            .unwrap_err();
-        assert!(matches!(error, AuthError::IngestKeyRevoked));
-        assert_eq!(error.status(), StatusCode::UNAUTHORIZED);
-        assert!(error.reason().contains("revoked"));
-    }
-
-    #[tokio::test]
-    async fn an_expired_user_token_says_so_and_points_at_ingest_keys() {
-        let (mode, _) = jwt_mode();
-        let fresh = user_token("acme", "telemetry:ingest query:read", 900);
-        let context = mode
-            .authenticate(&fresh, TELEMETRY_INGEST_SCOPE, CredentialScheme::Bearer)
-            .await
-            .unwrap();
-        assert_eq!(context.kind, CredentialKind::User);
-        assert_eq!(context.tenant_id, tenant("acme"));
-
-        // Past the validator's 60 s leeway.
-        let expired = user_token("acme", "telemetry:ingest", -300);
-        let error = mode
-            .authenticate(&expired, TELEMETRY_INGEST_SCOPE, CredentialScheme::Bearer)
-            .await
-            .unwrap_err();
-        assert!(matches!(error, AuthError::TokenExpired));
-        assert_eq!(error.status(), StatusCode::UNAUTHORIZED);
-        assert!(error.reason().contains("15 minutes"));
-        assert!(error.reason().contains("sigiro ingest-keys create"));
-    }
-
-    #[test]
-    fn managing_keys_requires_the_ingest_scope() {
-        for (method, path) in [
-            (Method::GET, "/v1/ingest-keys"),
-            (Method::POST, "/v1/ingest-keys"),
-            (Method::DELETE, "/v1/ingest-keys/abc"),
-        ] {
-            assert_eq!(
-                required_http_scope(&method, path).unwrap(),
-                TELEMETRY_INGEST_SCOPE,
-                "{method} {path}"
-            );
-        }
-        assert!(required_http_scope(&Method::DELETE, "/v1/ingest-keys").is_err());
     }
 }

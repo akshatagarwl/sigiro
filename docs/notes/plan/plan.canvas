@@ -1,0 +1,740 @@
+{
+  "nodes": [
+    {
+      "id": "d1-deploy",
+      "type": "file",
+      "file": "docs/plan/steps/d1-deploy.md",
+      "x": 0,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d1-instrument",
+      "type": "file",
+      "file": "docs/plan/steps/d1-instrument.md",
+      "x": 0,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d1-investigate",
+      "type": "file",
+      "file": "docs/plan/steps/d1-investigate.md",
+      "x": 0,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d1-discord",
+      "type": "file",
+      "file": "docs/plan/steps/d1-discord.md",
+      "x": 0,
+      "y": 780,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d2-mcp-http",
+      "type": "file",
+      "file": "docs/plan/steps/d2-mcp-http.md",
+      "x": 380,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d2-mcp-publish",
+      "type": "file",
+      "file": "docs/plan/steps/d2-mcp-publish.md",
+      "x": 380,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d2-wal",
+      "type": "file",
+      "file": "docs/plan/steps/d2-wal.md",
+      "x": 380,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d2-anomaly",
+      "type": "file",
+      "file": "docs/plan/steps/d2-anomaly.md",
+      "x": 380,
+      "y": 780,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d3-vercel",
+      "type": "file",
+      "file": "docs/plan/steps/d3-vercel.md",
+      "x": 760,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d3-billing",
+      "type": "file",
+      "file": "docs/plan/steps/d3-billing.md",
+      "x": 760,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d3-npm",
+      "type": "file",
+      "file": "docs/plan/steps/d3-npm.md",
+      "x": 760,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d4-find",
+      "type": "file",
+      "file": "docs/plan/steps/d4-find.md",
+      "x": 1140,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d4-fix",
+      "type": "file",
+      "file": "docs/plan/steps/d4-fix.md",
+      "x": 1140,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d4-init",
+      "type": "file",
+      "file": "docs/plan/steps/d4-init.md",
+      "x": 1140,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d5-vitals",
+      "type": "file",
+      "file": "docs/plan/steps/d5-vitals.md",
+      "x": 1520,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d5-db",
+      "type": "file",
+      "file": "docs/plan/steps/d5-db.md",
+      "x": 1520,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d5-deploy-corr",
+      "type": "file",
+      "file": "docs/plan/steps/d5-deploy-corr.md",
+      "x": 1520,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d6-railway",
+      "type": "file",
+      "file": "docs/plan/steps/d6-railway.md",
+      "x": 1900,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d6-landing",
+      "type": "file",
+      "file": "docs/plan/steps/d6-landing.md",
+      "x": 1900,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d6-oss",
+      "type": "file",
+      "file": "docs/plan/steps/d6-oss.md",
+      "x": 1900,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d6-vercel-apply",
+      "type": "file",
+      "file": "docs/plan/steps/d6-vercel-apply.md",
+      "x": 1900,
+      "y": 780,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d7-oauth",
+      "type": "file",
+      "file": "docs/plan/steps/d7-oauth.md",
+      "x": 2280,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d7-hosted",
+      "type": "file",
+      "file": "docs/plan/steps/d7-hosted.md",
+      "x": 2280,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d7-pricing",
+      "type": "file",
+      "file": "docs/plan/steps/d7-pricing.md",
+      "x": 2280,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d8-stripe",
+      "type": "file",
+      "file": "docs/plan/steps/d8-stripe.md",
+      "x": 2660,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d8-wire",
+      "type": "file",
+      "file": "docs/plan/steps/d8-wire.md",
+      "x": 2660,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d8-plain",
+      "type": "file",
+      "file": "docs/plan/steps/d8-plain.md",
+      "x": 2660,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d9-blog",
+      "type": "file",
+      "file": "docs/plan/steps/d9-blog.md",
+      "x": 3040,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "1"
+    },
+    {
+      "id": "d9-vibe",
+      "type": "file",
+      "file": "docs/plan/steps/d9-vibe.md",
+      "x": 3040,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d9-calc",
+      "type": "file",
+      "file": "docs/plan/steps/d9-calc.md",
+      "x": 3040,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d10-hn",
+      "type": "file",
+      "file": "docs/plan/steps/d10-hn.md",
+      "x": 3420,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d10-respond",
+      "type": "file",
+      "file": "docs/plan/steps/d10-respond.md",
+      "x": 3420,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "1"
+    },
+    {
+      "id": "d10-social",
+      "type": "file",
+      "file": "docs/plan/steps/d10-social.md",
+      "x": 3420,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d10-onboard",
+      "type": "file",
+      "file": "docs/plan/steps/d10-onboard.md",
+      "x": 3420,
+      "y": 780,
+      "width": 340,
+      "height": 220,
+      "color": "1"
+    },
+    {
+      "id": "d11-fix",
+      "type": "file",
+      "file": "docs/plan/steps/d11-fix.md",
+      "x": 3800,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "1"
+    },
+    {
+      "id": "d11-alert",
+      "type": "file",
+      "file": "docs/plan/steps/d11-alert.md",
+      "x": 3800,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d11-docs",
+      "type": "file",
+      "file": "docs/plan/steps/d11-docs.md",
+      "x": 3800,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d12-profiles",
+      "type": "file",
+      "file": "docs/plan/steps/d12-profiles.md",
+      "x": 4180,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d12-community",
+      "type": "file",
+      "file": "docs/plan/steps/d12-community.md",
+      "x": 4180,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d12-ph",
+      "type": "file",
+      "file": "docs/plan/steps/d12-ph.md",
+      "x": 4180,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d13-credits",
+      "type": "file",
+      "file": "docs/plan/steps/d13-credits.md",
+      "x": 4560,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d13-arch",
+      "type": "file",
+      "file": "docs/plan/steps/d13-arch.md",
+      "x": 4560,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d13-angel",
+      "type": "file",
+      "file": "docs/plan/steps/d13-angel.md",
+      "x": 4560,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d13-convert",
+      "type": "file",
+      "file": "docs/plan/steps/d13-convert.md",
+      "x": 4560,
+      "y": 780,
+      "width": 340,
+      "height": 220,
+      "color": "1"
+    },
+    {
+      "id": "d14-overflow",
+      "type": "file",
+      "file": "docs/plan/steps/d14-overflow.md",
+      "x": 4940,
+      "y": 0,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d14-prom",
+      "type": "file",
+      "file": "docs/plan/steps/d14-prom.md",
+      "x": 4940,
+      "y": 260,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    },
+    {
+      "id": "d14-yc",
+      "type": "file",
+      "file": "docs/plan/steps/d14-yc.md",
+      "x": 4940,
+      "y": 520,
+      "width": 340,
+      "height": 220,
+      "color": "0"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "fromNode": "d1-deploy",
+      "toNode": "d1-instrument",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e2",
+      "fromNode": "d1-instrument",
+      "toNode": "d1-investigate",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e3",
+      "fromNode": "d1-investigate",
+      "toNode": "d2-mcp-http",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e4",
+      "fromNode": "d2-mcp-http",
+      "toNode": "d2-mcp-publish",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e5",
+      "fromNode": "d1-investigate",
+      "toNode": "d3-vercel",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e6",
+      "fromNode": "d3-vercel",
+      "toNode": "d3-billing",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e7",
+      "fromNode": "d1-investigate",
+      "toNode": "d4-find",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e8",
+      "fromNode": "d4-find",
+      "toNode": "d4-fix",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e9",
+      "fromNode": "d1-investigate",
+      "toNode": "d5-vitals",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e10",
+      "fromNode": "d1-investigate",
+      "toNode": "d5-db",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e11",
+      "fromNode": "d1-investigate",
+      "toNode": "d5-deploy-corr",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e12",
+      "fromNode": "d3-vercel",
+      "toNode": "d6-vercel-apply",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e13",
+      "fromNode": "d1-investigate",
+      "toNode": "d7-oauth",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e14",
+      "fromNode": "d7-oauth",
+      "toNode": "d7-hosted",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e15",
+      "fromNode": "d1-deploy",
+      "toNode": "d7-hosted",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e16",
+      "fromNode": "d7-oauth",
+      "toNode": "d8-stripe",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e17",
+      "fromNode": "d8-stripe",
+      "toNode": "d8-wire",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e18",
+      "fromNode": "d3-billing",
+      "toNode": "d8-wire",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e19",
+      "fromNode": "d1-investigate",
+      "toNode": "d8-plain",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e20",
+      "fromNode": "d7-hosted",
+      "toNode": "d9-blog",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e21",
+      "fromNode": "d9-blog",
+      "toNode": "d10-hn",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e22",
+      "fromNode": "d10-hn",
+      "toNode": "d10-respond",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e23",
+      "fromNode": "d9-blog",
+      "toNode": "d10-social",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e24",
+      "fromNode": "d10-hn",
+      "toNode": "d10-onboard",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e25",
+      "fromNode": "d10-hn",
+      "toNode": "d11-fix",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e26",
+      "fromNode": "d1-investigate",
+      "toNode": "d11-alert",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e27",
+      "fromNode": "d1-investigate",
+      "toNode": "d12-profiles",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e28",
+      "fromNode": "d2-mcp-publish",
+      "toNode": "d12-community",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e29",
+      "fromNode": "d9-blog",
+      "toNode": "d12-ph",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e30",
+      "fromNode": "d8-stripe",
+      "toNode": "d13-convert",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e31",
+      "fromNode": "d4-find",
+      "toNode": "d13-convert",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e32",
+      "fromNode": "d1-investigate",
+      "toNode": "d14-prom",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    },
+    {
+      "id": "e33",
+      "fromNode": "d10-hn",
+      "toNode": "d14-yc",
+      "fromSide": "right",
+      "toSide": "left",
+      "label": "unlocks"
+    }
+  ]
+}

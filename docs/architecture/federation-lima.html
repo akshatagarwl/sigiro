@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sigiro Federation Test — Visual Guide</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --fg: #c9d1d9;
+    --muted: #8b949e;
+    --border: #30363d;
+    --host: #58a6ff;
+    --vm: #3fb950;
+    --central: #a371f7;
+    --worker: #f0883e;
+    --spiced: #d2a8ff;
+    --data: #79c0ff;
+    --success: #3fb950;
+    --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.6;
+  }
+  h1 { color: #f0f6fc; margin-bottom: 0.25rem; }
+  .subtitle { color: var(--muted); margin-bottom: 2rem; }
+
+  /* ===== LAYOUT ===== */
+  .diagram {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin: 2rem 0;
+  }
+  @media (max-width: 900px) {
+    .diagram { grid-template-columns: 1fr; }
+  }
+
+  /* ===== BOXES ===== */
+  .box {
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem;
+    position: relative;
+    background: #161b22;
+  }
+  .box-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .dot-host   { background: var(--host); }
+  .dot-vm     { background: var(--vm); }
+  .dot-central{ background: var(--central); }
+  .dot-worker { background: var(--worker); }
+  .dot-spiced { background: var(--spiced); }
+
+  /* ===== HOST BOX ===== */
+  .host-box {
+    border-color: var(--host);
+    grid-column: 1 / -1;
+  }
+  .host-box .box-title { color: var(--host); }
+
+  /* ===== VM BOXES ===== */
+  .central-box { border-color: var(--central); }
+  .central-box .box-title { color: var(--central); }
+  .worker-box  { border-color: var(--worker); }
+  .worker-box  .box-title { color: var(--worker); }
+
+  /* ===== PORT TABLE ===== */
+  .ports {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 0.4rem 1rem;
+    font-size: 0.85rem;
+    margin: 0.75rem 0;
+  }
+  .ports .label { color: var(--muted); }
+  .ports .arrow { color: var(--data); }
+  .port-tag {
+    background: #21262d;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+  }
+
+  /* ===== PROCESS LIST ===== */
+  .processes {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+  }
+  .process {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    font-size: 0.85rem;
+  }
+  .process-name {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-weight: 600;
+    color: #f0f6fc;
+  }
+  .process-desc { color: var(--muted); margin-top: 0.2rem; }
+
+  /* ===== FLOW ARROWS ===== */
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 0.6rem 0;
+    padding: 0.5rem 0.75rem;
+    background: #0d1117;
+    border-radius: 8px;
+    border-left: 3px solid var(--data);
+    font-size: 0.85rem;
+  }
+  .flow-step {
+    background: var(--data);
+    color: #0d1117;
+    font-weight: 700;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.75rem;
+    flex-shrink: 0;
+  }
+  .flow-label { flex: 1; }
+  .flow-proto {
+    font-family: ui-monospace, monospace;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  /* ===== LEGEND ===== */
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.85rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+
+  /* ===== TEST STATUS ===== */
+  .test-result {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.5rem 1rem;
+    max-width: 500px;
+    margin-top: 1rem;
+  }
+  .test-result .ok { color: var(--success); font-weight: 600; }
+  .test-result .warn { color: var(--warn); }
+
+  /* ===== NOTE ===== */
+  .note {
+    background: #21262d;
+    border-left: 3px solid var(--warn);
+    padding: 1rem 1.25rem;
+    border-radius: 0 8px 8px 0;
+    margin-top: 1.5rem;
+    font-size: 0.9rem;
+  }
+  .note strong { color: var(--warn); }
+
+  /* ===== NETWORK DIAGRAM ===== */
+  .network-layer {
+    text-align: center;
+    padding: 0.75rem;
+    border-radius: 8px;
+    margin: 0.5rem 0;
+    font-size: 0.85rem;
+  }
+  .layer-vznat {
+    background: rgba(63, 185, 80, 0.1);
+    border: 1px dashed var(--vm);
+    color: var(--vm);
+  }
+  .layer-host {
+    background: rgba(88, 166, 255, 0.1);
+    border: 1px solid var(--host);
+    color: var(--host);
+  }
+  .arrow-down {
+    text-align: center;
+    color: var(--muted);
+    font-size: 1.2rem;
+    line-height: 1;
+    margin: 0.25rem 0;
+  }
+
+  code {
+    background: #21262d;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.85em;
+  }
+</style>
+</head>
+<body>
+
+<h1>🌐 Sigiro Federation Test</h1>
+<p class="subtitle">Visual guide to how the multi-node Lima VM test works — part of <a href="deployment-modes.html" style="color: var(--host);">federated mode</a> (not local).</p>
+
+<!-- ==================== TOPOLOGY ==================== -->
+<h2>Network Topology</h2>
+
+<div class="diagram">
+
+  <!-- HOST -->
+  <div class="box host-box">
+    <div class="box-title"><span class="dot dot-host"></span> Host (macOS Apple Silicon)</div>
+    <p style="margin:0 0 0.75rem;font-size:0.9rem;">
+      Lima creates two Linux VMs using <strong>vzNAT</strong>. Each VM lives in its own isolated NAT network — they <em>cannot</em> talk to each other directly.
+    </p>
+    <div class="process" style="margin-bottom:0.75rem;border-color:var(--warn);">
+      <div class="process-name">🗄️ PostgreSQL (Docker)</div>
+      <div class="process-desc"><strong>Hard requirement:</strong> Shared catalog both VMs connect to. Federation fails-fast without this.</div>
+    </div>
+    <div class="layer-host">Host OS handles all port forwarding</div>
+    <div class="arrow-down">↓</div>
+    <div class="layer-vznat">vzNAT (isolated per VM)</div>
+  </div>
+
+  <!-- CENTRAL VM -->
+  <div class="box central-box">
+    <div class="box-title"><span class="dot dot-central"></span> VM: sigiro-fed-central</div>
+
+    <div class="ports">
+      <span class="label">guest</span>
+      <span class="arrow">─────→</span>
+      <span><span class="port-tag">host:10000</span> (0.0.0.0)</span>
+    </div>
+
+    <div class="processes">
+      <div class="process">
+        <div class="process-name">sigiro serve</div>
+        <div class="process-desc">HTTP API, gRPC OTLP, worker registration, spicepod generation</div>
+      </div>
+      <div class="process">
+        <div class="process-name">spiced <span style="color:var(--spiced)">●</span></div>
+        <div class="process-desc">Spice.ai query runtime (reads spicepod.yaml)</div>
+      </div>
+    </div>
+
+    <div style="margin-top:1rem;font-size:0.85rem;color:var(--muted);">
+      Env: <code>SIGIRO_CENTRAL=true</code>
+    </div>
+  </div>
+
+  <!-- WORKER VM -->
+  <div class="box worker-box">
+    <div class="box-title"><span class="dot dot-worker"></span> VM: sigiro-fed-worker</div>
+
+    <div class="ports">
+      <span class="label">guest</span>
+      <span class="arrow">─────→</span>
+      <span><span class="port-tag">host:10001</span> (HTTP, 0.0.0.0)</span>
+    </div>
+    <div class="ports">
+      <span class="label">guest</span>
+      <span class="arrow">─────→</span>
+      <span><span class="port-tag">host:10102</span> (OTLP, 0.0.0.0)</span>
+    </div>
+
+    <div class="processes">
+      <div class="process">
+        <div class="process-name">sigiro serve</div>
+        <div class="process-desc">Ingests OTLP traces, answers local SQL queries, self-registers with central</div>
+      </div>
+    </div>
+
+    <div style="margin-top:1rem;font-size:0.85rem;color:var(--muted);">
+      Env: <code>SIGIRO_CENTRAL_URL=http://host.lima.internal:10000</code>
+    </div>
+  </div>
+
+</div>
+
+<!-- ==================== DATA FLOW ==================== -->
+<h2>Test Flow</h2>
+
+<div class="flow">
+  <span class="flow-step">1</span>
+  <span class="flow-label"><strong>Catalog</strong> — PostgreSQL container started on host as <strong>shared catalog</strong> (hard requirement)</span>
+  <span class="flow-proto">docker run postgres:17</span>
+</div>
+
+<div class="flow">
+  <span class="flow-step">2</span>
+  <span class="flow-label"><strong>Build</strong> — Docker cross-compiles Linux ARM64 <code>sigiro</code> binary</span>
+  <span class="flow-proto">docker build</span>
+</div>
+
+<div class="flow">
+  <span class="flow-step">3</span>
+  <span class="flow-label"><strong>Install</strong> — <code>spice install</code> downloads <code>spiced</code> runtime on central VM</span>
+  <span class="flow-proto">curl | bash</span>
+</div>
+
+<div class="flow">
+  <span class="flow-step">4</span>
+  <span class="flow-label"><strong>Copy</strong> — Binary copied to both VMs via <code>limactl copy</code></span>
+  <span class="flow-proto">limactl copy</span>
+</div>
+
+<div class="flow">
+  <span class="flow-step">5</span>
+  <span class="flow-label"><strong>Start Central</strong> — <code>sigiro serve</code> with <code>SIGIRO_CENTRAL=true</code> + <code>SIGIRO_CATALOG_URL</code></span>
+  <span class="flow-proto">HTTP :10000</span>
+</div>
+
+<div class="flow">
+  <span class="flow-step">6</span>
+  <span class="flow-label"><strong>Start Worker</strong> — <code>sigiro serve</code> with <code>SIGIRO_CENTRAL_URL</code> + <code>SIGIRO_CATALOG_URL</code></span>
+  <span class="flow-proto">HTTP :10001</span>
+</div>
+
+<div class="flow">
+  <span class="flow-step">7</span>
+  <span class="flow-label"><strong>Register</strong> — Worker POSTs its metadata to central's <code>/v1/federation/workers</code></span>
+  <span class="flow-proto">POST /v1/federation/workers</span>
+</div>
+
+<div class="flow">
+  <span class="flow-step">8</span>
+  <span class="flow-label"><strong>Spicepod</strong> — Central regenerates <code>spicepod.yaml</code> with worker dataset</span>
+  <span class="flow-proto">regenerate_spicepod()</span>
+</div>
+
+<div class="flow">
+  <span class="flow-step">9</span>
+  <span class="flow-label"><strong>Ingest</strong> — Host sends OTLP trace to worker via forwarded port <code>10102</code></span>
+  <span class="flow-proto">POST /v1/traces</span>
+</div>
+
+<div class="flow">
+  <span class="flow-step">10</span>
+  <span class="flow-label"><strong>Query</strong> — Host queries worker via forwarded port <code>10001</code></span>
+  <span class="flow-proto">POST /v1/query</span>
+</div>
+
+<!-- ==================== TEST RESULTS ==================== -->
+<h2>Validation Checklist</h2>
+
+<div class="test-result">
+  <span>Central health endpoint responds</span>           <span class="ok">✓ PASS</span>
+  <span>Worker health endpoint responds</span>            <span class="ok">✓ PASS</span>
+  <span>Worker appears in <code>/v1/federation/workers</code></span> <span class="ok">✓ PASS</span>
+  <span>Worker endpoint matches expected URL</span>       <span class="ok">✓ PASS</span>
+  <span><code>spicepod.yaml</code> contains worker dataset</span>  <span class="ok">✓ PASS</span>
+  <span>OTLP trace accepted by worker</span>              <span class="ok">✓ PASS</span>
+  <span>Trace query returns data</span>                   <span class="ok">✓ PASS</span>
+  <span><code>spiced</code> process running on central</span>      <span class="warn">⚠ WARN*</span>
+</div>
+
+<div class="note">
+  <strong>Hard Requirement: Shared Catalog</strong><br>
+  Federation mode (<code>SIGIRO_CENTRAL=true</code> or <code>SIGIRO_CENTRAL_URL</code> set) <strong>fail-fasts</strong> if <code>SIGIRO_CATALOG_URL</code> is missing. Local SQLite lives on each VM's isolated filesystem — central cannot read worker catalogs. PostgreSQL (or another network-accessible catalog) is mandatory.
+</div>
+
+<div class="note">
+  <strong>* Why the spiced warning?</strong><br>
+  <code>spiced</code> may exit because the worker's <code>catalog.sqlite</code> path in <code>spicepod.yaml</code> still points to a local file. Even with shared PostgreSQL catalog metadata, the <code>ducklake</code> connector needs access to the actual catalog file. Full cross-VM data federation requires either S3-backed data or mounting shared storage. The test validates the <strong>control plane</strong> (registration + spicepod generation) which is architecturally complete.
+</div>
+
+<!-- ==================== LEGEND ==================== -->
+<div class="legend">
+  <div class="legend-item"><span class="dot dot-host"></span> Host</div>
+  <div class="legend-item"><span class="dot dot-central"></span> Central VM</div>
+  <div class="legend-item"><span class="dot dot-worker"></span> Worker VM</div>
+  <div class="legend-item"><span class="dot dot-spiced"></span> spiced runtime</div>
+  <div class="legend-item"><span class="dot dot-data"></span> Data flow</div>
+</div>
+
+<!-- ==================== COMMANDS ==================== -->
+<h2 style="margin-top:2.5rem;">Quick Commands</h2>
+
+<pre style="background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:1rem;overflow-x:auto;font-size:0.85rem;"><code># Run the full test
+just fed-test
+
+# Start VMs manually
+just fed-start
+
+# View live logs
+just fed-logs-central
+just fed-logs-worker
+
+# SSH into a VM
+just fed-ssh-central
+just fed-ssh-worker
+
+# Tear everything down
+just fed-destroy</code></pre>
+
+</body>
+</html>

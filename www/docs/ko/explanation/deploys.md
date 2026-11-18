@@ -1,14 +1,12 @@
 ---
-title: 폐기된 진단 내 배포 감지 설계
+title: 배포 감지와 스팬이 담고 있어야 하는 것
 description: >-
-  sigiro는 배포에 대해 스팬 리소스의 service.version 하나만 읽습니다. 버전이 어떻게 배포 이벤트가 되는지, 서비스가
-  버전을 보내지 않으면 무엇을 얻는지 설명합니다.
+  sigiro는 배포에 대해 단 하나의 속성만 읽습니다 — 스팬 리소스의 service.version입니다. 이 페이지에서는 버전이 어떻게
+  배포 이벤트가 되는지, sigiro가 어떻게 용의 배포를 선정하는지, 그리고 서비스가 버전을 전혀 전송하지 않을 때 무엇을 얻게 되는지
+  설명합니다.
 sidebar:
   order: 4
 ---
-
-> **과거 설계 문서:** 진단 API의 자동 배포 감지는 폐기되었습니다. 스팬의 `service.version` 속성은 `POST /v1/query`로 원본 텔레메트리에서 조회할 수 있습니다.
-
 진단은 용의 배포를 지목할 수 있습니다: _'checkout' 서비스에서 14:30경 인시던트:
 … ; 용의 배포: 버전 1.4.2가 14:29에 처음 관측됨_. 이는 강력한 주장이며,
 읽는 사람이 그 근거를 묻는 것은 당연합니다.
@@ -24,13 +22,13 @@ sigiro는 **스팬의 리소스 속성**에서 `service.version`을 읽습니다
 
 그것이 출처의 전부입니다. sigiro는 배포를 위해 다른 어떤 필드도 읽지 않습니다:
 
-| 배포를 위해 읽지 않는 것                       | 읽지 않는 이유                                |
-| ---------------------------------------------- | --------------------------------------------- |
-| `deployment.environment`, `deployment.*`       | 어떤 쿼리도 이를 읽지 않습니다                |
-| `git.commit.sha`, `vcs.*`                      | 어떤 쿼리도 이를 읽지 않습니다                |
-| 로그, 메트릭 또는 프로파일의 `service.version` | sigiro는 `sigiro_spans`만 스캔합니다          |
-| CI 웹훅, 배포 API, 릴리스 피드                 | sigiro에는 OTLP 외의 인제스트 경로가 없습니다 |
-| Kubernetes API 서버                            | sigiro는 이에 절대 연결하지 않습니다          |
+| 배포를 위해 읽지 않는 것 | 읽지 않는 이유 |
+| --- | --- |
+| `deployment.environment`, `deployment.*` | 어떤 쿼리도 이를 읽지 않습니다 |
+| `git.commit.sha`, `vcs.*` | 어떤 쿼리도 이를 읽지 않습니다 |
+| 로그, 메트릭 또는 프로파일의 `service.version` | sigiro는 `sigiro_spans`만 스캔합니다 |
+| CI 웹훅, 배포 API, 릴리스 피드 | sigiro에는 OTLP 외의 인제스트 경로가 없습니다 |
+| Kubernetes API 서버 | sigiro는 이에 절대 연결하지 않습니다 |
 
 리소스 속성은 OTLP를 통해 도착하여 `sigiro_spans`의 `resource_attributes` 컬럼에
 JSON 문자열로 그대로 저장됩니다. 세 개의 리소스 속성은 인제스트 시점에 자체 컬럼을
