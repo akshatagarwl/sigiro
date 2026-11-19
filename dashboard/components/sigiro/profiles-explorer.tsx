@@ -118,10 +118,11 @@ function useSqlQuery(name: string, sql: string | undefined) {
  */
 export function ProfilesExplorer() {
   const controls = useControls();
-  const [{ service: selectedServices, ptype: type }, setSelection] = useQueryStates({
-    service: parseAsArrayOf(parseAsString, ",").withDefault([]),
-    ptype: parseAsString.withDefault(""),
-  });
+  const [{ service: selectedServices, ptype: type }, setSelection] =
+    useQueryStates({
+      service: parseAsArrayOf(parseAsString, ",").withDefault([]),
+      ptype: parseAsString.withDefault(""),
+    });
   const service = selectedServices[0] ?? "";
   const setService = (value: string | null) =>
     setSelection({ service: value ? [value] : null, ptype: null });

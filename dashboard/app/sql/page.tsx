@@ -1,12 +1,12 @@
 "use client";
 
-import { Collapsible } from "@/components/ui/parts";
 import * as React from "react";
 
 import { DataTableAuto } from "@/components/data-table/data-table-auto";
 import { Button } from "@/components/observability/primitives";
 import { RequestState } from "@/components/observability/request-state";
 import { Label } from "@/components/ui/label";
+import { Collapsible } from "@/components/ui/parts";
 import { Textarea } from "@/components/ui/textarea";
 import { query, type Row } from "@/lib/sigiro/query";
 

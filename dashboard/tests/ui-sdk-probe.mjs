@@ -1,5 +1,67 @@
-import { chromium } from 'playwright';
-const b=await chromium.launch({executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
-const p=await b.newPage({viewport:{width:390,height:844}});p.on('pageerror',e=>console.log('PAGEERROR',e.stack));p.on('console',m=>{if(m.type()==='error')console.log('CONSOLE',m.text())});
-await p.route('**/v1/query',async route=>{const q=route.request().postData()??''; const result=q.includes('ORDER BY timestamp DESC, sigiro_cursor_key DESC LIMIT')?Array.from({length:30},(_,i)=>({timestamp:1794243364481000-i*1000,level:'info',service_name:'test',severity_text:'INFO',body:'log '+i,attributes:'{}',trace_id:'test',span_id:'span'+i})):q.includes('AS f0')?[{f0:'info',f1:'test',n:30}]:q.includes('time_bucket')?[{t:1794243360000,s:'info',n:30}]:q.includes('count(*)')?[{n:30}]:[]; await route.fulfill({json:result});});
-await p.goto('http://127.0.0.1:19995/dashboard/logs/?timestamp=1794243300000-1794243450000');await p.locator('[data-event-row]').first().waitFor();await p.waitForTimeout(500);await p.waitForTimeout(500);console.log('FILTER',await p.getByRole('button',{name:'Filters',exact:true}).evaluate(el=>({html:el.outerHTML,rect:el.getBoundingClientRect().toJSON(),style:getComputedStyle(el).cssText,parent:el.parentElement.outerHTML.slice(0,4000)})));await p.waitForTimeout(2000);console.log('URL',p.url());console.log('TIME',await p.getByRole('button',{name:/^Time range/}).evaluate(el=>el.outerHTML));console.log((await p.locator('body').innerText()).slice(-6000));console.log('REGIONS',await p.getByRole('region').allTextContents());console.log('FORM',await p.locator('input').evaluateAll(es=>es.map(el=>el.outerHTML)));await p.screenshot({path:'/tmp/sigiro-ui-sdk-probe.png'}); await b.close();
+import { chromium } from "playwright";
+const b = await chromium.launch({
+  executablePath:
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+});
+const p = await b.newPage({ viewport: { width: 390, height: 844 } });
+p.on("pageerror", (e) => console.log("PAGEERROR", e.stack));
+p.on("console", (m) => {
+  if (m.type() === "error") console.log("CONSOLE", m.text());
+});
+await p.route("**/v1/query", async (route) => {
+  const q = route.request().postData() ?? "";
+  const result = q.includes(
+    "ORDER BY timestamp DESC, sigiro_cursor_key DESC LIMIT"
+  )
+    ? Array.from({ length: 30 }, (_, i) => ({
+        timestamp: 1794243364481000 - i * 1000,
+        level: "info",
+        service_name: "test",
+        severity_text: "INFO",
+        body: "log " + i,
+        attributes: "{}",
+        trace_id: "test",
+        span_id: "span" + i,
+      }))
+    : q.includes("AS f0")
+      ? [{ f0: "info", f1: "test", n: 30 }]
+      : q.includes("time_bucket")
+        ? [{ t: 1794243360000, s: "info", n: 30 }]
+        : q.includes("count(*)")
+          ? [{ n: 30 }]
+          : [];
+  await route.fulfill({ json: result });
+});
+await p.goto(
+  "http://127.0.0.1:19995/dashboard/logs/?timestamp=1794243300000-1794243450000"
+);
+await p.locator("[data-event-row]").first().waitFor();
+await p.waitForTimeout(500);
+await p.waitForTimeout(500);
+console.log(
+  "FILTER",
+  await p
+    .getByRole("button", { name: "Filters", exact: true })
+    .evaluate((el) => ({
+      html: el.outerHTML,
+      rect: el.getBoundingClientRect().toJSON(),
+      style: getComputedStyle(el).cssText,
+      parent: el.parentElement.outerHTML.slice(0, 4000),
+    }))
+);
+await p.waitForTimeout(2000);
+console.log("URL", p.url());
+console.log(
+  "TIME",
+  await p
+    .getByRole("button", { name: /^Time range/ })
+    .evaluate((el) => el.outerHTML)
+);
+console.log((await p.locator("body").innerText()).slice(-6000));
+console.log("REGIONS", await p.getByRole("region").allTextContents());
+console.log(
+  "FORM",
+  await p.locator("input").evaluateAll((es) => es.map((el) => el.outerHTML))
+);
+await p.screenshot({ path: "/tmp/sigiro-ui-sdk-probe.png" });
+await b.close();

@@ -21,13 +21,17 @@ export type DateTimeRangeValue = {
 
 export function toUrlString(value: DateTimeRangeValue): string {
   if (value.type === "absolute") {
-    if (!value.absoluteValue || !Number.isFinite(value.absoluteValue.getTime())) throw new Error("Invalid absolute time");
+    if (!value.absoluteValue || !Number.isFinite(value.absoluteValue.getTime()))
+      throw new Error("Invalid absolute time");
     return String(value.absoluteValue.getTime());
   }
   if (value.relativeNow) return "now";
-  const unit = Object.entries(UNITS).find(([, label]) => label === value.relativeFormat)?.[0];
+  const unit = Object.entries(UNITS).find(
+    ([, label]) => label === value.relativeFormat
+  )?.[0];
   const amount = Number(value.relativeValue);
-  if (!unit || !Number.isSafeInteger(amount) || amount < 0) throw new Error("Invalid relative time");
+  if (!unit || !Number.isSafeInteger(amount) || amount < 0)
+    throw new Error("Invalid relative time");
   return `now-${amount}${unit}`;
 }
 

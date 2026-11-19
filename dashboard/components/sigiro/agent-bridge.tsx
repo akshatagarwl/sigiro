@@ -7,7 +7,9 @@ export function AgentBridge() {
   useEffect(() => {
     if (process.env.NODE_ENV !== "development") return;
     Object.assign(window, { sigiroUI: agent });
-    return () => { Reflect.deleteProperty(window, "sigiroUI"); };
+    return () => {
+      Reflect.deleteProperty(window, "sigiroUI");
+    };
   }, []);
   return null;
 }

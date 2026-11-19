@@ -2,8 +2,9 @@
 
 import { Button as BaseButton } from "@ui-sdk/react/button";
 import { Input as BaseInput } from "@ui-sdk/react/input";
-import { Menu } from "@/components/ui/parts";
 import type * as React from "react";
+
+import { Menu } from "@/components/ui/parts";
 
 import styles from "./observability.module.css";
 
@@ -53,19 +54,19 @@ export function ActionMenu({
       <Menu.Trigger render={<Button aria-label={label} />}>
         {children}
       </Menu.Trigger>
-          <Menu.Popup sideOffset={6} className={styles.menu}>
-            {actions.map((action) => (
-              <Menu.Item
-                key={action.label}
-                value={action.label}
-                className={styles.menuItem}
-                disabled={action.disabled}
-                onClick={action.onClick}
-              >
-                {action.label}
-              </Menu.Item>
-            ))}
-          </Menu.Popup>
+      <Menu.Popup sideOffset={6} className={styles.menu}>
+        {actions.map((action) => (
+          <Menu.Item
+            key={action.label}
+            value={action.label}
+            className={styles.menuItem}
+            disabled={action.disabled}
+            onClick={action.onClick}
+          >
+            {action.label}
+          </Menu.Item>
+        ))}
+      </Menu.Popup>
     </Menu.Root>
   );
 }

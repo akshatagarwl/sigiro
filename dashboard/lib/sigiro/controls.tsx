@@ -1,6 +1,5 @@
 "use client";
 
-import { toUrlString, type DateTimeRangeValue } from "@/lib/sigiro/time-window";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import {
@@ -14,6 +13,8 @@ import {
   useQueryStates,
 } from "nuqs";
 import * as React from "react";
+
+import { toUrlString, type DateTimeRangeValue } from "@/lib/sigiro/time-window";
 
 import { query, type Row } from "./query";
 import { resolveTimeWindow } from "./time-window";
@@ -60,14 +61,7 @@ const ControlsContext = React.createContext<Controls | null>(null);
 
 export function ControlsProvider({ children }: { children: React.ReactNode }) {
   const [
-    {
-      range,
-      from: customFrom,
-      to: customTo,
-      timeStart,
-      timeEnd,
-      live,
-    },
+    { range, from: customFrom, to: customTo, timeStart, timeEnd, live },
     setTime,
   ] = useQueryStates({
     range: parseAsStringLiteral(RANGE_KEYS).withDefault("24h"),

@@ -60,9 +60,7 @@ const detailOf = (text: string) => {
   }
 };
 
-export type AuthConfig =
-  | { mode: "open" }
-  | { mode: "oauth"; issuer: string };
+export type AuthConfig = { mode: "open" } | { mode: "oauth"; issuer: string };
 
 let openMode = false;
 export const isOpenMode = () => openMode;
@@ -77,15 +75,22 @@ export async function loadAuthConfig(): Promise<AuthConfig> {
     signal: AbortSignal.timeout(5_000),
   });
   if (!response.ok)
-    throw new Error(`Authentication configuration unavailable (HTTP ${response.status}).`);
-  const config = await response.json() as Partial<{ mode: string; issuer: string }>;
+    throw new Error(
+      `Authentication configuration unavailable (HTTP ${response.status}).`
+    );
+  const config = (await response.json()) as Partial<{
+    mode: string;
+    issuer: string;
+  }>;
   if (config?.mode === "open") {
     openMode = true;
     return { mode: "open" };
   }
   if (config?.mode === "oauth" && typeof config.issuer === "string")
     return { mode: "oauth", issuer: config.issuer };
-  throw new Error("The server returned an unsupported authentication configuration.");
+  throw new Error(
+    "The server returned an unsupported authentication configuration."
+  );
 }
 
 /** Open mode sends no credentials, including stale tokens from another mode. */
