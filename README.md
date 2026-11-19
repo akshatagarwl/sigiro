@@ -1,8 +1,18 @@
-# Sigiro — a single-binary OpenTelemetry backend
+# Sigiro — observability that's cheap, local, and SQL-native
 
-One binary stores traces, logs, metrics, and profiles over OTLP.
-Query them with SQL, explore them in the dashboard, or give your coding agent
-the CLI and MCP server.
+Observability got expensive because it got complicated: clusters to run,
+proprietary query languages to learn, and a bill that grows with every span.
+It doesn't have to be that way.
+
+Sigiro is one binary. It takes OpenTelemetry traces, logs, metrics, and profiles,
+writes them as Parquet files on your own disk, and lets you query all of it with
+plain SQL. When you want to keep data for months instead of days, point it at S3
+and let cheap object storage hold the history.
+
+SQL matters for another reason: it's the language coding agents query best. Hand
+yours the CLI or MCP server and it can investigate your telemetry the same way it
+already reasons about data. When you'd rather look for yourself, the dashboard
+is right there.
 
 [Website](https://sigiro.com) · [Quickstart](https://sigiro.com/docs/tutorials/quickstart) · [Documentation](https://sigiro.com/docs) · [Releases](https://github.com/akshatagarwl/sigiro/releases) · [Contributing](CONTRIBUTING.md)
 
@@ -65,6 +75,12 @@ is an ingestion endpoint.
 ![A span waits in memory, is flushed to a Parquet file within a second, can be queried, and is deleted after 7 days](docs/assets/life.svg)
 
 Data is kept for 7 days. Set `SIGIRO_RETENTION_DAYS=0` to keep it all.
+
+For long-term retention, store the Parquet files in S3 or an S3-compatible bucket
+instead of on local disk. Set `SIGIRO_S3_BUCKET`, `SIGIRO_S3_REGION`,
+`SIGIRO_S3_ENDPOINT`, and credentials (`SIGIRO_S3_KEY_ID`/`SIGIRO_S3_SECRET`, or
+the standard `AWS_*` variables). S3 storage also needs a PostgreSQL catalog via
+`SIGIRO_CATALOG_URL`.
 
 ## Look at it
 
