@@ -1,11 +1,10 @@
 "use client";
 
-import { Button as RowButton } from "@base-ui/react/button";
-import { Dialog } from "@base-ui/react/dialog";
-import { Menu } from "@base-ui/react/menu";
-import { Tabs } from "@base-ui/react/tabs";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { Button as RowButton } from "@ui-sdk/react/button";
 import * as React from "react";
+
+import { Dialog, Menu, Tabs } from "@/components/ui/parts";
 
 import { AttributeTree } from "./attribute-tree";
 import { ActionMenu, Button, Input } from "./primitives";
@@ -238,62 +237,55 @@ export function EventExplorer({
           </Button>
           <Menu.Root>
             <Menu.Trigger render={<Button />}>View</Menu.Trigger>
-            <Menu.Portal>
-              <Menu.Positioner sideOffset={6} className={styles.positioner}>
-                <Menu.Popup className={styles.menu}>
-                  <Menu.Group>
-                    <Menu.GroupLabel className={styles.menuLabel}>
-                      Display
-                    </Menu.GroupLabel>
-                    <Menu.CheckboxItem
-                      className={styles.menuItem}
-                      checked={wrap}
-                      onCheckedChange={setWrap}
-                    >
-                      <Menu.CheckboxItemIndicator>
-                        ✓{" "}
-                      </Menu.CheckboxItemIndicator>
-                      Wrap messages
-                    </Menu.CheckboxItem>
-                    <Menu.CheckboxItem
-                      className={styles.menuItem}
-                      checked={comfortable}
-                      onCheckedChange={setComfortable}
-                    >
-                      <Menu.CheckboxItemIndicator>
-                        ✓{" "}
-                      </Menu.CheckboxItemIndicator>
-                      Comfortable rows
-                    </Menu.CheckboxItem>
-                  </Menu.Group>
-                  <Menu.Group>
-                    <Menu.GroupLabel className={styles.menuLabel}>
-                      Columns
-                    </Menu.GroupLabel>
-                    {DEFAULT_COLUMNS.map((column) => (
-                      <Menu.CheckboxItem
-                        key={column}
-                        className={styles.menuItem}
-                        checked={columns.includes(column)}
-                        disabled={columns.length === 1 && columns[0] === column}
-                        onCheckedChange={(checked) =>
-                          setColumns(
-                            DEFAULT_COLUMNS.filter((key) =>
-                              key === column ? checked : columns.includes(key)
-                            )
-                          )
-                        }
-                      >
-                        <Menu.CheckboxItemIndicator>
-                          ✓{" "}
-                        </Menu.CheckboxItemIndicator>
-                        {COLUMN_LABELS[column]}
-                      </Menu.CheckboxItem>
-                    ))}
-                  </Menu.Group>
-                </Menu.Popup>
-              </Menu.Positioner>
-            </Menu.Portal>
+            <Menu.Popup sideOffset={6} className={styles.menu}>
+              <Menu.Group>
+                <Menu.GroupLabel className={styles.menuLabel}>
+                  Display
+                </Menu.GroupLabel>
+                <Menu.CheckboxItem
+                  className={styles.menuItem}
+                  value="wrap"
+                  checked={wrap}
+                  onCheckedChange={setWrap}
+                >
+                  <Menu.CheckboxItemIndicator>✓ </Menu.CheckboxItemIndicator>
+                  Wrap messages
+                </Menu.CheckboxItem>
+                <Menu.CheckboxItem
+                  className={styles.menuItem}
+                  value="comfortable"
+                  checked={comfortable}
+                  onCheckedChange={setComfortable}
+                >
+                  <Menu.CheckboxItemIndicator>✓ </Menu.CheckboxItemIndicator>
+                  Comfortable rows
+                </Menu.CheckboxItem>
+              </Menu.Group>
+              <Menu.Group>
+                <Menu.GroupLabel className={styles.menuLabel}>
+                  Columns
+                </Menu.GroupLabel>
+                {DEFAULT_COLUMNS.map((column) => (
+                  <Menu.CheckboxItem
+                    key={column}
+                    value={column}
+                    className={styles.menuItem}
+                    checked={columns.includes(column)}
+                    disabled={columns.length === 1 && columns[0] === column}
+                    onCheckedChange={(checked) =>
+                      setColumns(
+                        DEFAULT_COLUMNS.filter((key) =>
+                          key === column ? checked : columns.includes(key)
+                        )
+                      )
+                    }
+                  >
+                    <Menu.CheckboxItemIndicator>✓ </Menu.CheckboxItemIndicator>
+                    {COLUMN_LABELS[column]}
+                  </Menu.CheckboxItem>
+                ))}
+              </Menu.Group>
+            </Menu.Popup>
           </Menu.Root>
         </div>
       </div>
@@ -522,25 +514,21 @@ export function EventExplorer({
             if (!open) close();
           }}
         >
-          <Dialog.Portal>
-            <Dialog.Backdrop className={styles.backdrop} />
-            <Dialog.Popup
-              className={styles.mobileInspector}
-              id={inspectorId}
-              finalFocus={returnFocusTarget}
-            >
-              <Dialog.Title className={styles.srOnly}>
-                Event details
-              </Dialog.Title>
-              <Dialog.Description className={styles.srOnly}>
-                Full log message, structured attributes and correlation links.
-              </Dialog.Description>
-              {inspector}
-              <div role="status" className={styles.notice}>
-                {notice}
-              </div>
-            </Dialog.Popup>
-          </Dialog.Portal>
+          <Dialog.Backdrop className={styles.backdrop} />
+          <Dialog.Popup
+            className={styles.mobileInspector}
+            id={inspectorId}
+            finalFocus={returnFocusTarget}
+          >
+            <Dialog.Title className={styles.srOnly}>Event details</Dialog.Title>
+            <Dialog.Description className={styles.srOnly}>
+              Full log message, structured attributes and correlation links.
+            </Dialog.Description>
+            {inspector}
+            <div role="status" className={styles.notice}>
+              {notice}
+            </div>
+          </Dialog.Popup>
         </Dialog.Root>
       )}
     </section>

@@ -51,12 +51,11 @@ export default function TracesPage() {
       <Sheet open={Boolean(trace)} onOpenChange={(open) => !open && close()}>
         <SheetContent
           className="w-full overflow-y-auto sm:max-w-[96vw]"
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
+          finalFocus={() => {
             const row = returnId.current
               ? document.getElementById(returnId.current)
               : null;
-            (row ?? heading.current)?.focus({ preventScroll: true });
+            return row ?? heading.current;
           }}
         >
           <SheetHeader>

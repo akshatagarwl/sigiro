@@ -8,6 +8,7 @@ import {
   CommandGroup,
   CommandItem,
   CommandList,
+  CommandInput,
   CommandSeparator,
 } from "@/components/ui/command";
 import { Kbd } from "@/components/ui/kbd";
@@ -19,7 +20,6 @@ import { formatCompactNumber } from "@/lib/format";
 import type { SchemaDefinition } from "@/lib/store/schema/types";
 import { boxRadiusClassName } from "@/lib/style";
 import { cn } from "@/lib/utils";
-import { Command as CommandPrimitive } from "cmdk";
 import { formatDistanceToNow } from "date-fns";
 import { LoaderCircle, Search, X } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -187,6 +187,8 @@ export function DataTableFilterCommand({
         </Kbd>
       </button>
       <Command
+        query={inputValue}
+        onQueryChange={setInputValue}
         className={cn(
           // The root only lays the box and the dropdown out: every visible
           // edge below is drawn by them, so strip the surface a style may put
@@ -209,10 +211,8 @@ export function DataTableFilterCommand({
           )}
         >
           <Search className="size-4 shrink-0 opacity-50" />
-          <CommandPrimitive.Input
+          <CommandInput
             ref={inputRef}
-            value={inputValue}
-            onValueChange={setInputValue}
             onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
               if (e.key === "Escape") inputRef?.current?.blur();
             }}

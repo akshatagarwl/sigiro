@@ -13,6 +13,7 @@ Jaeger와 **같은 호스트**에서 `14317`, `14318`, `9999`가 비어 있는 �
 
 ```bash
 docker run -d --name sigiro-trial --restart unless-stopped \
+  -e SIGIRO_BIND=0.0.0.0 \
   -p 127.0.0.1:14317:4317 \
   -p 127.0.0.1:14318:4318 \
   -p 127.0.0.1:9999:9999 \

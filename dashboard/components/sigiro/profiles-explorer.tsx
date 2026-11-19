@@ -118,12 +118,14 @@ function useSqlQuery(name: string, sql: string | undefined) {
  */
 export function ProfilesExplorer() {
   const controls = useControls();
-  const [{ service, ptype: type }, setSelection] = useQueryStates({
-    service: parseAsString.withDefault(""),
-    ptype: parseAsString.withDefault(""),
-  });
+  const [{ service: selectedServices, ptype: type }, setSelection] =
+    useQueryStates({
+      service: parseAsArrayOf(parseAsString, ",").withDefault([]),
+      ptype: parseAsString.withDefault(""),
+    });
+  const service = selectedServices[0] ?? "";
   const setService = (value: string | null) =>
-    setSelection({ service: value, ptype: null });
+    setSelection({ service: value ? [value] : null, ptype: null });
   const setType = (value: string | null) => setSelection({ ptype: value });
   const [labelParams, setLabelParams] = useQueryState(
     "label",
@@ -409,6 +411,7 @@ export function ProfilesExplorer() {
               <SelectItem
                 key={row.type}
                 value={row.type}
+                label={TYPE_LABELS[row.type] ?? row.type}
                 className="rounded-lg"
               >
                 {TYPE_LABELS[row.type] ?? row.type}

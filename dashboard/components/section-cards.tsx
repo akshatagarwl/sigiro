@@ -21,15 +21,15 @@ export type SectionCard = {
   note: string
 }
 
-/** dashboard-01's section cards, fed from props instead of sample data. */
+/** Telemetry summaries using the SDK's shared monochrome surface tokens. */
 export function SectionCards({ items }: { items: SectionCard[] }) {
   return (
-    <div className="grid grid-cols-1 gap-4 px-4 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card *:data-[slot=card]:shadow-xs lg:px-6 @xl/main:grid-cols-2 @5xl/main:grid-cols-5 dark:*:data-[slot=card]:bg-card">
+    <div className="grid grid-cols-1 gap-0 px-4 lg:px-6 @xl/main:grid-cols-2 @5xl/main:grid-cols-5">
       {items.map((item) => {
         const up = (item.change ?? 0) >= 0
         const Trend = up ? IconTrendingUp : IconTrendingDown
         return (
-          <Card key={item.label} className="@container/card" data-kpi={item.label}>
+          <Card key={item.label} className="@container/card gap-3" data-kpi={item.label}>
             <CardHeader>
               <CardDescription>{item.label}</CardDescription>
               <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
@@ -52,7 +52,7 @@ export function SectionCards({ items }: { items: SectionCard[] }) {
                 </CardAction>
               )}
             </CardHeader>
-            <CardFooter className="flex-col items-start gap-1.5 text-sm">
+            <CardFooter className="flex-col items-start gap-1 text-xs">
               <div className="line-clamp-1 flex gap-2 font-medium">
                 {item.headline}
               </div>

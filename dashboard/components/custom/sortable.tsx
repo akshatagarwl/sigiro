@@ -34,7 +34,8 @@ import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
 import { composeRefs } from "@/lib/compose-refs";
 import { cn } from "@/lib/utils";
-import { Slot, type SlotProps } from "@radix-ui/react-slot";
+import { renderElement } from "@ui-sdk/react/primitive";
+import { childElement } from "@/components/ui/composition";
 import * as React from "react";
 import { createPortal } from "react-dom";
 
@@ -254,7 +255,7 @@ function useSortableItem() {
   return context;
 }
 
-interface SortableItemProps extends SlotProps {
+interface SortableItemProps extends React.HTMLAttributes<HTMLDivElement> {
   /**
    * The unique identifier of the item.
    * @example "item-1"
@@ -319,33 +320,18 @@ function SortableItem({
     transition,
   };
 
-  const Comp = asChild || render ? Slot : "div";
-
-  // Base UI nests the children inside the `render` element; Radix's `asChild`
-  // expects them to already be there.
-  const content = render
-    ? children === undefined
-      ? render
-      : React.cloneElement(render, undefined, children)
-    : children;
-
+  const element = childElement(render, true) ?? childElement(children, asChild);
   return (
     <SortableItemContext.Provider value={context}>
-      <Comp
-        data-state={isDragging ? "dragging" : undefined}
-        className={cn(
-          "data-[state=dragging]:cursor-grabbing",
-          { "cursor-grab": !isDragging && asTrigger },
-          className,
-        )}
-        ref={composeRefs(ref, setNodeRef as React.Ref<HTMLDivElement>)}
-        style={style}
-        {...(asTrigger ? attributes : {})}
-        {...(asTrigger ? listeners : {})}
-        {...props}
-      >
-        {content}
-      </Comp>
+      {renderElement("div", {
+        ...props,
+        ...(asTrigger ? attributes : {}),
+        ...(asTrigger ? listeners : {}),
+        ref: composeRefs(ref, setNodeRef as React.Ref<HTMLDivElement>),
+        style,
+        className: cn(isDragging ? "cursor-grabbing opacity-50" : asTrigger && "cursor-grab", className),
+        children: asChild ? undefined : children,
+      }, element)}
     </SortableItemContext.Provider>
   );
 }

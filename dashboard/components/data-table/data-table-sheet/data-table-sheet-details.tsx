@@ -121,19 +121,15 @@ export function DataTableSheetDetails({
           table.resetRowSelection();
         }
 
-        // Restore in onCloseAutoFocus, after the focus trap is dismantled.
       }}
     >
       <SheetContent
-        onOpenAutoFocus={() => {
+        initialFocus={() => {
           returnRow.current = selectedRowKey ? document.getElementById(selectedRowKey) : null;
           returnTable.current = document.getElementById("content");
+          return document.querySelector<HTMLElement>('[role="dialog"]');
         }}
-        onCloseAutoFocus={(event) => {
-          event.preventDefault();
-          const target = returnRow.current?.isConnected ? returnRow.current : returnTable.current;
-          if (target?.isConnected) target.focus({ preventScroll: true });
-        }}
+        finalFocus={() => returnRow.current?.isConnected ? returnRow.current : returnTable.current}
         className="overflow-y-auto p-0 sm:max-w-md"
         hideClose
       >

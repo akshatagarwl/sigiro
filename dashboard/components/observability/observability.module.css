@@ -180,6 +180,9 @@
 .eventRow {
   position: relative;
   width: 100%;
+  height: auto;
+  border-radius: 0;
+  font-weight: 400;
   min-height: 34px;
   margin: 0;
   border: 0;
@@ -350,7 +353,7 @@
   font-size: 12px;
   cursor: pointer;
 }
-.tab[data-active] {
+.tab[data-selected] {
   border-bottom-color: var(--primary);
   color: var(--foreground);
   font-weight: 600;

@@ -503,6 +503,14 @@ pub enum AuthMode {
     },
 }
 
+/// Public, credential-free dashboard bootstrap contract.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum DashboardAuthConfig {
+    Open,
+    Oauth { issuer: String },
+}
+
 impl AuthMode {
     /// Build auth for the current storage mode.
     ///
@@ -531,6 +539,16 @@ impl AuthMode {
             "sigiro running in OPEN auth mode — no per-request authentication; protect the network perimeter"
         );
         Ok(AuthMode::Open)
+    }
+
+    /// Public dashboard bootstrap. Never contains credentials or tenant details.
+    pub fn dashboard_config(&self) -> DashboardAuthConfig {
+        match self {
+            Self::Open => DashboardAuthConfig::Open,
+            Self::Jwt { verifier, .. } => DashboardAuthConfig::Oauth {
+                issuer: verifier.issuer.clone(),
+            },
+        }
     }
 
     /// True if this mode requires an Authorization header.
@@ -975,6 +993,19 @@ mod ingest_key_auth_tests {
     use super::test_support::{jwt_mode, user_token};
     use super::*;
     use axum::http::{Method, StatusCode};
+
+    #[test]
+    fn dashboard_auth_config_is_explicit_and_credential_free() {
+        assert_eq!(
+            serde_json::to_value(AuthMode::Open.dashboard_config()).unwrap(),
+            serde_json::json!({ "mode": "open" }),
+        );
+        let (mode, _) = jwt_mode();
+        assert_eq!(
+            serde_json::to_value(mode.dashboard_config()).unwrap(),
+            serde_json::json!({ "mode": "oauth", "issuer": "https://issuer.test/api/auth" }),
+        );
+    }
 
     fn tenant(id: &str) -> TenantId {
         TenantId::try_new(id.to_owned()).unwrap()

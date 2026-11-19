@@ -60,37 +60,49 @@ const detailOf = (text: string) => {
   }
 };
 
-/**
- * A dashboard served by a self-hosted sigiro on this machine talks to an
- * open-mode server, which has no sign-in and ignores the bearer. On a
- * loopback origin whose `/v1/query` answers without a token, a placeholder
- * stands in for the OAuth token.
- */
-let openMode = false;
-export const localToken = (): string | undefined =>
-  openMode ? "local-open-mode" : undefined;
+export type AuthConfig = { mode: "open" } | { mode: "oauth"; issuer: string };
 
-export async function detectOpenMode(): Promise<boolean> {
-  const host = globalThis.location?.hostname;
-  if (host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]")
-    return false;
-  try {
-    const response = await fetch("/v1/query", {
-      method: "POST",
-      credentials: "omit",
-      headers: { "content-type": "text/plain", accept: "application/json" },
-      body: "SELECT 1 AS ok",
-    });
-    openMode = response.ok;
-  } catch {
-    openMode = false;
+let openMode = false;
+export const isOpenMode = () => openMode;
+
+/** Explicit server configuration, never inferred from a query or hostname. */
+export async function loadAuthConfig(): Promise<AuthConfig> {
+  openMode = false;
+  const response = await fetch("/v1/auth/config", {
+    credentials: "omit",
+    cache: "no-store",
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!response.ok)
+    throw new Error(
+      `Authentication configuration unavailable (HTTP ${response.status}).`
+    );
+  const config = (await response.json()) as Partial<{
+    mode: string;
+    issuer: string;
+  }>;
+  if (config?.mode === "open") {
+    openMode = true;
+    return { mode: "open" };
   }
-  return openMode;
+  if (config?.mode === "oauth" && typeof config.issuer === "string")
+    return { mode: "oauth", issuer: config.issuer };
+  throw new Error(
+    "The server returned an unsupported authentication configuration."
+  );
+}
+
+/** Open mode sends no credentials, including stale tokens from another mode. */
+export function authHeaders(): Record<string, string> {
+  if (openMode) return {};
+  const token = auth.currentToken();
+  if (!token) throw new QueryError(401, "Not signed in.");
+  return { authorization: `Bearer ${token}` };
 }
 
 export async function query(sql: string, signal?: AbortSignal): Promise<Row[]> {
-  const token = auth.currentToken() ?? localToken();
-  if (!token) throw new QueryError(401, "Not signed in.");
+  const authorization = authHeaders();
   await acquire();
   try {
     for (let attempt = 0; ; attempt++) {
@@ -98,7 +110,7 @@ export async function query(sql: string, signal?: AbortSignal): Promise<Row[]> {
         method: "POST",
         credentials: "omit",
         headers: {
-          authorization: `Bearer ${token}`,
+          ...authorization,
           "content-type": "text/plain",
           accept: "application/json",
         },

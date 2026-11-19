@@ -1,9 +1,10 @@
 "use client";
 
-import { Button as BaseButton } from "@base-ui/react/button";
-import { Input as BaseInput } from "@base-ui/react/input";
-import { Menu } from "@base-ui/react/menu";
+import { Button as BaseButton } from "@ui-sdk/react/button";
+import { Input as BaseInput } from "@ui-sdk/react/input";
 import type * as React from "react";
+
+import { Menu } from "@/components/ui/parts";
 
 import styles from "./observability.module.css";
 
@@ -53,22 +54,19 @@ export function ActionMenu({
       <Menu.Trigger render={<Button aria-label={label} />}>
         {children}
       </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner sideOffset={6} className={styles.positioner}>
-          <Menu.Popup className={styles.menu}>
-            {actions.map((action) => (
-              <Menu.Item
-                key={action.label}
-                className={styles.menuItem}
-                disabled={action.disabled}
-                onClick={action.onClick}
-              >
-                {action.label}
-              </Menu.Item>
-            ))}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
+      <Menu.Popup sideOffset={6} className={styles.menu}>
+        {actions.map((action) => (
+          <Menu.Item
+            key={action.label}
+            value={action.label}
+            className={styles.menuItem}
+            disabled={action.disabled}
+            onClick={action.onClick}
+          >
+            {action.label}
+          </Menu.Item>
+        ))}
+      </Menu.Popup>
     </Menu.Root>
   );
 }
