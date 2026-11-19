@@ -132,7 +132,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         return;
       }
       if (config.issuer !== "https://sigiro.com/api/auth") {
-        setPhase({ kind: "unavailable", unsupported: true, reason: "This server requires authentication from an issuer this dashboard does not support." });
+        setPhase({
+          kind: "unavailable",
+          unsupported: true,
+          reason:
+            "This server requires authentication from an issuer this dashboard does not support.",
+        });
         return;
       }
       try {
@@ -164,10 +169,16 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   if (phase.kind === "unavailable")
     return (
-      <div className="flex min-h-svh items-center justify-center p-6">
+      <main className="flex min-h-svh items-center justify-center p-6">
         <Card className="w-full max-w-sm" data-state="unavailable">
           <CardHeader>
-            <CardTitle>{phase.unsupported ? "Authentication setup required" : "Cannot connect to Sigiro"}</CardTitle>
+            <CardTitle>
+              <h1>
+                {phase.unsupported
+                  ? "Authentication setup required"
+                  : "Cannot connect to Sigiro"}
+              </h1>
+            </CardTitle>
             <CardDescription>
               {phase.unsupported
                 ? "Use a dashboard compatible with this server's authentication configuration."
@@ -175,26 +186,36 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
-            <p className="text-destructive text-sm" role="alert">{phase.reason}</p>
-            <Button onClick={() => setAttempt(value => value + 1)}>Retry connection</Button>
+            <p className="text-destructive text-sm" role="alert">
+              {phase.reason}
+            </p>
+            <Button onClick={() => setAttempt((value) => value + 1)}>
+              Retry connection
+            </Button>
           </CardContent>
         </Card>
-      </div>
+      </main>
     );
 
   if (phase.kind === "starting")
     return (
-      <div className="text-muted-foreground p-6 text-sm" data-state="starting">
-        Connecting to Sigiro…
-      </div>
+      <main
+        className="text-muted-foreground p-6 text-sm"
+        data-state="starting"
+        aria-busy="true"
+      >
+        <h1>Connecting to Sigiro…</h1>
+      </main>
     );
 
   if (phase.kind === "signed-out")
     return (
-      <div className="flex min-h-svh items-center justify-center p-6">
+      <main className="flex min-h-svh items-center justify-center p-6">
         <Card className="w-full max-w-sm" data-state="signed-out">
           <CardHeader>
-            <CardTitle>Sign in to Sigiro</CardTitle>
+            <CardTitle>
+              <h1>Sign in to Sigiro</h1>
+            </CardTitle>
             <CardDescription>
               See your workspace&apos;s traces, logs and services. Signing in
               gives this tab read-only access for 15 minutes.
@@ -215,7 +236,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             </Button>
           </CardContent>
         </Card>
-      </div>
+      </main>
     );
 
   return (
