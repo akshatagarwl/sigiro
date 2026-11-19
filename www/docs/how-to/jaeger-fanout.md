@@ -18,6 +18,7 @@ On the **same host** as Jaeger, with `14317`, `14318`, and `9999` free:
 
 ```bash
 docker run -d --name sigiro-trial --restart unless-stopped \
+  -e SIGIRO_BIND=0.0.0.0 \
   -p 127.0.0.1:14317:4317 \
   -p 127.0.0.1:14318:4318 \
   -p 127.0.0.1:9999:9999 \
@@ -37,8 +38,9 @@ application exporter endpoint.
 container or on another host cannot use that loopback address; arrange a
 private route through a TLS/authenticating proxy (or equivalent network
 controls) and use its reachable address instead. Sigiro itself supplies no
-authentication. Do not change the Docker binding to `0.0.0.0` just to make this
-work.
+authentication. `SIGIRO_BIND=0.0.0.0` above is the listener inside the
+container, not the host-side port publishing. Do not change the host publishing
+(`-p 127.0.0.1:...`) to `0.0.0.0` just to make this work.
 Self-hosted sigiro does not authenticate OTLP or query requests: never publish
 these ports directly to an untrusted network. A loopback binding alone does not
 make local processes trusted.

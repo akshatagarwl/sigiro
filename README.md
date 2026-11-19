@@ -42,6 +42,11 @@ expose it beyond loopback, put it behind an authenticated reverse proxy or an
 access-controlled network perimeter. Do not expose it directly to the internet.
 Hosted JWT-authenticated deployments retain their existing listener defaults.
 
+In Docker, pass `-e SIGIRO_BIND=0.0.0.0` so published ports can reach the
+listener **inside the container**. Keep host-side publishing on loopback
+(for example, `-p 127.0.0.1:9999:9999`); the container listener setting does
+not provide authentication.
+
 ## Send it telemetry
 
 Point any OpenTelemetry SDK or Collector at it:
