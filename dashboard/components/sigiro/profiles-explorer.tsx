@@ -411,6 +411,7 @@ export function ProfilesExplorer() {
               <SelectItem
                 key={row.type}
                 value={row.type}
+                label={TYPE_LABELS[row.type] ?? row.type}
                 className="rounded-lg"
               >
                 {TYPE_LABELS[row.type] ?? row.type}

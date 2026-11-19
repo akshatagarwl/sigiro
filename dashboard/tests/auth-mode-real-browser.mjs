@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 // Uses the compiled server and real browser; no request interception or API fixtures.
@@ -41,6 +41,7 @@ try {
   );
   browser("network", "har", "start");
   browser("set", "viewport", "1440", "1000");
+  browser("set", "media", "dark", "reduced-motion");
   for (const route of ["", "logs/", "traces/", "profiles/", "sql/"]) {
     browser("open", `${origin}/dashboard/${route}`);
     browser("wait", "nav[aria-label='Main navigation']");
@@ -62,10 +63,10 @@ try {
     "label",
     "SQL query",
     "fill",
-    "SELECT 424242 AS browser_verified"
+    "SELECT 'sigiro-browser-verified' AS browser_verified"
   );
   browser("find", "role", "button", "click", "--name", "Run", "--exact");
-  browser("wait", "--text", "424242");
+  browser("wait", "--text", "sigiro-browser-verified");
   assert.match(browser("get", "text", "body").text, /browser_verified/);
   browser("screenshot", path.join(evidence, "sql-executed.png"));
   browser("set", "viewport", "390", "844");
@@ -89,11 +90,17 @@ try {
       ),
       false
     );
-    assert.ok(
-      query.status >= 200 && query.status < 300,
-      `query failed: ${JSON.stringify(query)}`
-    );
   }
+  const har = JSON.parse(
+    await readFile(path.join(evidence, "network.har"), "utf8")
+  );
+  // React cancels superseded service/time-window queries; these are not HTTP failures.
+  const failures = har.log.entries.filter(({ request, response }) => {
+    if (!new URL(request.url).pathname.startsWith("/v1/")) return false;
+    if (response.status >= 200 && response.status < 300) return false;
+    return response.status !== 0 || response.statusText !== "net::ERR_ABORTED";
+  });
+  assert.deepEqual(failures, []);
   assert.deepEqual(
     requests.filter((request) =>
       /\/api\/auth\/|\/\.well-known\/oauth-client/.test(request.url)
