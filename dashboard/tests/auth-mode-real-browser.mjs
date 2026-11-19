@@ -1,37 +1,113 @@
 import assert from "node:assert/strict";
-import { chromium } from "playwright";
+import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 
-// No routes are mocked. Requires an open-mode Sigiro backend behind this origin.
+// Uses the compiled server and real browser; no request interception or API fixtures.
 const origin = process.env.UI_ORIGIN ?? "http://127.0.0.1:19995";
+const evidence = path.resolve(
+  process.env.SIGIRO_UI_EVIDENCE ?? "/tmp/sigiro-ui-real"
+);
+const session = `sigiro-real-${randomUUID()}`;
+const launch = process.env.CHROMIUM_PATH
+  ? ["--executable-path", process.env.CHROMIUM_PATH]
+  : [];
+await mkdir(evidence, { recursive: true });
+
+function browser(...args) {
+  const result = JSON.parse(
+    execFileSync(
+      "agent-browser",
+      ["--session", session, ...launch, "--json", ...args],
+      { encoding: "utf8", timeout: 60_000 }
+    )
+  );
+  assert.equal(result.success, true, JSON.stringify(result));
+  return result.data;
+}
+
 const response = await fetch(`${origin}/v1/auth/config`);
 assert.equal(response.status, 200);
 assert.equal(response.headers.get("cache-control"), "no-store");
 assert.deepEqual(await response.json(), { mode: "open" });
-const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+
 try {
-  const page = await browser.newPage();
-  const failures = [], queries = [], identity = [], errors = [];
-  page.on("pageerror", error => errors.push(error.message));
-  page.on("request", request => {
-    if (request.url().includes("/v1/query")) queries.push({ sql: request.postData(), authorization: request.headers().authorization });
-    if (request.url().includes("/api/auth/") || request.url().includes("/.well-known/oauth-client")) identity.push(request.url());
-  });
-  page.on("response", response => {
-    if (response.url().includes("/v1/") && response.status() >= 400) failures.push([response.status(), response.url()]);
-  });
-  for (const path of ["", "logs/", "traces/", "profiles/", "sql/"]) {
-    await page.goto(`${origin}/dashboard/${path}`);
-    await page.getByRole("navigation", { name: "Main navigation" }).waitFor();
-    await page.waitForTimeout(1800);
-    assert.equal(await page.getByRole("button", { name: "Sign in", exact: true }).count(), 0);
-    console.log(`PASS real local backend /dashboard/${path}`);
+  browser("open", `${origin}/dashboard/`);
+  browser("wait", "nav[aria-label='Main navigation']");
+  browser(
+    "eval",
+    "sessionStorage.setItem('sigiro.dashboard.token', JSON.stringify({ accessToken: 'stale-token-must-not-be-sent', expiresAt: Date.now() + 60000 }))"
+  );
+  browser("network", "har", "start");
+  browser("set", "viewport", "1440", "1000");
+  for (const route of ["", "logs/", "traces/", "profiles/", "sql/"]) {
+    browser("open", `${origin}/dashboard/${route}`);
+    browser("wait", "nav[aria-label='Main navigation']");
+    browser("wait", "--load", "networkidle");
+    const text = browser("get", "text", "body").text;
+    assert.match(text, /\bLocal\b/);
+    assert.doesNotMatch(text, /Sign in to Sigiro|Cannot connect to Sigiro/);
+    const name = route.replace("/", "") || "overview";
+    await writeFile(
+      path.join(evidence, `${name}.snapshot.txt`),
+      browser("snapshot").snapshot
+    );
+    browser("screenshot", path.join(evidence, `${name}.png`));
+    console.log(`PASS real backend /dashboard/${route}`);
   }
+
+  browser(
+    "find",
+    "label",
+    "SQL query",
+    "fill",
+    "SELECT 424242 AS browser_verified"
+  );
+  browser("find", "role", "button", "click", "--name", "Run", "--exact");
+  browser("wait", "--text", "424242");
+  assert.match(browser("get", "text", "body").text, /browser_verified/);
+  browser("screenshot", path.join(evidence, "sql-executed.png"));
+  browser("set", "viewport", "390", "844");
+  browser("screenshot", path.join(evidence, "sql-mobile.png"));
+  const overflow = browser(
+    "eval",
+    "document.documentElement.scrollWidth > innerWidth"
+  ).result;
+  assert.equal(overflow, false, "mobile document overflows horizontally");
+  browser("network", "har", "stop", path.join(evidence, "network.har"));
+
+  const { requests } = browser("network", "requests");
+  const queries = requests.filter(
+    (request) => new URL(request.url).pathname === "/v1/query"
+  );
   assert.ok(queries.length > 0);
-  assert.ok(queries.every(query => !query.authorization));
-  assert.deepEqual(identity, []);
-  assert.deepEqual(failures, []);
-  assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ queries: queries.length, identityRequests: identity.length, failures, errors }));
+  for (const query of queries) {
+    assert.equal(
+      Object.keys(query.headers).some(
+        (header) => header.toLowerCase() === "authorization"
+      ),
+      false
+    );
+    assert.ok(
+      query.status >= 200 && query.status < 300,
+      `query failed: ${JSON.stringify(query)}`
+    );
+  }
+  assert.deepEqual(
+    requests.filter((request) =>
+      /\/api\/auth\/|\/\.well-known\/oauth-client/.test(request.url)
+    ),
+    []
+  );
+  assert.deepEqual(browser("errors").errors, []);
+  const audit = browser("a11y");
+  await writeFile(
+    path.join(evidence, "accessibility.json"),
+    JSON.stringify(audit, null, 2)
+  );
+  assert.deepEqual(audit.violations, []);
+  console.log(JSON.stringify({ queries: queries.length, evidence }));
 } finally {
-  await browser.close();
+  browser("close");
 }
