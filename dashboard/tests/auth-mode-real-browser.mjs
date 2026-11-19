@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import axe from "axe-core";
+
 // Uses the compiled server and real browser; no request interception or API fixtures.
 const origin = process.env.UI_ORIGIN ?? "http://127.0.0.1:19995";
 const evidence = path.resolve(
@@ -16,11 +18,16 @@ const launch = process.env.CHROMIUM_PATH
 await mkdir(evidence, { recursive: true });
 
 function browser(...args) {
+  let input;
+  if (args[0] === "eval") {
+    input = args[1];
+    args = ["eval", "--stdin"];
+  }
   const result = JSON.parse(
     execFileSync(
       "agent-browser",
       ["--session", session, ...launch, "--json", ...args],
-      { encoding: "utf8", timeout: 60_000 }
+      { encoding: "utf8", timeout: 60_000, input }
     )
   );
   assert.equal(result.success, true, JSON.stringify(result));
@@ -46,10 +53,19 @@ try {
     browser("open", `${origin}/dashboard/${route}`);
     browser("wait", "nav[aria-label='Main navigation']");
     browser("wait", "--load", "networkidle");
+    const name = route.replace("/", "") || "overview";
+    if (name === "overview" || name === "profiles") {
+      const states = ["ready", "empty", "no-samples"];
+      browser(
+        "wait",
+        states
+          .map((state) => `[data-page='${name}'][data-state='${state}']`)
+          .join(",")
+      );
+    }
     const text = browser("get", "text", "body").text;
     assert.match(text, /\bLocal\b/);
     assert.doesNotMatch(text, /Sign in to Sigiro|Cannot connect to Sigiro/);
-    const name = route.replace("/", "") || "overview";
     await writeFile(
       path.join(evidence, `${name}.snapshot.txt`),
       browser("snapshot").snapshot
@@ -66,6 +82,7 @@ try {
     "SELECT 'sigiro-browser-verified' AS browser_verified"
   );
   browser("find", "role", "button", "click", "--name", "Run", "--exact");
+  browser("wait", "[data-page='sql'][data-state='ready']");
   browser("wait", "--text", "sigiro-browser-verified");
   assert.match(browser("get", "text", "body").text, /browser_verified/);
   browser("screenshot", path.join(evidence, "sql-executed.png"));
@@ -108,7 +125,8 @@ try {
     []
   );
   assert.deepEqual(browser("errors").errors, []);
-  const audit = browser("a11y");
+  browser("eval", axe.source);
+  const audit = browser("eval", "window.axe.run()").result;
   await writeFile(
     path.join(evidence, "accessibility.json"),
     JSON.stringify(audit, null, 2)

@@ -70,7 +70,6 @@ jobs:
           SIGIRO_GRPC_PORT: "19997"
           SIGIRO_FLUSH_INTERVAL_SECS: "1"
           SIGIRO_SELF_PROFILING: "true"
-          MALLOC_CONF: prof:true,prof_active:true,lg_prof_sample:19
           SIGIRO_E2E_HTTP_PORT: "19995"
           SIGIRO_E2E_OTLP_PORT: "19996"
           TRACE_FIXTURE: ${{ runner.temp }}/dashboard-evidence/trace-workload.json
@@ -79,7 +78,8 @@ jobs:
           npm install --global agent-browser@0.27.3
           mbx build --locked --bin sigiro
           mkdir -p "$SIGIRO_UI_EVIDENCE"
-          target/debug/sigiro serve > "$SIGIRO_UI_EVIDENCE/server.log" 2>&1 &
+          MALLOC_CONF=prof:true,prof_active:true,lg_prof_sample:19 \
+            target/debug/sigiro serve > "$SIGIRO_UI_EVIDENCE/server.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           curl --fail --retry 30 --retry-connrefused --retry-delay 1 "$UI_ORIGIN/health"
