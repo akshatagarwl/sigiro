@@ -939,7 +939,7 @@ fn list_postgres(
 /// Deliver persisted notifications. A crash after HTTP success and before
 /// `mark_sent` can repeat a request, so receivers must deduplicate by fingerprint.
 pub async fn run_delivery(store: AlertStore, config: DeliveryConfig) {
-    let client = match reqwest::Client::builder()
+    let client = match crate::tls::http_client()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(10))
         .build()

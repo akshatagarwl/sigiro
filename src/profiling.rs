@@ -168,7 +168,7 @@ struct Exporter {
 }
 
 fn run(mut cpu: CpuSampler, heap: bool, exporter: &Exporter, stopped: &mpsc::Receiver<()>) {
-    let client = match reqwest::blocking::Client::builder()
+    let client = match crate::tls::blocking_http_client()
         .timeout(Duration::from_secs(10))
         .build()
     {

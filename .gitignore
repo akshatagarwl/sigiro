@@ -58,3 +58,11 @@ www/.source/
 .wrangler/
 # Local agent worktrees and per-user editor state.
 .worktrees/
+
+# Track the shared shell declaration; ignore its machine-local cache.
+!/.envrc
+/.direnv/
+
+# Nix build output links (`nix build`).
+/result
+/result-*

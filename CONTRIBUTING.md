@@ -11,11 +11,10 @@ For a larger change, open an issue first so we can agree on the approach.
 
 ## Set up
 
-Follow [Build from source](README.md#build-from-source). Toolchains are pinned in
-`mise.toml`; no cloud accounts or secrets are needed to build or test.
-
-DuckDB is linked statically from a pinned, checksum-verified prebuilt archive
-(`scripts/prepare-duckdb-static.sh`), so DuckDB is never compiled here.
+Follow [Build from source](README.md#build-from-source): the binary is built
+with Nix, and `nix develop` is the Rust development shell. mise (`mise.toml`)
+pins the JavaScript tooling (aube, hk) and runs the website, auth and dev-stack
+tasks. No cloud accounts or secrets are needed to build or test.
 
 Install JavaScript dependencies from the repository root with
 `aube install --frozen-lockfile`, and in each package directory (`auth/`,
@@ -23,6 +22,63 @@ Install JavaScript dependencies from the repository root with
 `aube -C dashboard install --frozen-lockfile`. `cloud/` imports a generated
 WASM module, so run `aube -C cloud run build:wasm` once before
 `aube -C cloud run check`.
+
+### Fast local Rust development
+
+Use `nix develop` and `cargo build --locked` for the edit/build loop, not
+`nix build`: Cargo keeps incremental workspace artifacts in `target/`.
+The dev and test profiles explicitly enable incremental compilation; release
+optimization settings are unchanged. With direnv and nix-direnv installed,
+run `direnv allow` once to activate the pinned shell automatically.
+
+Linux additionally provides `nix develop .#mold` and `nix develop .#wild`
+for linker comparisons. They keep separate caches in `target/dev-mold` and
+`target/dev-wild`; the first build of each is cold. Neither linker is selected
+by default. Apple Silicon macOS uses its normal linker and the default shell; mold and Wild
+shells are intentionally absent there. These are development-only choices:
+release and CI builds continue to use the existing toolchain.
+
+### How the build works
+
+`flake.nix` and `nix/` build the binary offline and bit-for-bit reproducibly
+(`nix build --rebuild` checks it). Nothing is pinned twice: Rust comes from
+`rust-toolchain.toml`, aube from `mise.lock`, the version from `Cargo.toml`.
+
+* DuckDB comes from the [duckdb-static](https://github.com/akshatagarwl/duckdb-static)
+  flake input: one static archive with every extension sigiro uses compiled
+  in (core_functions, parquet, json, icu, ducklake, httpfs, postgres_scanner,
+  quack) and their C dependencies. It updates itself and has its own binary
+  cache; sigiro follows its nixpkgs so the archive is a cache hit. sigiro
+  registers the extensions at startup (`src/pool.rs`) and never downloads or
+  loads an extension at run time. To pick up a new DuckDB, run
+  `nix flake update duckdb-static` and update the version pins in
+  `src/storage.rs` and `src/quack.rs` if they changed.
+* `rust.nix`: crane builds for nixpkgs' static platform: musl on Linux, so the
+  binary is fully static; static libraries on macOS, linking only the system's
+  libSystem and libc++. Dependencies are compiled once and shared. The
+  `portable` check fails if the binary links anything outside the OS, and the
+  build fails if any store path is left in it.
+* `dashboard.nix`, `docs.nix`: the two static exports the binary embeds.
+  Their npm dependencies come from the aube lockfiles, installed with pnpm
+  (aube writes pnpm's lockfile format). `aube-to-pnpm-lock.mjs` translates the
+  few spots where aube's output differs and reports what it changed.
+* The docs' API reference is rendered from `sigiro openapi`, the spec of the
+  binary being built, rather than from the live sigiro.com spec.
+* `image.nix`: the container image, which holds just the static binary.
+
+After changing `dashboard/aube-lock.yaml` or `www/aube-lock.yaml`, update the
+matching `hash` in `nix/dashboard.nix` or `nix/docs.nix`: set it to `""`,
+run `nix build .#dashboard` (or `.#docs`), and copy the `got:` hash from the
+error.
+
+Without the duckdb-static cache, the first build compiles DuckDB (most of an
+hour). Nix uses the cache the flake declares only for trusted users; otherwise
+add it to `/etc/nix/nix.conf` (or `nix.settings` on NixOS):
+
+```
+extra-substituters = https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+extra-trusted-public-keys = duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+```
 
 ## Repository layout
 
@@ -40,9 +96,10 @@ WASM module, so run `aube -C cloud run build:wasm` once before
 1. Branch from `main`.
 2. Keep the change to one concern and include tests for behaviour changes.
 3. Run the checks for what you touched:
-   * Rust: `mise run full` (rustfmt, cargo check, clippy, deployment contract
-     tests; format with `mbx fmt`) and
-     `scripts/run-with-duckdb-static.sh cargo test --workspace --locked`
+   * Rust: `nix flake check` (rustfmt, clippy, tests, the binary and its
+     portability), plus `mise run native-contract-test` for the deployment
+     contract. In `nix develop`, `cargo fmt`, `cargo clippy` and `cargo test`
+     work directly.
    * TypeScript: `aube run fmt:check && aube run lint`, plus the package's own
      `check` script (for example `aube -C auth run check`)
 4. Use [Conventional Commits](https://www.conventionalcommits.org/) for commit
@@ -76,7 +133,7 @@ never a failure. For changes that need no changelog line, ignore it or run
 2. CI runs on that PR like any other. Review the bump and the changelog, then
    merge it.
 3. On the push to `main`, `tag-on-main.yml` sees a version with no tag, pushes
-   `v<version>` and, in the same run, calls `release.yml`: four archives and
+   `v<version>` and, in the same run, calls `release.yml`: three archives and
    `SHA256SUMS` on a GitHub Release. sigiro-infra then copies the release to
    sigiro.com/dl.
 

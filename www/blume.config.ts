@@ -115,6 +115,36 @@ const sigiro = ({ binary }: { binary: boolean }): AstroIntegration => ({
 const BINARY = process.env.SIGIRO_DOCS_TARGET === "binary";
 
 /**
+ * Geist from the `geist` package (a devDependency, pinned by the lockfile), not
+ * Blume's `"geist"` slug. The slug resolves through Astro's Google provider,
+ * which downloads the faces at build time: an offline build (Nix, a plane)
+ * silently fell back to system fonts, so the same commit could produce two
+ * different sites. These are the same variable faces, from a pinned version.
+ * Paths are relative to this directory.
+ */
+const geistFace = (dir: string, file: string, style: "normal" | "italic") => ({
+  src: `node_modules/geist/dist/fonts/${dir}/${file}`,
+  weight: "100..900",
+  style,
+});
+const GEIST_SANS = {
+  name: "Geist",
+  fallback: "sans" as const,
+  variants: [
+    geistFace("geist-sans", "Geist-Variable.woff2", "normal"),
+    geistFace("geist-sans", "Geist-Italic[wght].woff2", "italic"),
+  ],
+};
+const GEIST_MONO = {
+  name: "Geist Mono",
+  fallback: "mono" as const,
+  variants: [
+    geistFace("geist-mono", "GeistMono-Variable.woff2", "normal"),
+    geistFace("geist-mono", "GeistMono-Italic[wght].woff2", "italic"),
+  ],
+};
+
+/**
  * sigiro.com — the landing page at `/` and the docs at `/docs/*`.
  *
  * This replaced a fumadocs install inside a Next app at sigiro.com/docs, went to
@@ -334,7 +364,15 @@ export default defineConfig({
    * everything else — while we do in fact serve one. An inert duplicate in `dist/`
    * costs nothing; a missing advertisement costs a crawler its map.
    */
-  seo: { robots: false },
+  seo: {
+    robots: false,
+    /**
+     * Open Graph cards are off in the binary export: it deletes `og/` anyway
+     * (scripts/build-docs-export.sh), and rendering them fetches fonts from
+     * Google for the CJK locales, which an offline (Nix) build cannot do.
+     */
+    ...(BINARY ? { og: { enabled: false } } : {}),
+  },
 
   /**
    * Chinese, Japanese and Korean, and deliberately not the European locales.
@@ -475,7 +513,7 @@ export default defineConfig({
   theme: {
     accent: { light: "#171717", dark: "#E5E5E5" },
     background: { light: "#FFFFFF", dark: "#0A0A0A" },
-    fonts: { display: "geist", body: "geist", mono: "geist-mono" },
+    fonts: { display: GEIST_SANS, body: GEIST_SANS, mono: GEIST_MONO },
     mode: "system",
   },
 
@@ -511,7 +549,13 @@ export default defineConfig({
        * legacy per-operation URLs here.
        */
       route: "/reference",
-      spec: "https://sigiro.com/openapi.json",
+      /**
+       * `SIGIRO_OPENAPI_SPEC` names a local spec file. The docs export embedded
+       * in the binary sets it to `sigiro openapi`'s output (see
+       * `scripts/build-docs-export.sh`), so a binary's reference describes that
+       * binary and the export builds offline; sigiro.com keeps the live spec.
+       */
+      spec: process.env.SIGIRO_OPENAPI_SPEC || "https://sigiro.com/openapi.json",
       codeSamples: ["curl", "javascript", "python"],
 
       /**

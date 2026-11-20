@@ -2,7 +2,7 @@
 //! locale, with their search index, so a downloaded `sigiro` carries its manual
 //! and reads it offline.
 //!
-//! `mise run build` builds the export (`www/dist-binary`, see
+//! `nix build` builds the export (`www/dist-binary`, see
 //! `scripts/build-docs-export.sh`) before the binary, and the binary embeds it.
 //! `SIGIRO_DOCS_DIR` points at an export on disk instead; when it is set, the
 //! disk copy wins. A plain `cargo build` without the export embeds nothing and

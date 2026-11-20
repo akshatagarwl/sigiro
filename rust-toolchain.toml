@@ -1,0 +1,12 @@
+# The Rust toolchain: the one pin, read by rustup and by the Nix flake
+# (rust-overlay). Binaries are built for the musl targets (fully static); wasm32
+# is for crates/segments-wasm (cloud/).
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+targets = [
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "wasm32-unknown-unknown",
+]
+profile = "minimal"

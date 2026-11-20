@@ -48,22 +48,25 @@ clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 dirs = "7"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "blocking", "cookies", "query"] }
+# Mozilla's roots, compiled in: HTTPS works on machines without a trust store
+# (src/tls.rs).
+webpki-root-certs = "1"
 dashmap = "6"
 rusqlite = { version = "0.41", features = ["bundled", "fallible_uint"] }
 postgres = "0.19"
-postgres-native-tls = "0.5"
-# Vendored so Linux release binaries cross-compile from macOS without a
-# target OpenSSL install; macOS and Windows use their platform TLS instead.
-native-tls = { version = "0.2", features = ["vendored"] }
+# TLS to the hosted catalog uses the same rustls + aws-lc stack as everything
+# else. No OpenSSL on the Rust side: the DuckDB bundle carries its own, and two
+# OpenSSLs in one static binary collide.
+tokio-postgres-rustls = { version = "0.14", default-features = false, features = ["aws-lc-rs"] }
 
 # OTLP ingest
 tonic = { version = "0.14", features = ["tls-aws-lc"] }
 tonic-types = "0.14"
 prost = "0.14"
 arrow = "60"
-# Linked against the upstream static bundle from scripts/prepare-duckdb-static.sh.
-# Keep it feature-free beyond these two: `bundled`, `parquet` and `json` would
-# compile DuckDB locally.
+# Linked against nix/duckdb.nix: DuckDB built from source with every extension
+# sigiro uses compiled in. Keep it feature-free beyond these two: `bundled`,
+# `parquet` and `json` would compile a second DuckDB locally.
 duckdb = { version = "=1.20000.1", default-features = false, features = ["appender-arrow", "vscalar"] }
 opentelemetry-proto = { version = "0.33", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles", "with-serde"] }
 axum = "0.8"
@@ -127,7 +130,10 @@ workspace = true
 # Android (bionic) can't build jemalloc and doesn't need self-profiling;
 # it uses the system allocator and reports self-profiling as disabled.
 [target.'cfg(not(target_os = "android"))'.dependencies]
-pprof = { version = "0.15", default-features = false, features = ["cpp"] }
+# framehop: unwinds from the interrupted registers through .eh_frame. The
+# default unwinder starts inside the SIGPROF handler and, on musl, stops at the
+# signal trampoline (it has no unwind info), so every sample came back empty.
+pprof = { version = "0.15", default-features = false, features = ["cpp", "framehop-unwinder"] }
 jemalloc_pprof = "0.9"
 pprof_util = "0.8.2"
 backtrace = "0.3"

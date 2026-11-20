@@ -1,0 +1,83 @@
+name: Nix platform verification
+
+on:
+  push:
+    branches: [verify/nix-platform-builds]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-platform-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: ${{ matrix.system }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086
+        with:
+          extra_nix_config: |
+            extra-substituters = https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+            extra-trusted-public-keys = duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+            max-jobs = 2
+            cores = 3
+      - name: Verify native platform
+        env:
+          EXPECTED_SYSTEM: ${{ matrix.system }}
+        run: |
+          set -euo pipefail
+          uname -sm
+          test "$(nix eval --impure --raw --expr builtins.currentSystem)" = "$EXPECTED_SYSTEM"
+          df -h
+      - name: Full application build
+        run: nix build .#sigiro -L
+      - name: Native tests, lint, formatting and portability
+        run: nix flake check --keep-going -L
+      - name: Executable smoke test
+        run: |
+          set -euo pipefail
+          ./result/bin/sigiro --version
+          ./result/bin/sigiro --help
+          ./result/bin/sigiro openapi > "$RUNNER_TEMP/openapi.json"
+          python3 -c 'import json, os; spec=json.load(open(os.environ["RUNNER_TEMP"] + "/openapi.json")); assert spec["paths"]; assert spec["openapi"]'
+          python3 -m unittest tests.deployment.test_sync_postgres_boundary
+      - name: Development linker smoke tests
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/linker-smoke.sh" <<'SCRIPT'
+          set -euo pipefail
+          printf 'fn main() { println!("linker smoke passed"); }\n' > "$RUNNER_TEMP/main.rs"
+          linker_var="CARGO_TARGET_$(printf '%s' "$CARGO_BUILD_TARGET" | tr '[:lower:]-' '[:upper:]_')_LINKER"
+          "${!linker_var}" -Wl,--version
+          rustc --edition 2024 --target "$CARGO_BUILD_TARGET" -C relocation-model=static -C "linker=${!linker_var}" "$RUNNER_TEMP/main.rs" -o "$RUNNER_TEMP/linker-smoke"
+          "$RUNNER_TEMP/linker-smoke"
+          SCRIPT
+          for linker in default mold wild; do
+            nix develop ".#$linker" --command bash "$RUNNER_TEMP/linker-smoke.sh"
+          done
+      - name: Package verified executable
+        env:
+          SYSTEM: ${{ matrix.system }}
+        run: COPYFILE_DISABLE=1 tar -czf "sigiro-$SYSTEM.tar.gz" -C result/bin sigiro
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sigiro-${{ matrix.system }}
+          path: sigiro-${{ matrix.system }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7

@@ -84,11 +84,6 @@ pub(crate) fn alert_webhook_token() -> Result<Option<crate::alerts::AlertWebhook
         .map(Some)
         .map_err(|error| anyhow::anyhow!("invalid SIGIRO_ALERT_WEBHOOK_TOKEN: {error}"))
 }
-/// Optional DuckDB extension-cache override. Normal deployments use
-/// `<SIGIRO_DATA_DIR>/extensions`.
-pub(crate) static EXTENSION_DIR: Envar<String> =
-    Envar::on_startup("SIGIRO_EXTENSION_DIR", || EnvarDef::Default(String::new()));
-
 /// DuckDB worker threads per shared project database. Default: host parallelism.
 static DUCKDB_THREADS: Envar<usize> = Envar::on_startup("SIGIRO_DUCKDB_THREADS", || {
     EnvarDef::Default(
@@ -353,18 +348,8 @@ pub(crate) static HOSTED_DATA_DIR: Envar<String> =
         EnvarDef::Default("/var/lib/sigiro/telemetry".to_string())
     });
 
-/// Shared writable DuckDB extension/cache directory for hosted mode.
-pub(crate) static DUCKDB_CACHE_DIR: Envar<String> =
-    Envar::on_startup("SIGIRO_DUCKDB_CACHE_DIR", || {
-        EnvarDef::Default("/var/cache/sigiro/duckdb".to_string())
-    });
-
 pub fn hosted_data_dir() -> Result<camino::Utf8PathBuf> {
     Ok(camino::Utf8PathBuf::from(HOSTED_DATA_DIR.value()?))
-}
-
-pub(crate) fn duckdb_cache_dir() -> Result<camino::Utf8PathBuf> {
-    Ok(camino::Utf8PathBuf::from(DUCKDB_CACHE_DIR.value()?))
 }
 
 /// Server URL for CLI client and admin commands. An empty value selects the

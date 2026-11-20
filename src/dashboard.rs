@@ -1,6 +1,6 @@
 //! The dashboard's static export, served at `/dashboard/` by an open-mode server.
 //!
-//! `mise run build` builds the export (`dashboard/dist/dashboard`) before the
+//! `nix build` builds the export (`dashboard/dist/dashboard`) before the
 //! binary, and the binary embeds it, so a downloaded `sigiro` serves its UI with
 //! no extra files. `SIGIRO_DASHBOARD_DIR` points at a build on disk instead (for
 //! dashboard development); when it is set, the disk copy wins. A plain

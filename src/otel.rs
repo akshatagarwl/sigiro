@@ -114,8 +114,17 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>>
     let logs_url = format!("{}/v1/logs", config.endpoint.trim_end_matches('/'));
     let metrics_url = format!("{}/v1/metrics", config.endpoint.trim_end_matches('/'));
 
+    // The exporters' default client trusts only the system store and panics
+    // without one; give them sigiro's (crate::tls). Built on its own thread:
+    // a blocking client must not be created or dropped on the async runtime.
+    let http_client = std::thread::spawn(|| crate::tls::blocking_http_client().build())
+        .join()
+        .map_err(|_| anyhow::anyhow!("building the OTLP HTTP client panicked"))?
+        .context("failed to build the OTLP HTTP client")?;
+
     let span_exporter = SpanExporter::builder()
         .with_http()
+        .with_http_client(http_client.clone())
         .with_endpoint(&traces_url)
         .with_headers(headers.clone())
         .build()
@@ -140,6 +149,7 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>>
 
     let log_exporter = LogExporter::builder()
         .with_http()
+        .with_http_client(http_client.clone())
         .with_endpoint(&logs_url)
         .with_headers(headers.clone())
         .build()
@@ -152,6 +162,7 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<Option<TelemetryGuard>>
 
     let metric_exporter = MetricExporter::builder()
         .with_http()
+        .with_http_client(http_client)
         .with_endpoint(&metrics_url)
         .with_headers(headers)
         .build()

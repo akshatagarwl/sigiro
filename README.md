@@ -151,17 +151,25 @@ Docs: <https://sigiro.com/docs>.
 
 ## Build from source
 
-Toolchains are pinned in `mise.toml`. With [mise](https://mise.jdx.dev):
+sigiro builds with [Nix](https://nixos.org) (flakes enabled), on x86_64 and
+aarch64 Linux and on Apple silicon. Everything is pinned; the build is offline
+and reproducible.
 
 ```bash
 git clone https://github.com/akshatagarwl/sigiro.git
 cd sigiro
-mise trust && mise install
-mise run build                     # release binary with the dashboard built in
-SIGIRO_BIND=127.0.0.1 ./target/release/sigiro serve
+nix build                          # ./result/bin/sigiro, dashboard and docs built in
+SIGIRO_BIND=127.0.0.1 ./result/bin/sigiro serve
 ```
 
-`mise run build-dev` is a faster debug build. It embeds the dashboard only if `mise run dashboard-build` ran first.
+The result is one self-contained file. On Linux it is fully static: it needs no
+libc, no shared libraries, no CA bundle and no network to start, and every
+DuckDB extension it uses is compiled in. Copy it to any Linux machine and run it.
+
+For working on the code, `nix develop` opens a shell with the pinned Rust
+toolchain, Node, aube and DuckDB; `cargo build` and `cargo test` then work as
+usual (binaries land in `target/<target triple>/`). `nix flake check` runs
+everything CI runs on the Rust side.
 
 For dashboard development, run a current `sigiro serve` locally, then run the
 Next.js dev server in `dashboard/`. Development requests under `/v1/` proxy to

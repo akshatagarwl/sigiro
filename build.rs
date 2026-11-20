@@ -21,13 +21,27 @@ fn main() {
     dashboard();
     docs();
 
+    // DuckDB is C++. Linux builds are fully static (musl), so its runtime is
+    // linked in; macOS links the system's libc++, which every macOS ships.
+    // A link *argument*, not a link-lib: rustc places this crate's libraries
+    // before its dependencies', so `-lstdc++` would precede libduckdb-sys's
+    // archive and resolve nothing. Arguments go at the end of the line.
     match env::var("CARGO_CFG_TARGET_OS").as_deref() {
         Ok("linux") => {
-            println!("cargo:rustc-link-lib=dylib=dl");
-            println!("cargo:rustc-link-lib=dylib=pthread");
-            println!("cargo:rustc-link-lib=dylib=stdc++");
+            println!("cargo:rustc-link-arg=-lstdc++");
+            // rustc links with -nodefaultlibs and names libc earlier; the C++
+            // runtime (and OpenSSL in the DuckDB bundle) need it after.
+            println!("cargo:rustc-link-arg=-lc");
         }
-        Ok("macos") => println!("cargo:rustc-link-arg=-lc++"),
+        Ok("macos") => {
+            println!("cargo:rustc-link-arg=-lc++");
+            // The DuckDB bundle's curl and TLS code read the proxy settings
+            // and the keychain trust store; every macOS ships these.
+            for framework in ["CoreFoundation", "Security", "SystemConfiguration"] {
+                println!("cargo:rustc-link-arg=-framework");
+                println!("cargo:rustc-link-arg={framework}");
+            }
+        }
         _ => {}
     }
 }
@@ -51,7 +65,7 @@ fn dashboard() {
         panic!(
             "SIGIRO_REQUIRE_DASHBOARD=1 but dashboard/dist/dashboard/index.html is missing. \
              Build the dashboard first: `mise run dashboard-install dashboard-build` \
-             (or use `mise run build`, which does both)."
+             (or use `nix build`, which does both)."
         );
     }
 }
@@ -80,7 +94,7 @@ fn docs() {
             panic!(
                 "SIGIRO_REQUIRE_DOCS=1 but {} is missing. \
                  Build the docs first: `mise run docs-build` \
-                 (or use `mise run build`, which does both).",
+                 (or use `nix build`, which does both).",
                 file.display()
             );
         }

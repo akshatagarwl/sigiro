@@ -396,7 +396,7 @@ pub async fn signup(name: String, email: String) -> Result<AuthStatus> {
         reqwest::header::ORIGIN,
         reqwest::header::HeaderValue::from_static(HOSTED_AUTH_ORIGIN),
     );
-    let browser = reqwest::Client::builder()
+    let browser = crate::tls::http_client()
         .redirect(reqwest::redirect::Policy::none())
         .cookie_store(true)
         .default_headers(browser_headers)

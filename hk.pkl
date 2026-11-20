@@ -4,27 +4,17 @@ local rustInputs = List(
   "**/*.rs",
   "Cargo.toml",
   "Cargo.lock",
-  "rust-toolchain*",
+  "rust-toolchain.toml",
   ".cargo/**",
-  "clippy.toml",
-  "mise.toml",
-  "mise.lock",
-  "scripts/**"
+  "clippy.toml"
 )
 
-// hk inherits Delta's deep per-command TMPDIR. mbx creates a Unix socket below
-// it, which exceeds macOS's 104-byte sun_path limit before a check can start.
-// Keep the workaround at the hk/mbx boundary; application tests retain their
-// normal temporary-directory environment.
-local shortTemp = new Mapping<String, String> {
-  ["TMPDIR"] = "/tmp"
-}
-
+// rustfmt comes from the pinned toolchain: `nix develop`, or rustup reading
+// rust-toolchain.toml.
 local rustfmt = new Step {
   glob = rustInputs
-  env = shortTemp
-  check = "mbx fmt --check"
-  fix = "mbx fmt"
+  check = "cargo fmt --check"
+  fix = "cargo fmt"
 }
 
 hooks {

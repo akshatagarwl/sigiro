@@ -129,7 +129,7 @@ fn docs_http_client() -> anyhow::Result<reqwest::Client> {
             attempt.stop()
         }
     });
-    Ok(reqwest::Client::builder()
+    Ok(crate::tls::http_client()
         .connect_timeout(DOCS_CONNECT_TIMEOUT)
         .pool_max_idle_per_host(0)
         .redirect(redirects)
