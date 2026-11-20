@@ -17,6 +17,7 @@
   cacert,
   file,
   nukeReferences,
+  darwin,
   version,
 }:
 let
@@ -25,10 +26,7 @@ let
   target = pkgsStatic.stdenv.hostPlatform.rust.rustcTarget;
   targetUpper = lib.toUpper (builtins.replaceStrings [ "-" ] [ "_" ] target);
   targetLower = builtins.replaceStrings [ "-" ] [ "_" ] target;
-  # Darwin build scripts share the application's Rust target triple. Its
-  # static compiler wrapper cannot link their SDK libraries (such as iconv).
-  # Native clang still links DuckDB's explicit static archive and OS libraries.
-  cc = if stdenv.hostPlatform.isDarwin then stdenv.cc else pkgsStatic.stdenv.cc;
+  cc = pkgsStatic.stdenv.cc;
 
   # Point cargo, cc-rs and the linker at the static toolchain for the target.
   # Build scripts still run on the build machine with its own compiler.
@@ -71,6 +69,11 @@ let
     inherit src version;
     pname = "sigiro";
     strictDeps = true;
+    # Darwin's Rust build scripts use the same target triple as the application.
+    # Both need the static iconv archive, which lives in its dev output.
+    buildInputs = lib.optionals stdenv.hostPlatform.isDarwin [
+      (lib.getDev pkgsStatic.libiconv)
+    ];
     env = targetEnv;
   };
 
@@ -78,13 +81,29 @@ let
   binArgs = commonArgs // {
     cargoExtraArgs = "--locked --package sigiro --bin sigiro";
     doCheck = false;
-    nativeBuildInputs = [ nukeReferences ];
-    # The binary runs outside Nix, so any store path left in it is dead: debug
-    # info naming the static libraries' sources, mostly. Scrub them all, and
-    # let `allowedReferences = [ ]` (on the bundle) catch a real dependency.
-    postFixup = ''
-      nuke-refs "$out/bin/sigiro"
-    '';
+    nativeBuildInputs = [
+      nukeReferences
+    ]
+    ++ lib.optionals stdenv.hostPlatform.isDarwin [
+      darwin.sigtool
+    ];
+    # Scrubbing cannot make a dynamic dependency portable: it corrupts the
+    # loader path. Reject those paths before touching Mach-O debug references.
+    postFixup =
+      lib.optionalString stdenv.hostPlatform.isDarwin ''
+        otool -L "$out/bin/sigiro" > runtime-libraries.txt
+        if tail -n +2 runtime-libraries.txt | grep -q '/nix/store/'; then
+          cat runtime-libraries.txt >&2
+          echo "sigiro still links a Nix runtime library" >&2
+          exit 1
+        fi
+      ''
+      + ''
+        nuke-refs "$out/bin/sigiro"
+      ''
+      + lib.optionalString stdenv.hostPlatform.isDarwin ''
+        codesign --force --sign - "$out/bin/sigiro"
+      '';
     # Cargo.toml keeps line tables (`debug = "line-tables-only"`,
     # `strip = false`) for in-process symbolization of self-profiles. Nix's
     # default `strip -S` would remove them.

@@ -1,0 +1,75 @@
+name: Nix native diagnostics
+
+on:
+  push:
+    branches: [fix/nix-native-platforms]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.system }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086
+        with:
+          extra_nix_config: |
+            extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+            extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+            max-jobs = 2
+            cores = 3
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866
+        with:
+          name: akshat-sigiro-builds
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          installCommand: nix profile add .#cache-client
+      - name: Darwin static linkage and signed executable
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          nix build .#unbundled -L
+          otool -L ./result/bin/sigiro
+          codesign --verify --verbose ./result/bin/sigiro
+          ./result/bin/sigiro --version
+          ./result/bin/sigiro openapi > "$RUNNER_TEMP/openapi.json"
+          python3 -c 'import json, os; spec=json.load(open(os.environ["RUNNER_TEMP"] + "/openapi.json")); assert spec["paths"]; assert spec["openapi"]'
+      - name: ARM64 linker diagnostics
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/linker-diagnostics.sh" <<'SCRIPT'
+          set -euo pipefail
+          printf 'fn main() { println!("linker smoke passed"); }\n' > "$RUNNER_TEMP/main.rs"
+          linker_var="CARGO_TARGET_$(printf '%s' "$CARGO_BUILD_TARGET" | tr '[:lower:]-' '[:upper:]_')_LINKER"
+          binary="$RUNNER_TEMP/linker-$LINKER_NAME-smoke"
+          "${!linker_var}" -Wl,--version
+          rustc --edition 2024 --target "$CARGO_BUILD_TARGET" -C relocation-model=static -C link-arg=-v -C "linker=${!linker_var}" "$RUNNER_TEMP/main.rs" -o "$binary"
+          file "$binary"
+          readelf -h -l -d "$binary"
+          if "$binary"; then
+            exit 0
+          fi
+          if command -v gdb >/dev/null 2>&1; then
+            gdb --batch --nx -ex run -ex 'info registers' -ex bt -ex 'x/12i $pc-16' --args "$binary"
+          fi
+          exit 1
+          SCRIPT
+          failed=0
+          for linker in default mold wild; do
+            export LINKER_NAME="$linker"
+            if ! nix develop ".#$linker" --command bash "$RUNNER_TEMP/linker-diagnostics.sh"; then
+              failed=1
+            fi
+          done
+          exit "$failed"
