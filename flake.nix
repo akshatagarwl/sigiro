@@ -1,14 +1,16 @@
 {
   description = "sigiro: a single-binary OpenTelemetry backend";
 
-  # DuckDB comes prebuilt from duckdb-static's binary cache. Nix honours this
-  # for trusted users; otherwise add the same two settings to nix.conf
+  # Sigiro outputs and prebuilt DuckDB come from signed binary caches. Nix
+  # honours this for trusted users; otherwise add the settings to nix.conf
   # (CONTRIBUTING.md).
   nixConfig = {
     extra-substituters = [
+      "https://akshat-sigiro-builds.cachix.org"
       "https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache"
     ];
     extra-trusted-public-keys = [
+      "akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8="
       "duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ="
     ];
   };
@@ -150,6 +152,10 @@
               duckdb
               ;
             inherit (rust) openapi unbundled;
+            cache-client = pkgs.cachix;
+            rust-deps = rust.binArtifacts;
+            rust-workspace-deps = rust.workspaceArtifacts;
+            rust-wasm-deps = rust.wasmArtifacts;
           }
           // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
             image = pkgs.callPackage ./nix/image.nix { inherit sigiro version; };

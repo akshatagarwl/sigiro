@@ -76,9 +76,38 @@ hour). Nix uses the cache the flake declares only for trusted users; otherwise
 add it to `/etc/nix/nix.conf` (or `nix.settings` on NixOS):
 
 ```
-extra-substituters = https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
-extra-trusted-public-keys = duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
 ```
+
+### Shared build cache
+
+CI and developer machines share the public `akshat-sigiro-builds` Cachix cache.
+Downloads require no credentials. On NixOS, declare the cache URL and public
+key above through `nix.settings.extra-substituters` and
+`nix.settings.extra-trusted-public-keys` instead of editing the generated
+`nix.conf`.
+
+To upload existing project outputs after `nix build` or `nix flake check`:
+
+```sh
+bash nix/push-cache.sh
+```
+
+The script uses the pinned `.#cache-client` package and uploads only explicitly
+selected Sigiro outputs and their required closures, not the whole Nix store.
+It reads `CACHIX_AUTH_TOKEN` in CI, or a local cache-scoped write token from
+`${XDG_CONFIG_HOME:-$HOME/.config}/cachix/akshat-sigiro-builds.token` (mode `0600`).
+Keep credentials outside the repository and Nix store; never put them in Nix
+settings. Use separate tokens for CI and each developer machine. Forked CI
+runs without a write token remain read-only.
+
+The exposed `rust-deps`, `rust-workspace-deps`, and `rust-wasm-deps` packages
+make Crane artifacts reusable alongside application, dashboard, docs, and check
+outputs. These are Nix outputs, not the incremental Cargo `target/` directory.
+Reusing an output requires the same derivation, including platform and locked
+inputs; Linux builds do not replace native macOS or ARM64 builds. Monitor cache
+storage: three platforms and multiple revisions may exceed the free 5 GB tier.
 
 ## Repository layout
 

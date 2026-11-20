@@ -101,8 +101,8 @@ jobs:
         with:
           # DuckDB comes prebuilt from duckdb-static's cache (flake.nix).
           extra_nix_config: |
-            extra-substituters = https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
-            extra-trusted-public-keys = duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+            extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+            extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
 
       # `sigiro --version` names the commit (flake.nix passes it in).
       - name: Build
@@ -139,6 +139,12 @@ jobs:
           name: ${{ steps.package.outputs.name }}
           path: ${{ steps.package.outputs.name }}
           if-no-files-found: error
+
+      - name: Share Nix build artifacts
+        if: always()
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: bash nix/push-cache.sh
 
   # Tags only: a manual run stops after the build. GitHub Releases are the
   # source of truth for a version; sigiro-infra's nightly driver promotes each

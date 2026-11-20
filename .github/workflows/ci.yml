@@ -15,9 +15,9 @@ jobs:
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
           # DuckDB comes prebuilt from duckdb-static's cache (flake.nix).
-          extra_nix_config: |
-            extra-substituters = https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
-            extra-trusted-public-keys = duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+          extra_nix_config: &shared-nix-cache |
+            extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+            extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.20.0
@@ -69,6 +69,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Share Nix build artifacts
+        if: always()
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: bash nix/push-cache.sh
+
   auth:
     runs-on: ubuntu-latest
     defaults:
@@ -98,11 +104,14 @@ jobs:
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
           # DuckDB comes prebuilt from duckdb-static's cache (flake.nix).
-          extra_nix_config: |
-            extra-substituters = https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
-            extra-trusted-public-keys = duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+          extra_nix_config: *shared-nix-cache
       - name: Verify the container image
         run: |
           set -euo pipefail
           nix build .#image
           docker load < result
+      - name: Share Nix build artifacts
+        if: always()
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: bash nix/push-cache.sh

@@ -109,6 +109,8 @@ let
     doCheck = false;
   };
 
+  wasmArtifacts = craneLib.buildDepsOnly wasmArgs;
+
   # sigiro without the dashboard or docs. Used to print the OpenAPI spec the
   # docs render, which breaks the cycle "binary embeds docs, docs describe the
   # binary's API".
@@ -173,6 +175,7 @@ in
     bundle
     binArtifacts
     workspaceArtifacts
+    wasmArtifacts
     target
     targetEnv
     ;
@@ -234,7 +237,7 @@ in
     clippy-wasm = craneLib.cargoClippy (
       wasmArgs
       // {
-        cargoArtifacts = craneLib.buildDepsOnly wasmArgs;
+        cargoArtifacts = wasmArtifacts;
         cargoClippyExtraArgs = "--all-targets -- -D warnings";
       }
     );
