@@ -555,7 +555,8 @@ export default defineConfig({
        * `scripts/build-docs-export.sh`), so a binary's reference describes that
        * binary and the export builds offline; sigiro.com keeps the live spec.
        */
-      spec: process.env.SIGIRO_OPENAPI_SPEC || "https://sigiro.com/openapi.json",
+      spec:
+        process.env.SIGIRO_OPENAPI_SPEC || "https://sigiro.com/openapi.json",
       codeSamples: ["curl", "javascript", "python"],
 
       /**
