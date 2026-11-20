@@ -10,10 +10,6 @@
 # host are then removed, so the directory holds exactly what the binary embeds.
 set -euo pipefail
 
-# The package manager that installed www/node_modules. aube everywhere except
-# the Nix build (nix/docs.nix), which installs aube's pnpm-format lockfile
-# with pnpm and sets SIGIRO_JS_PM=pnpm. `exec` and `run` mean the same in both.
-pm="${SIGIRO_JS_PM:-aube}"
 # SIGIRO_OPENAPI_SPEC, when set, is a local OpenAPI file for the API
 # reference (www/blume.config.ts); unset, the reference reads sigiro.com's.
 if [ -n "${SIGIRO_OPENAPI_SPEC:-}" ]; then
@@ -43,9 +39,9 @@ rm -rf dist dist-binary dist-mcp
 # The MCP snapshot comes from the sigiro.com config, not the binary one, so its
 # routes and URLs are the hosted docs MCP's.
 mkdir dist-mcp
-env -u SIGIRO_DOCS_TARGET "$pm" exec tsx scripts/export-mcp-data.ts dist-mcp/mcp-data.json
+env -u SIGIRO_DOCS_TARGET pnpm exec tsx scripts/export-mcp-data.ts dist-mcp/mcp-data.json
 gzip -9n dist-mcp/mcp-data.json
-SIGIRO_DOCS_TARGET=binary "$pm" run build
+SIGIRO_DOCS_TARGET=binary pnpm run build
 mv dist dist-binary
 
 cd dist-binary

@@ -17,12 +17,12 @@
     "check:device": "tsx scripts/check-device-flow.ts",
     "check:mcp": "tsx scripts/check-mcp-contract.ts",
     "check:mcp:hosted": "tsx scripts/check-mcp-hosted.ts",
-    "check:webmcp:browser": "aube run build && node scripts/check-webmcp-oauth.mjs",
+    "check:webmcp:browser": "pnpm run build && node scripts/check-webmcp-oauth.mjs",
     "check:dashboard": "node scripts/check-dashboard.mjs",
-    "check:web": "aube run check:mcp && aube run check:mcp:hosted && aube run check:webmcp:browser",
-    "deploy": "aube run alchemy:deploy",
-    "deploy:dashboard": "aube -C ../dashboard run build && wrangler deploy --config ../dashboard/wrangler.jsonc --keep-vars",
-    "check": "aube -C .. run fmt:check && aube -C .. run lint",
+    "check:web": "pnpm run check:mcp && pnpm run check:mcp:hosted && pnpm run check:webmcp:browser",
+    "deploy": "pnpm run alchemy:deploy",
+    "deploy:dashboard": "pnpm -C ../dashboard run build && wrangler deploy --config ../dashboard/wrangler.jsonc --keep-vars",
+    "check": "pnpm -C .. run fmt:check && pnpm -C .. run lint",
     "doctor": "blume doctor",
     "og": "tsx scripts/generate-og.tsx",
     "indexnow": "tsx scripts/indexnow.ts"
@@ -65,19 +65,5 @@
     "tsx": "4.23.15",
     "typescript": "7.1.0-dev.20260803.1",
     "wrangler": "4.158.0"
-  },
-  "packageManager": "aube@2.8.4",
-  "aube": {
-    "patchedDependencies": {
-      "astro@7.4.7": "patches/astro@7.4.7.patch"
-    }
-  },
-  "ignoreScripts": [
-    "sharp",
-    "unrs-resolver"
-  ],
-  "trustedDependencies": [
-    "sharp",
-    "unrs-resolver"
-  ]
+  }
 }

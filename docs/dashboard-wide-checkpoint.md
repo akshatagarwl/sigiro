@@ -1,5 +1,8 @@
 # Dashboard verification checkpoints
 
+Historical command names are preserved below. For current Nix/pnpm setup and
+commands, see [Contributing](../CONTRIBUTING.md).
+
 The six-route results below describe a historical build, not the current route
 count or a promise that its preview is still running. `main` now has five routes
 after Services was removed. Later entry/first-run observations and pending fixes

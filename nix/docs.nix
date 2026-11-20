@@ -15,7 +15,7 @@
 let
   repo = ../.;
   www = ../www;
-  project = callPackage ./aube-project.nix { } {
+  project = callPackage ./pnpm-project.nix { } {
     pname = "sigiro-www";
     inherit version;
     root = www;
@@ -53,14 +53,10 @@ stdenvNoCC.mkDerivation {
   nativeBuildInputs = project.nativeBuildInputs ++ [ gzip ];
 
   postPatch = ''
-    pushd www
-    ${project.translate}
-    popd
     patchShebangs scripts
   '';
 
   env = {
-    SIGIRO_JS_PM = "pnpm";
     SIGIRO_OPENAPI_SPEC = "${openapi}/openapi.json";
     ASTRO_TELEMETRY_DISABLED = "1";
   };

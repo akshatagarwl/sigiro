@@ -52,7 +52,7 @@ curl -fsS https://sigiro.com/api/auth/capability/list | jq
 ## 2. 公式 SDK を追加する
 
 ```bash
-aube add @auth/agent@0.6.2
+pnpm add @auth/agent@0.6.2
 ```
 
 Sigiro のサービスオリジンでクライアントを作成します。本番環境では、シークレットストアを

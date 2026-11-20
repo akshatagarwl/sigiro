@@ -12,16 +12,26 @@ For a larger change, open an issue first so we can agree on the approach.
 ## Set up
 
 Follow [Build from source](README.md#build-from-source): the binary is built
-with Nix, and `nix develop` is the Rust development shell. mise (`mise.toml`)
-pins the JavaScript tooling (aube, hk) and runs the website, auth and dev-stack
-tasks. No cloud accounts or secrets are needed to build or test.
+with Nix. `nix develop` supplies Rust, Node and pnpm; `nix develop .#javascript`
+is the smaller shell for website, auth and release work. All tool versions come
+from the locked Nix inputs and `rust-toolchain.toml`. No cloud accounts or
+secrets are needed to build or test. There is no task runner or Git-hook installer.
 
 Install JavaScript dependencies from the repository root with
-`aube install --frozen-lockfile`, and in each package directory (`auth/`,
+`pnpm install --frozen-lockfile`, and in each package directory (`auth/`,
 `cloud/`, `dashboard/`, `www/`) with its own frozen lockfile, for example
-`aube -C dashboard install --frozen-lockfile`. `cloud/` imports a generated
-WASM module, so run `aube -C cloud run build:wasm` once before
-`aube -C cloud run check`.
+`pnpm -C dashboard install --frozen-lockfile`. Run installs explicitly; package
+scripts do not install dependencies. `cloud/` imports a generated WASM module,
+so run `pnpm -C cloud run build:wasm` once before `pnpm -C cloud run check`.
+
+For a complete binary with embedded dashboard and docs, use `nix run . -- serve`.
+For frontend editing, use `pnpm -C dashboard run dev` or `pnpm -C www run dev`.
+If local PostgreSQL and RustFS are needed, run `scripts/dev-certs.sh` followed
+by `pnpm -C www run alchemy:dev:deploy` (Docker required). Preview that stack
+with `pnpm -C www run alchemy:dev:plan`. Its explicit
+`pnpm -C www run alchemy:dev:destroy` command also deletes its local volumes;
+there is no automatic teardown. Production planning/deployment remain explicit
+`pnpm -C www run alchemy:plan` / `pnpm -C www run alchemy:deploy` commands.
 
 ### Fast local Rust development
 
@@ -42,7 +52,8 @@ release and CI builds continue to use the existing toolchain.
 
 `flake.nix` and `nix/` build the binary offline and bit-for-bit reproducibly
 (`nix build --rebuild` checks it). Nothing is pinned twice: Rust comes from
-`rust-toolchain.toml`, aube from `mise.lock`, the version from `Cargo.toml`.
+`rust-toolchain.toml`, Node and pnpm from the locked nixpkgs, and the version
+from `Cargo.toml`.
 
 * DuckDB comes from the [duckdb-static](https://github.com/akshatagarwl/duckdb-static)
   flake input: one static archive with every extension sigiro uses compiled
@@ -59,14 +70,14 @@ release and CI builds continue to use the existing toolchain.
   `portable` check fails if the binary links anything outside the OS, and the
   build fails if any store path is left in it.
 * `dashboard.nix`, `docs.nix`: the two static exports the binary embeds.
-  Their npm dependencies come from the aube lockfiles, installed with pnpm
-  (aube writes pnpm's lockfile format). `aube-to-pnpm-lock.mjs` translates the
-  few spots where aube's output differs and reports what it changed.
+  Their npm dependencies come directly from committed `pnpm-lock.yaml` files.
+  `pnpm-project.nix` fetches the locked dependencies for offline, frozen installs;
+  there is no lockfile translation or second package manager.
 * The docs' API reference is rendered from `sigiro openapi`, the spec of the
   binary being built, rather than from the live sigiro.com spec.
 * `image.nix`: the container image, which holds just the static binary.
 
-After changing `dashboard/aube-lock.yaml` or `www/aube-lock.yaml`, update the
+After changing `dashboard/pnpm-lock.yaml` or `www/pnpm-lock.yaml`, update the
 matching `hash` in `nix/dashboard.nix` or `nix/docs.nix`: set it to `""`,
 run `nix build .#dashboard` (or `.#docs`), and copy the `got:` hash from the
 error.
@@ -135,11 +146,11 @@ storage: three platforms and multiple revisions may exceed the free 5 GB tier.
 2. Keep the change to one concern and include tests for behaviour changes.
 3. Run the checks for what you touched:
    * Rust: `nix flake check` (rustfmt, clippy, tests, the binary and its
-     portability), plus `mise run native-contract-test` for the deployment
-     contract. In `nix develop`, `cargo fmt`, `cargo clippy` and `cargo test`
+     portability), plus `python3 -m unittest tests.deployment.test_sync_postgres_boundary`
+     for the deployment contract. In `nix develop`, `cargo fmt`, `cargo clippy` and `cargo test`
      work directly.
-   * TypeScript: `aube run fmt:check && aube run lint`, plus the package's own
-     `check` script (for example `aube -C auth run check`)
+   * TypeScript: `pnpm run fmt:check && pnpm run lint`, plus the package's own
+     `check` script (for example `pnpm -C auth run check`)
 4. Use [Conventional Commits](https://www.conventionalcommits.org/) for commit
    messages and the PR title, for example `fix(ingest): reject empty batches`.
 5. If the change is visible to people who run `sigiro`, add a changeset (below).
@@ -149,7 +160,7 @@ storage: three platforms and multiple revisions may exceed the free 5 GB tier.
 
 The changelog and the version of the `sigiro` binary come from
 [Changesets](https://github.com/changesets/changesets). Run
-`aube run changeset`, choose the bump (`patch` for fixes, `minor` for features,
+`pnpm run changeset`, choose the bump (`patch` for fixes, `minor` for features,
 `major` for breaking changes), and write one line for the changelog. Commit the
 generated `.changeset/*.md` file with your change.
 
@@ -158,16 +169,16 @@ package; its `version` is the binary's version. `auth/`, `cloud/`,
 `dashboard/` and `www/` are not versioned. A PR that touches `src/`, `crates/`,
 `dashboard/`, `build.rs` or `Cargo.toml` without a changeset gets a CI warning,
 never a failure. For changes that need no changelog line, ignore it or run
-`aube run changeset --empty`.
+`pnpm run changeset --empty`.
 
 ## Releases
 
 1. When `main` has pending changesets, a maintainer (or an agent) runs
-   `aube run release:pr`. From `origin/main` it runs `aube run release:version`,
+   `pnpm run release:pr`. From `origin/main` it runs `pnpm run release:version`,
    which bumps `package.json`, copies the version into `Cargo.toml` and
    `Cargo.lock`, adds the release to `CHANGELOG.md` and deletes the consumed
    changesets. It then commits on `release/v<version>`, pushes and opens the PR
-   with `gh`. `aube run release:pr -- --dry-run` shows the commit without pushing.
+   with `gh`. `pnpm run release:pr --dry-run` shows the commit without pushing.
 2. CI runs on that PR like any other. Review the bump and the changelog, then
    merge it.
 3. On the push to `main`, `tag-on-main.yml` sees a version with no tag, pushes

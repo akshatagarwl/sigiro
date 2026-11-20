@@ -56,7 +56,7 @@ Request only what the process needs. An OTLP exporter needs
 Add the SDK to the agent host:
 
 ```bash
-aube add @auth/agent@0.6.2
+pnpm add @auth/agent@0.6.2
 ```
 
 Create the client with the Sigiro service origin. In production, pass a

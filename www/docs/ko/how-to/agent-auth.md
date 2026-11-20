@@ -51,7 +51,7 @@ curl -fsS https://sigiro.com/api/auth/capability/list | jq
 ## 2. 공식 SDK 추가하기
 
 ```bash
-aube add @auth/agent@0.6.2
+pnpm add @auth/agent@0.6.2
 ```
 
 Sigiro 서비스 origin으로 클라이언트를 만드십시오. 프로덕션에서는 비밀 저장소가 지원하는

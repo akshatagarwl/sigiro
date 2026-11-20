@@ -61,6 +61,5 @@
     "playwright": "1.65.0",
     "tailwindcss": "4.3.5",
     "typescript": "7.0.2"
-  },
-  "packageManager": "aube@2.8.4"
+  }
 }

@@ -167,7 +167,7 @@ libc, no shared libraries, no CA bundle and no network to start, and every
 DuckDB extension it uses is compiled in. Copy it to any Linux machine and run it.
 
 For working on the code, `nix develop` opens a shell with the pinned Rust
-toolchain, Node, aube and DuckDB; `cargo build` and `cargo test` then work as
+toolchain, Node, pnpm and DuckDB; `cargo build` and `cargo test` then work as
 usual (binaries land in `target/<target triple>/`). `nix flake check` runs
 everything CI runs on the Rust side.
 

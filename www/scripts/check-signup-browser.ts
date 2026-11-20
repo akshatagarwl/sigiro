@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
  * AUTH_TEST_OTP, which is forbidden in production for good reason. So a pass
  * here means a human with a browser and an email address can actually onboard.
  *
- *   aube run check:signup
+ *   pnpm run check:signup
  *
  * Requires SIGIRO_SIGNUP_INBOX (the inbox address) and the `agentmail` CLI
  * authenticated for that inbox.

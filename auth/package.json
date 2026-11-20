@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "packageManager": "aube@2.8.4",
   "engines": {
     "node": ">=24.20.0"
   },
@@ -37,8 +36,5 @@
     "tsx": "4.23.15",
     "typescript": "7.0.2",
     "wrangler": "^4.154.0"
-  },
-  "patchedDependencies": {
-    "@auth/agent@0.6.2": "patches/@auth%2Fagent@0.6.2.patch"
   }
 }

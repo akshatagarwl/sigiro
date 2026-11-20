@@ -1,5 +1,8 @@
 # Base UI observability components: inventory, scope and verification
 
+Historical command names are preserved below. For current Nix/pnpm setup and
+commands, see [Contributing](../CONTRIBUTING.md).
+
 This is the **first vertical slice**, not a completed dashboard-wide Radix migration. Base UI means [base-ui.com](https://base-ui.com/), not Uber Base Web. Base: `516a2563d5e905746293ef9263d7de4100e92134`.
 
 The follow-up [results-first logs iteration](logs-results-first.md), based on `660b4e28b0367cab2c95de7aad834e98203b32a6`, replaces the initial desktop split inspector with inline expansion and removes default expanded navigation/facets. Its latest measurements and evidence are separate from the historical first-slice results below.

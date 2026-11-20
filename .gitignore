@@ -23,7 +23,6 @@ car
 out.something
 trace-waterfall.html
 AGENTS.md
-hk.local.pkl
 
 # Downloadable binaries produced by `docker buildx bake dist`.
 dist-bin/

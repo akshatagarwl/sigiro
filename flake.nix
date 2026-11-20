@@ -39,8 +39,7 @@
     let
       inherit (nixpkgs) lib;
 
-      # The release hosts (release.yml) that nixpkgs still supports: it dropped
-      # x86_64-darwin in 26.11, so that target stays a mise/CI build.
+      # Native release hosts supported by the pinned nixpkgs (release.yml).
       systems = [
         "x86_64-linux"
         "aarch64-linux"
@@ -90,7 +89,6 @@
           craneLib = (crane.mkLib pkgs).overrideToolchain (_: buildToolchain);
 
           duckdb = duckdb-static.packages.${system}.default;
-          aube = pkgs.callPackage ./nix/aube.nix { };
 
           rust = pkgs.callPackage ./nix/rust.nix { inherit craneLib duckdb version; };
           dashboard = pkgs.callPackage ./nix/dashboard.nix { inherit version; };
@@ -98,12 +96,13 @@
             inherit version;
             inherit (rust) openapi;
           };
-          devPackages = [
-            devToolchain
-            aube
+          javascriptPackages = [
             pkgs.nodejs_24
-            pkgs.cargo-nextest
+            pkgs.pnpm_10
+            pkgs.git
+            pkgs.gh
           ];
+          devPackages = javascriptPackages ++ [ devToolchain ];
           devEnv = rust.targetEnv // {
             CARGO_PROFILE_DEV_INCREMENTAL = "true";
             CARGO_PROFILE_TEST_INCREMENTAL = "true";
@@ -159,9 +158,6 @@
           }
           // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
             image = pkgs.callPackage ./nix/image.nix { inherit sigiro version; };
-          }
-          // lib.optionalAttrs (lib.elem system aube.meta.platforms) {
-            inherit aube;
           };
 
           checks = rust.checks // {
@@ -169,19 +165,20 @@
             portable = rust.portable sigiro;
           };
 
-          devShells = lib.optionalAttrs (lib.elem system aube.meta.platforms) (
-            {
-              default = pkgs.mkShell {
-                packages = devPackages;
-                # Keep the normal target/ cache for the daily edit/build loop.
-                env = devEnv;
-              };
-            }
-            // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-              mold = linkerShell "mold";
-              wild = linkerShell "wild";
-            }
-          );
+          devShells = {
+            javascript = pkgs.mkShell {
+              packages = javascriptPackages;
+            };
+            default = pkgs.mkShell {
+              packages = devPackages;
+              # Keep the normal target/ cache for the daily edit/build loop.
+              env = devEnv;
+            };
+          }
+          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            mold = linkerShell "mold";
+            wild = linkerShell "wild";
+          };
 
           formatter = pkgs.nixfmt;
         };

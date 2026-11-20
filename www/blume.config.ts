@@ -95,7 +95,7 @@ const sigiro = ({ binary }: { binary: boolean }): AstroIntegration => ({
 
 /**
  * `SIGIRO_DOCS_TARGET=binary` builds the copy of these docs the sigiro binary
- * embeds and serves at `/docs/` (`src/docs.rs`; `mise run docs-build`).
+ * embeds and serves at `/docs/` (`src/docs.rs`; `nix build .#docs`).
  *
  * Same content, same URLs, different shell around them:
  *

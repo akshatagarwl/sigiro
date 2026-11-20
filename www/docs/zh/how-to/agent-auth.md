@@ -49,7 +49,7 @@ curl -fsS https://sigiro.com/api/auth/capability/list | jq
 ## 2. 添加官方 SDK
 
 ```bash
-aube add @auth/agent@0.6.2
+pnpm add @auth/agent@0.6.2
 ```
 
 使用 Sigiro 服务源创建客户端。生产环境必须传入持久化 `storage`，例如由密钥存储支持的

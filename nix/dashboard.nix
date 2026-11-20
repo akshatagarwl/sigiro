@@ -8,7 +8,7 @@
 }:
 let
   root = ../dashboard;
-  project = callPackage ./aube-project.nix { } {
+  project = callPackage ./pnpm-project.nix { } {
     pname = "sigiro-dashboard";
     inherit version root;
     hash = "sha256-5d6n+Ix+deHKQLf8u6nxV1mgBgxlMCsNZ3gsx0HMlIg=";
@@ -35,7 +35,6 @@ stdenvNoCC.mkDerivation {
 
   inherit (project) pnpmDeps;
   nativeBuildInputs = project.nativeBuildInputs;
-  postPatch = project.translate;
 
   # No NODE_ENV=production here: it would make the install skip the
   # devDependencies the build needs. `next build` sets it itself.

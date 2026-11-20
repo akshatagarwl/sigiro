@@ -1,7 +1,7 @@
 /**
  * Generates the Open Graph card into `public/`.
  *
- *   aube run og
+ *   pnpm run og
  *
  * Run it after any change to `SITE.tagline`, then bump `SITE.ogImage` to a new
  * filename — scrapers cache by URL and WhatsApp's cache cannot be purged, so a

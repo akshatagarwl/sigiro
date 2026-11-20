@@ -11,24 +11,26 @@ app on Vite via vinext, and now Astro.
 
 ```bash
 # Run from the repository root
-aube install --frozen-lockfile
-aube run fmt
-aube run fmt:check
-aube run lint
+nix develop .#javascript
+pnpm install --frozen-lockfile
+pnpm run fmt
+pnpm run fmt:check
+pnpm run lint
 
-aube -C www install --frozen-lockfile
-aube -C www run dev       # astro dev
-aube -C www run build     # astro build → dist/client (assets) + dist/server (the Worker)
-aube -C www run preview  # local workerd preview of the wrapper Worker
-aube -C www run deploy   # Alchemy deploys the wrapper Worker and infrastructure
-aube -C www run check    # repository formatting and linting
-aube -C www run og       # regenerate the Open Graph card into public/
+pnpm -C www install --frozen-lockfile
+pnpm -C www run dev       # page development
+pnpm -C www run build     # dist/client (assets) + dist/server (the Worker)
+pnpm -C www run preview   # local workerd preview of the wrapper Worker
+pnpm -C www run deploy    # Alchemy deploys the wrapper Worker and infrastructure
+pnpm -C www run check     # repository formatting and linting
+pnpm -C www run og        # regenerate the Open Graph card into public/
 ```
 
 The repository-root `oxfmt.config.ts` and `oxlint.config.ts` are shared by auth,
-the website, and the agent. `aube run` installs missing or stale dependencies
-before starting a package script and uses that package's committed `aube-lock.yaml`;
-do not add a second lockfile. `aube -C www run dev` is for page development only. Validate routing by driving the running Worker with a
+the website, and the agent. Install dependencies explicitly with
+`pnpm install --frozen-lockfile` using each package's committed `pnpm-lock.yaml`.
+Node and pnpm are pinned by Nix; no runtime installer is needed.
+`pnpm -C www run dev` is for page development only. Validate routing by driving the running Worker with a
 real agent and inspecting traces and call-stack diffs. The sole production
 deployment path is Alchemy, which deploys `src/worker.ts`; do not deploy the
 generated `dist/server/wrangler.json` directly because it contains only Blume's
@@ -39,7 +41,7 @@ inner Worker and bypasses the apex auth and API proxies.
 `alchemy.run.ts` declares the production zone, downloads bucket, website Worker, binding, routes, and Email Sending domain, with state in Alchemy's remote Cloudflare state backend. Review its plan with:
 
 ```bash
-mise run alchemy-plan
+pnpm -C www run alchemy:plan
 ```
 
 The production host stacks (server adoption and the native workload) live in a separate private infrastructure repository.
@@ -73,7 +75,7 @@ says so at the point it is used:
 
 `/dashboard/` is not part of this site: it is its own app in `../dashboard`
 (a Next static export on the `Dashboard` Worker, routed at `sigiro.com/dashboard*`
-in `alchemy.run.ts`). `aube run check:dashboard` drives its build.
+in `alchemy.run.ts`). `pnpm run check:dashboard` drives its build.
 
 Nothing else on the landing page does. A React component rendered from `.astro` with no `client:*`
 directive is static markup, including the ones still marked `'use client'` — that

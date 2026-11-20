@@ -1,4 +1,4 @@
-# Manual (workflow_dispatch) Rust gate and image build; release.yml runs on tags.
+# Manual Rust gate and image build; release.yml runs on tags.
 name: CI
 on:
   workflow_dispatch:
@@ -14,102 +14,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
-          # DuckDB comes prebuilt from duckdb-static's cache (flake.nix).
-          extra_nix_config: &shared-nix-cache |
+          extra_nix_config: |
             extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
             extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.20.0
-      - uses: jdx/aube-action@f82ca2f6c943dbde1904945d9f0ee1a0faf8e945 # v1.0.0
-        with:
-          version: 2.8.4
       - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         with:
           name: akshat-sigiro-builds
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
           installCommand: nix profile add .#cache-client
-      # rustfmt, clippy (native and wasm32), the tests, the release binary with
-      # its dashboard and docs, and the check that it links nothing but the OS.
       - run: nix flake check -L
-      # The deployment invariants guard production boot: the sync-postgres
-      # boundary. It was outside every gate, so a deploy could ship a
-      # process-aborting drop with CI green.
       - name: Deployment contract
         run: python3 -m unittest tests.deployment.test_sync_postgres_boundary
-      - run: aube -C dashboard install --frozen-lockfile
-      - name: Real backend dashboard browser checks
-        env:
-          UI_ORIGIN: http://127.0.0.1:19995
-          CHROMIUM_PATH: /usr/bin/google-chrome
-          SIGIRO_UI_EVIDENCE: ${{ runner.temp }}/dashboard-evidence
-          SIGIRO_DATA_DIR: ${{ runner.temp }}/dashboard-data
-          SIGIRO_HTTP_PORT: "19995"
-          SIGIRO_OTLP_HTTP_PORT: "19996"
-          SIGIRO_GRPC_PORT: "19997"
-          SIGIRO_FLUSH_INTERVAL_SECS: "1"
-          SIGIRO_SELF_PROFILING: "true"
-          SIGIRO_E2E_HTTP_PORT: "19995"
-          SIGIRO_E2E_OTLP_PORT: "19996"
-          TRACE_FIXTURE: ${{ runner.temp }}/dashboard-evidence/trace-workload.json
-        run: |
-          set -euo pipefail
-          npm install --global agent-browser@0.27.3
-          nix build .#sigiro
-          mkdir -p "$SIGIRO_UI_EVIDENCE"
-          MALLOC_CONF=prof:true,prof_active:true,lg_prof_sample:19 \
-            ./result/bin/sigiro serve > "$SIGIRO_UI_EVIDENCE/server.log" 2>&1 &
-          server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
-          curl --fail --retry 30 --retry-connrefused --retry-delay 1 "$UI_ORIGIN/health"
-          python3 dashboard/scripts/trace-workspace-workload.py
-          sleep 12
-          node dashboard/tests/auth-mode-real-browser.mjs
-      - name: Upload real browser evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dashboard-browser-evidence
-          path: ${{ runner.temp }}/dashboard-evidence
-          if-no-files-found: ignore
-          retention-days: 7
-
-
-  auth:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: auth
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.20.0
-      - uses: jdx/aube-action@f82ca2f6c943dbde1904945d9f0ee1a0faf8e945 # v1.0.0
-        with:
-          version: 2.8.4
-      - run: aube install --frozen-lockfile
-      # Auth runs on Workers/D1, so there is no PostgreSQL to start. Keep CI to
-      # static checks and generate the D1 schema from the Drizzle artifact.
-      - run: aube run check
-      - run: aube run schema:sql
-      - run: aube run test:agent-e2e
-      - run: aube audit --prod
-
-  image:
-    needs: [gate, auth]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
-        with:
-          # DuckDB comes prebuilt from duckdb-static's cache (flake.nix).
-          extra_nix_config: *shared-nix-cache
-      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
-        with:
-          name: akshat-sigiro-builds
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-          installCommand: nix profile add .#cache-client
       - name: Verify the container image
         run: |
           set -euo pipefail

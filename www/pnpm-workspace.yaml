@@ -1,0 +1,5 @@
+patchedDependencies:
+  astro@7.4.7: patches/astro@7.4.7.patch
+onlyBuiltDependencies:
+  - sharp
+  - unrs-resolver

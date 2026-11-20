@@ -64,8 +64,8 @@ fn dashboard() {
     if required && !export.join("index.html").is_file() {
         panic!(
             "SIGIRO_REQUIRE_DASHBOARD=1 but dashboard/dist/dashboard/index.html is missing. \
-             Build the dashboard first: `mise run dashboard-install dashboard-build` \
-             (or use `nix build`, which does both)."
+             Build the complete binary with `nix build`; for local assets, run \
+             `pnpm -C dashboard install --frozen-lockfile && pnpm -C dashboard run build`."
         );
     }
 }
@@ -93,8 +93,8 @@ fn docs() {
         if required && !file.is_file() {
             panic!(
                 "SIGIRO_REQUIRE_DOCS=1 but {} is missing. \
-                 Build the docs first: `mise run docs-build` \
-                 (or use `nix build`, which does both).",
+                 Build the complete binary with `nix build`; for local assets, run \
+                 `pnpm -C www install --frozen-lockfile && scripts/build-docs-export.sh`.",
                 file.display()
             );
         }

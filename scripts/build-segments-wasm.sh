@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Paths below are repo-relative; `aube run build:wasm` starts in cloud/.
+# Paths below are repo-relative; `pnpm run build:wasm` starts in cloud/.
 cd "$(dirname "$0")/.."
 # wasm-bindgen-cli must match the locked wasm-bindgen crate exactly.
 version=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/"/, "", $3); print $3 }' Cargo.lock)

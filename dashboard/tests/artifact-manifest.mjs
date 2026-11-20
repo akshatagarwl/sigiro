@@ -19,7 +19,7 @@ const sourcePaths = [
       "--",
       "dashboard",
       "package.json",
-      "aube-lock.yaml"
+      "pnpm-lock.yaml"
     )
       .split("\0")
       .filter(Boolean)
@@ -50,7 +50,7 @@ const manifest = {
   sourceTreeSha256: treeHash(source),
   sourceFileCount: source.length,
   sourceScope:
-    "Tracked and non-ignored untracked dashboard files plus root package.json/aube-lock.yaml; excludes build output, node_modules and docs. Digest: SHA256 of sorted path + NUL + file SHA256 + newline.",
+    "Tracked and non-ignored untracked dashboard files plus root package.json/pnpm-lock.yaml; excludes build output, node_modules and docs. Digest: SHA256 of sorted path + NUL + file SHA256 + newline.",
   artifactTreeSha256: treeHash(files),
   fileCount: files.length,
   files,
