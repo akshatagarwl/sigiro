@@ -22,6 +22,10 @@
     duckdb-static.url = "github:akshatagarwl/duckdb-static";
     nixpkgs.follows = "duckdb-static/nixpkgs";
     crane.url = "github:ipetkov/crane";
+    cargo-dyndrv = {
+      url = "github:obsidiansystems/cargo-dyndrv/d5245b85f82627fcaf041e2c57c8aeb7d57d20fe";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -34,6 +38,7 @@
       nixpkgs,
       duckdb-static,
       crane,
+      cargo-dyndrv,
       rust-overlay,
     }:
     let
@@ -56,7 +61,10 @@
         let
           pkgs = import nixpkgs {
             inherit system;
-            overlays = [ rust-overlay.overlays.default ];
+            overlays = [
+              rust-overlay.overlays.default
+              cargo-dyndrv.overlays.default
+            ];
             # FSL-1.1-ALv2 is source-available, not free, and is marked so.
             config.allowUnfreePredicate = pkg: lib.getName pkg == "sigiro";
           };
@@ -93,6 +101,14 @@
           aube = pkgs.callPackage ./nix/aube.nix { };
 
           rust = pkgs.callPackage ./nix/rust.nix { inherit craneLib duckdb version; };
+          benchmark = pkgs.callPackage ./nix/dyndrv-benchmark.nix {
+            inherit
+              rust
+              craneLib
+              buildToolchain
+              version
+              ;
+          };
           dashboard = pkgs.callPackage ./nix/dashboard.nix { inherit version; };
           docs = pkgs.callPackage ./nix/docs.nix {
             inherit version;
@@ -157,6 +173,11 @@
             rust-workspace-deps = rust.workspaceArtifacts;
             rust-wasm-deps = rust.wasmArtifacts;
           }
+          // lib.optionalAttrs (system == "x86_64-linux") {
+            dyndrv-dev = benchmark.dynamic;
+            crane-dev = benchmark.crane;
+            dyndrv-tool = benchmark.tool;
+          }
           // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
             image = pkgs.callPackage ./nix/image.nix { inherit sigiro version; };
           }
@@ -164,10 +185,16 @@
             inherit aube;
           };
 
-          checks = rust.checks // {
-            inherit sigiro;
-            portable = rust.portable sigiro;
-          };
+          checks =
+            rust.checks
+            // {
+              inherit sigiro;
+              portable = rust.portable sigiro;
+            }
+            // lib.optionalAttrs (system == "x86_64-linux") {
+              dyndrv-dev-portable = rust.portable benchmark.dynamic;
+              crane-dev-portable = rust.portable benchmark.crane;
+            };
 
           devShells = lib.optionalAttrs (lib.elem system aube.meta.platforms) (
             {
