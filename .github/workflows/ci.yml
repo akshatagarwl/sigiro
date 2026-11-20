@@ -24,7 +24,7 @@ jobs:
           installCommand: nix profile add .#cache-client
       - run: nix flake check -L
       - name: Deployment contract
-        run: python3 -m unittest tests.deployment.test_sync_postgres_boundary
+        run: nix develop --command python3 -m unittest tests.deployment.test_sync_postgres_boundary
       - name: Verify the container image
         run: |
           set -euo pipefail

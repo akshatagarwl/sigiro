@@ -152,8 +152,8 @@ Docs: <https://sigiro.com/docs>.
 ## Build from source
 
 sigiro builds with [Nix](https://nixos.org) (flakes enabled), on x86_64 and
-aarch64 Linux and on Apple silicon. Everything is pinned; the build is offline
-and reproducible.
+aarch64 Linux and on Apple silicon. Everything is pinned, and the build runs from
+locked inputs in an offline sandbox.
 
 ```bash
 git clone https://github.com/akshatagarwl/sigiro.git

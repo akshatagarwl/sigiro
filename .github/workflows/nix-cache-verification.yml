@@ -34,7 +34,7 @@ jobs:
           binary="$(nix eval --raw .#unbundled.outPath)/bin/sigiro"
           "$binary" --version
           "$binary" openapi > "$RUNNER_TEMP/openapi.json"
-          python3 -c 'import json, os; spec=json.load(open(os.environ["RUNNER_TEMP"] + "/openapi.json")); assert spec["paths"]; assert spec["openapi"]'
+          nix develop --command python3 -c 'import json, os; spec=json.load(open(os.environ["RUNNER_TEMP"] + "/openapi.json")); assert spec["paths"]; assert spec["openapi"]'
       - name: Build a CI-only automatic upload probe
         run: |
           set -euo pipefail

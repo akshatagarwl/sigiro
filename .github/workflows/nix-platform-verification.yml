@@ -59,8 +59,8 @@ jobs:
           ./result/bin/sigiro --version
           ./result/bin/sigiro --help
           ./result/bin/sigiro openapi > "$RUNNER_TEMP/openapi.json"
-          python3 -c 'import json, os; spec=json.load(open(os.environ["RUNNER_TEMP"] + "/openapi.json")); assert spec["paths"]; assert spec["openapi"]'
-          python3 -m unittest tests.deployment.test_sync_postgres_boundary
+          nix develop --command python3 -c 'import json, os; spec=json.load(open(os.environ["RUNNER_TEMP"] + "/openapi.json")); assert spec["paths"]; assert spec["openapi"]'
+          nix develop --command python3 -m unittest tests.deployment.test_sync_postgres_boundary
       - name: Development linker smoke tests
         if: runner.os == 'Linux'
         run: |

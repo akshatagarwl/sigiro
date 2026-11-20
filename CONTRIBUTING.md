@@ -12,8 +12,9 @@ For a larger change, open an issue first so we can agree on the approach.
 ## Set up
 
 Follow [Build from source](README.md#build-from-source): the binary is built
-with Nix. `nix develop` supplies Rust, Node and pnpm; `nix develop .#javascript`
-is the smaller shell for website, auth and release work. All tool versions come
+with Nix. `nix develop` supplies Rust, wasm-bindgen, Python, Node and pnpm;
+`nix develop .#javascript` is the smaller shell for website, auth and release
+work. All tool versions come
 from the locked Nix inputs and `rust-toolchain.toml`. No cloud accounts or
 secrets are needed to build or test. There is no task runner or Git-hook installer.
 
@@ -50,8 +51,9 @@ release and CI builds continue to use the existing toolchain.
 
 ### How the build works
 
-`flake.nix` and `nix/` build the binary offline and bit-for-bit reproducibly
-(`nix build --rebuild` checks it). Nothing is pinned twice: Rust comes from
+`flake.nix` and `nix/` build the binary from locked inputs in an offline build
+sandbox. `nix build --rebuild` can check whether a rebuild is byte-for-byte
+identical; that comparison has not been recorded for this build. Nothing is pinned twice: Rust comes from
 `rust-toolchain.toml`, Node and pnpm from the locked nixpkgs, and the version
 from `Cargo.toml`.
 
@@ -146,7 +148,7 @@ storage: three platforms and multiple revisions may exceed the free 5 GB tier.
 2. Keep the change to one concern and include tests for behaviour changes.
 3. Run the checks for what you touched:
    * Rust: `nix flake check` (rustfmt, clippy, tests, the binary and its
-     portability), plus `python3 -m unittest tests.deployment.test_sync_postgres_boundary`
+     portability), plus `nix develop --command python3 -m unittest tests.deployment.test_sync_postgres_boundary`
      for the deployment contract. In `nix develop`, `cargo fmt`, `cargo clippy` and `cargo test`
      work directly.
    * TypeScript: `pnpm run fmt:check && pnpm run lint`, plus the package's own

@@ -102,7 +102,13 @@
             pkgs.git
             pkgs.gh
           ];
-          devPackages = javascriptPackages ++ [ devToolchain ];
+          devPackages = javascriptPackages ++ [
+            devToolchain
+            # Must equal the locked wasm-bindgen crate; build-segments-wasm.sh checks it.
+            pkgs.wasm-bindgen-cli
+            # Deployment-contract tests.
+            pkgs.python3
+          ];
           devEnv = rust.targetEnv // {
             CARGO_PROFILE_DEV_INCREMENTAL = "true";
             CARGO_PROFILE_TEST_INCREMENTAL = "true";
