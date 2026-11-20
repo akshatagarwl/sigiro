@@ -371,7 +371,7 @@ export default defineConfig({
      * (scripts/build-docs-export.sh), and rendering them fetches fonts from
      * Google for the CJK locales, which an offline (Nix) build cannot do.
      */
-    ...(BINARY ? { og: { enabled: false } } : {}),
+    og: { enabled: BINARY ? false : undefined },
   },
 
   /**
