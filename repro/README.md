@@ -114,6 +114,18 @@ have no references to those build artifacts. This naming/closure limitation is
 ours, not an upstream Cachix defect; the tiny `sigiro-ca-realisations-probe`
 above deliberately matches the existing hook and isolates the metadata problem.
 
+## Upstream tracking
+
+- [cargo-dyndrv #7: missing Cargo environment](https://github.com/obsidiansystems/cargo-dyndrv/issues/7).
+  Existing [PR #4](https://github.com/obsidiansystems/cargo-dyndrv/pull/4) covers
+  package/crate variables, but not the demonstrated runtime `DEBUG` failure.
+- [cargo-dyndrv #8: RUSTFLAGS forwarding](https://github.com/obsidiansystems/cargo-dyndrv/issues/8).
+- [cargo-dyndrv #9: development LLVM-bitcode mismatch](https://github.com/obsidiansystems/cargo-dyndrv/issues/9).
+- [Cachix PR #732: independent CA regression case](https://github.com/cachix/cachix/pull/732#issuecomment-7039547909).
+
+The issue descriptions link to immutable source/evidence commit
+`ac5315cc399569496d6b6c6754775e9bc485000b`.
+
 ## Evidence and limits
 
 `evidence/dyndrv/` publishes build logs, exit statuses, sampled derivations and
