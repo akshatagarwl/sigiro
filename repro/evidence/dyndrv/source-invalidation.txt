@@ -1,0 +1,15 @@
+Executed on the tested PC after building both minimal dynamic variants:
+
+diff -qr /nix/store/3yfzj394k5rrqgi6ky2s4ircrvrw06wr-source-src /nix/store/q6pi867kc6hqcmpf03f34nyp01zgn6bh-source-src
+Files .../src/main.rs and .../src/main.rs differ
+
+No other files differed. In particular, both src/lib.rs SHA256 values were:
+4ae6bddbc6068d796a7c82a52bc684a8c44fdb1a588c17dcb5381a80291138f0
+
+Library derivations from the build logs and sampled JSON:
+baseline: 7z7yk9aq9i8vgrsnf64ik1jrprcm46hk-source.drv
+edited:   ai19pqmb31zmv3y7ld30m8chsdwxaj6y-source.drv
+
+This demonstrates package-directory source invalidation. It is not evidence
+that this is the sole cause of the full-application timing difference: the
+Crane reference also rebuilt the library.

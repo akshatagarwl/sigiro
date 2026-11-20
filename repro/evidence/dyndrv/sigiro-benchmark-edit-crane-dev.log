@@ -1,0 +1,45 @@
+warning: Git tree '<checkout>' is dirty
+warning: ignoring untrusted flake configuration setting 'extra-substituters'.
+Pass '--accept-flake-config' to trust it
+warning: ignoring untrusted flake configuration setting 'extra-trusted-public-keys'.
+Pass '--accept-flake-config' to trust it
+this derivation will be built:
+  /nix/store/c1y6p1ppba7x138bqx1xb2iz4z1lb9zw-sigiro-benchmark-dev-0.2.0.drv
+building '/nix/store/c1y6p1ppba7x138bqx1xb2iz4z1lb9zw-sigiro-benchmark-dev-0.2.0.drv'...
+sigiro-benchmark-dev> Running phase: unpackPhase
+sigiro-benchmark-dev> unpacking source archive /nix/store/z3z1kfrv0bzy25klvvcwd6r3ln5qyzlr-source
+sigiro-benchmark-dev> source root is source
+sigiro-benchmark-dev> Running phase: patchPhase
+sigiro-benchmark-dev> Executing configureCargoCommonVars
+sigiro-benchmark-dev> decompressing cargo artifacts from /nix/store/wibxmx5dcvivm2l96wlc04m0hj6sfxgm-sigiro-benchmark-dev-deps-0.2.0/target.tar.zst to target
+sigiro-benchmark-dev> Running phase: updateAutotoolsGnuConfigScriptsPhase
+sigiro-benchmark-dev> Running phase: configurePhase
+sigiro-benchmark-dev> will append /build/source/.cargo-home/config.toml with contents of /nix/store/av415m4r0y53csj7dkyjshq628gsvx4w-vendor-cargo-deps/config.toml
+sigiro-benchmark-dev> default configurePhase, nothing to do
+sigiro-benchmark-dev> Running phase: buildPhase
+sigiro-benchmark-dev> +++ command cargo --version
+sigiro-benchmark-dev> cargo 1.99.1 (5f94df478 2026-08-27)
+sigiro-benchmark-dev> +++ command cargo build --profile dev --message-format json-render-diagnostics --locked --package sigiro --bin sigiro
+sigiro-benchmark-dev>    Compiling sigiro v0.2.0 (/build/source)
+sigiro-benchmark-dev>    Compiling sigiro-core v0.1.0 (/build/source/crates/sigiro-core)
+sigiro-benchmark-dev>    Compiling sigiro-segments v0.1.0 (/build/source/crates/segments)
+sigiro-benchmark-dev>     Finished `dev` profile [unoptimized + debuginfo] target(s) in 19.93s
+sigiro-benchmark-dev> searching for bins/libs to install from cargo build log at cargoBuildLoglpkQ.json
+sigiro-benchmark-dev> installing /build/source/target/x86_64-unknown-linux-musl/debug/sigiro in postBuildInstallFromCargoBuildLogOutTempJK7/bin
+sigiro-benchmark-dev> searching for bins/libs complete
+sigiro-benchmark-dev> Running phase: installPhase
+sigiro-benchmark-dev> actually installing contents of postBuildInstallFromCargoBuildLogOutTempJK7 to /nix/store/kcx1i3k1ihy381r2jzrhipms3ychi4ip-sigiro-benchmark-dev-0.2.0
+sigiro-benchmark-dev> stripping references to Rust toolchain
+sigiro-benchmark-dev> Rust toolchain at: /nix/store/097b0a16cg8hdnd1rk74zw783laszics-rust-minimal-1.99.1
+sigiro-benchmark-dev> stripping Rust toolchain references done
+sigiro-benchmark-dev> stripping references to cargoVendorDir from:
+sigiro-benchmark-dev> /nix/store/kcx1i3k1ihy381r2jzrhipms3ychi4ip-sigiro-benchmark-dev-0.2.0/bin/sigiro
+sigiro-benchmark-dev> stripping references done
+sigiro-benchmark-dev> Running phase: fixupPhase
+sigiro-benchmark-dev> shrinking RPATHs of ELF executables and libraries in /nix/store/kcx1i3k1ihy381r2jzrhipms3ychi4ip-sigiro-benchmark-dev-0.2.0
+sigiro-benchmark-dev> shrinking /nix/store/kcx1i3k1ihy381r2jzrhipms3ychi4ip-sigiro-benchmark-dev-0.2.0/bin/sigiro
+sigiro-benchmark-dev> patchelf: cannot find section '.dynamic'. The input file is most likely statically linked
+sigiro-benchmark-dev> checking for references to /build/ in /nix/store/kcx1i3k1ihy381r2jzrhipms3ychi4ip-sigiro-benchmark-dev-0.2.0...
+sigiro-benchmark-dev> patchelf: cannot find section '.dynamic'. The input file is most likely statically linked
+sigiro-benchmark-dev> patching script interpreter paths in /nix/store/kcx1i3k1ihy381r2jzrhipms3ychi4ip-sigiro-benchmark-dev-0.2.0
+wall_seconds=32.629

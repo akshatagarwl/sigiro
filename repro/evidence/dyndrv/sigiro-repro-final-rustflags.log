@@ -1,0 +1,58 @@
+warning: Git tree '<checkout>' is dirty
+warning: ignoring untrusted flake configuration setting 'extra-substituters'.
+Pass '--accept-flake-config' to trust it
+warning: ignoring untrusted flake configuration setting 'extra-trusted-public-keys'.
+Pass '--accept-flake-config' to trust it
+warning: Ignoring dynamic derivation /nix/store/3n688ymmiy7x4lai7v69bbv5qbjg68aj-cargo-dyndrv-build.drv^dyndrv-repro.drv while querying missing paths; not yet implemented
+this derivation will be built:
+  /nix/store/n4vm61nb9mrrilv1pvyjx5b708y5vbz1-dyndrv-repro-0.1.0.drv
+building '/nix/store/a73706bngv78658hyi6zsd3pr98yzrig-cargo-dyndrv-build.drv'...
+cargo-dyndrv-build> Running phase: unpackPhase
+cargo-dyndrv-build> unpacking source archive /nix/store/17cgqfyskzqnp638xih6jfg1sb7cn38m-source
+cargo-dyndrv-build> source root is source
+cargo-dyndrv-build> Executing cargoSetupPostUnpackHook
+cargo-dyndrv-build> Finished cargoSetupPostUnpackHook
+cargo-dyndrv-build> Running phase: patchPhase
+cargo-dyndrv-build> Executing cargoSetupPostPatchHook
+cargo-dyndrv-build> Validating consistency between /build/source/Cargo.lock and /build/cargo-vendor-dir/Cargo.lock
+cargo-dyndrv-build> Finished cargoSetupPostPatchHook
+cargo-dyndrv-build> Running phase: updateAutotoolsGnuConfigScriptsPhase
+cargo-dyndrv-build> Running phase: configurePhase
+cargo-dyndrv-build> Running phase: buildPhase
+cargo-dyndrv-build> Executing cargoBuildHook
+cargo-dyndrv-build> cargoBuildHook flags: -j 4 --target x86_64-unknown-linux-gnu --offline --profile release --bin dyndrv-repro --features rustflags
+cargo-dyndrv-build> /nix/store/xy4pbp8pxfihcdq6435rxyd3yfxfams7-source.drv
+cargo-dyndrv-build> Finished cargoBuildHook
+cargo-dyndrv-build> Running phase: installPhase
+cargo-dyndrv-build> no Makefile or custom installPhase, doing nothing
+building '/nix/store/fxy3fil6g822r1srschcnjw4f83ahm2j-source.drv'...
+building '/nix/store/8n9rhfwflf544gx0xj23dvb5zydjd00w-source.drv'...
+building '/nix/store/qqjrh0jp21gqxj40yngdrmb7lh8rkdin-source.drv'...
+source> error: RUSTFLAGS --cfg required_by_repro was not forwarded
+source>  --> /nix/store/3yfzj394k5rrqgi6ky2s4ircrvrw06wr-source-src/src/lib.rs:5:1
+source>   |
+source> 5 | compile_error!("RUSTFLAGS --cfg required_by_repro was not forwarded");
+source>   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+source> 
+source> error: aborting due to 1 previous error
+source> 
+error: Cannot build '/nix/store/qqjrh0jp21gqxj40yngdrmb7lh8rkdin-source.drv'.
+       Reason: builder failed with exit code 1.
+       Last 8 log lines:
+       > error: RUSTFLAGS --cfg required_by_repro was not forwarded
+       >  --> /nix/store/3yfzj394k5rrqgi6ky2s4ircrvrw06wr-source-src/src/lib.rs:5:1
+       >   |
+       > 5 | compile_error!("RUSTFLAGS --cfg required_by_repro was not forwarded");
+       >   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       >
+       > error: aborting due to 1 previous error
+       >
+       For full logs, run:
+         nix log /nix/store/qqjrh0jp21gqxj40yngdrmb7lh8rkdin-source.drv
+error: build of resolved derivation '/nix/store/qqjrh0jp21gqxj40yngdrmb7lh8rkdin-source.drv' failed
+error: Cannot build '/nix/store/xy4pbp8pxfihcdq6435rxyd3yfxfams7-source.drv'.
+       Reason: 1 dependency failed.
+error: Cannot build '/nix/store/i84dyih05v15dqpn7n0rddzic8grxs0l-cargo-dyndrv-build-dyndrv-repro.drv'.
+       Reason: 1 dependency failed.
+error: Cannot build '/nix/store/n4vm61nb9mrrilv1pvyjx5b708y5vbz1-dyndrv-repro-0.1.0.drv'.
+       Reason: 1 dependency failed.

@@ -1,0 +1,6 @@
+cargo-control exit=0
+package-env exit=1
+build-env exit=1
+rustflags exit=1
+lib-bin exit=0
+lib-bin-edited exit=0

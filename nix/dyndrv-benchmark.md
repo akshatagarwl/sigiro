@@ -10,7 +10,7 @@ Production packages and the migration checkout were not changed.
 - x86_64-linux PC; Nix CLI/daemon 2.36.0; Rust 1.99.1.
 - cargo-dyndrv pinned to `d5245b85f82627fcaf041e2c57c8aeb7d57d20fe`.
 - Unbundled development builds, same Rust sources, musl target, static relocation,
-  and Cargo development profile. No persisted application incremental state.
+  and requested Cargo development profile. No persisted application incremental state.
 - All timed commands used `--max-jobs 8 --cores 8`, sequentially, on a shared PC.
 - Crane's dependency derivation builds only; it skips the default preliminary
   `cargo check`, since this benchmark is not measuring checks.
@@ -36,6 +36,11 @@ The final dynamic configuration built with existing dependency outputs in
 51.532 s. Tool bootstrap alone took another 121 s and is excluded from the table.
 An accidentally release-profile Crane attempt was stopped and discarded; the
 measured reference explicitly uses `CARGO_PROFILE=dev`.
+
+Subsequent minimal reproductions found a compiler-flag mismatch: dynamic development
+libraries retain embedded LLVM bitcode, whereas Cargo passes `-C embed-bitcode=no`.
+Thus the comparison is not compiler-flag-identical. The bitcode contribution to
+the slowdown has not been isolated. See [public reproductions](../repro/README.md).
 
 Dependency crates were reused on the dynamic edit, but the imported source for
 the `sigiro` package includes both its library and binary. Editing `main.rs`
@@ -78,6 +83,9 @@ The current integration did not supply the derivation-to-output realisation
 mapping. Downloading a known store path alone does not prove reusable CA builds.
 This is an observed limitation of the tested integration, not a blanket claim
 that every Cachix configuration is incapable of supporting such builds.
+Upstream [Cachix PR #732](https://github.com/cachix/cachix/pull/732) already
+implements CA realisation pushing; our independent reproduction is in
+`repro/cachix-ca.nix`.
 
 ## Reproduce on the configured PC
 

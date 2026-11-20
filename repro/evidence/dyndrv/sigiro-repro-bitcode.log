@@ -1,0 +1,10 @@
+warning: Git tree '<checkout>' is dirty
+warning: ignoring untrusted flake configuration setting 'extra-substituters'.
+Pass '--accept-flake-config' to trust it
+warning: ignoring untrusted flake configuration setting 'extra-trusted-public-keys'.
+Pass '--accept-flake-config' to trust it
+File: /nix/store/zgr7aw7haicn7dn1m05kdcp2968ar8js-source/libdyndrv_repro.rlib(lib.rmeta)
+File: /nix/store/zgr7aw7haicn7dn1m05kdcp2968ar8js-source/libdyndrv_repro.rlib(lib.rmeta-link)
+File: /nix/store/zgr7aw7haicn7dn1m05kdcp2968ar8js-source/libdyndrv_repro.rlib(dyndrv_repro.dyndrv_repro.561da28800502c3-cgu.0.rcgu.o)
+  [ 3] .llvmbc           PROGBITS        0000000000000000 000040 0009a8 00   E  0   0  1
+  [ 4] .llvmcmd          PROGBITS        0000000000000000 0009e8 000000 00   E  0   0  1

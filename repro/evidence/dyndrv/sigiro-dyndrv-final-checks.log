@@ -1,0 +1,25 @@
+warning: Git tree '<checkout>' is dirty
+warning: ignoring untrusted flake configuration setting 'extra-substituters'.
+Pass '--accept-flake-config' to trust it
+warning: ignoring untrusted flake configuration setting 'extra-trusted-public-keys'.
+Pass '--accept-flake-config' to trust it
+warning: ignoring untrusted flake configuration setting 'extra-substituters'.
+Pass '--accept-flake-config' to trust it
+warning: ignoring untrusted flake configuration setting 'extra-trusted-public-keys'.
+Pass '--accept-flake-config' to trust it
+warning: Ignoring dynamic derivation /nix/store/8hj4km4m253xgnpkw56n6siqmpp35b26-dyndrv-benchmark-graph-0.2.0.drv^sigiro.drv while querying missing paths; not yet implemented
+these 2 derivations will be built:
+  /nix/store/7p3l5l77x9kvz5g84r9nxqps2fryd2jc-sigiro-dyndrv-dev-0.2.0.drv
+  /nix/store/8mysv31nwbn80m3zh5aq1mwd8akzi16q-sigiro-portable.drv
+building '/nix/store/rm12njhjgbfzq4rpvi3r7lvwfa5y4h5n-sigiro-portable.drv'...
+sigiro-portable> Running phase: patchPhase
+sigiro-portable> Running phase: updateAutotoolsGnuConfigScriptsPhase
+sigiro-portable> Running phase: configurePhase
+sigiro-portable> no configure script, doing nothing
+sigiro-portable> Running phase: buildPhase
+sigiro-portable> /nix/store/gah9s64kf9ircz3a680klw67i0ksxva5-sigiro-dyndrv-dev-0.2.0/bin/sigiro: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, with debug_info, not stripped
+sigiro-portable> sigiro 0.2.0
+sigiro-portable> Running phase: fixupPhase
+sigiro-portable> shrinking RPATHs of ELF executables and libraries in /nix/store/xrcdwysxhn4xcs1wawy50yk2j212jmjn-sigiro-portable
+sigiro-portable> checking for references to /build/ in /nix/store/xrcdwysxhn4xcs1wawy50yk2j212jmjn-sigiro-portable...
+sigiro-portable> patching script interpreter paths in /nix/store/xrcdwysxhn4xcs1wawy50yk2j212jmjn-sigiro-portable

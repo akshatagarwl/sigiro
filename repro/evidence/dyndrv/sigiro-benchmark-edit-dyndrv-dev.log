@@ -1,0 +1,46 @@
+warning: Git tree '<checkout>' is dirty
+warning: ignoring untrusted flake configuration setting 'extra-substituters'.
+Pass '--accept-flake-config' to trust it
+warning: ignoring untrusted flake configuration setting 'extra-trusted-public-keys'.
+Pass '--accept-flake-config' to trust it
+warning: Ignoring dynamic derivation /nix/store/5wplv7ppnz5z241ljnp5zilp82zpi7w2-dyndrv-benchmark-graph-0.2.0.drv^sigiro.drv while querying missing paths; not yet implemented
+this derivation will be built:
+  /nix/store/3z0i42sdf90jxk7md42gzsiv79f3ifzs-sigiro-dyndrv-dev-0.2.0.drv
+building '/nix/store/xgq4j8s39vghlc418f1vwzv1hifxw3rp-dyndrv-benchmark-graph-0.2.0.drv'...
+dyndrv-benchmark-graph> cargoArtifacts not set, will not reuse any cargo artifacts
+dyndrv-benchmark-graph> Running phase: unpackPhase
+dyndrv-benchmark-graph> unpacking source archive /nix/store/z3z1kfrv0bzy25klvvcwd6r3ln5qyzlr-source
+dyndrv-benchmark-graph> source root is source
+dyndrv-benchmark-graph> Running phase: patchPhase
+dyndrv-benchmark-graph> Executing configureCargoCommonVars
+dyndrv-benchmark-graph> Running phase: updateAutotoolsGnuConfigScriptsPhase
+dyndrv-benchmark-graph> Running phase: configurePhase
+dyndrv-benchmark-graph> will append /build/dyndrv-cargo-home/config.toml with contents of /nix/store/rdv8wl3zz9vvv47lf90w1bc12y4hwgvd-dyndrv-benchmark-vendor/config.toml
+dyndrv-benchmark-graph> default configurePhase, nothing to do
+dyndrv-benchmark-graph> Running phase: buildPhase
+dyndrv-benchmark-graph> Target CC: /nix/store/r7l3x65k0bcfzd91qxik6013acyijiw3-x86_64-unknown-linux-musl-gcc-wrapper-16.2.0/bin/x86_64-unknown-linux-musl-cc
+dyndrv-benchmark-graph> Target CXX: /nix/store/r7l3x65k0bcfzd91qxik6013acyijiw3-x86_64-unknown-linux-musl-gcc-wrapper-16.2.0/bin/x86_64-unknown-linux-musl-c++
+dyndrv-benchmark-graph> +++ command cargo --version
+dyndrv-benchmark-graph> cargo 1.99.1 (5f94df478 2026-08-27)
+dyndrv-benchmark-graph> Handling external config for registry+https://github.com/rust-lang/crates.io-index#aws-lc-sys@0.47.0
+dyndrv-benchmark-graph> Handling external config for registry+https://github.com/rust-lang/crates.io-index#ring@0.17.14
+dyndrv-benchmark-graph> Handling external config for registry+https://github.com/rust-lang/crates.io-index#libduckdb-sys@1.20000.1
+dyndrv-benchmark-graph> Handling external config for registry+https://github.com/rust-lang/crates.io-index#tikv-jemalloc-sys@0.7.1+5.3.1-0-g81034ce1f1373e37dc865038e1bc8eeecf559ce8
+dyndrv-benchmark-graph> Handling external config for registry+https://github.com/rust-lang/crates.io-index#libsqlite3-sys@0.39.1
+dyndrv-benchmark-graph> Handling external config for registry+https://github.com/rust-lang/crates.io-index#psm@0.1.32
+dyndrv-benchmark-graph> Handling external config for registry+https://github.com/rust-lang/crates.io-index#zstd-sys@2.1.2+zstd.1.5.7
+dyndrv-benchmark-graph> /nix/store/p284cwrw5fx366da7gsrqnj8w86ab72w-source.drv
+dyndrv-benchmark-graph> Running phase: installPhase
+building '/nix/store/lmc897xh2nzrx2bszyas0j3gpccazzx4-source.drv'...
+building '/nix/store/x238cvhfbi8hsjk00q55d84jnp9qd93s-source.drv'...
+source> cargo:rerun-if-env-changed=SIGIRO_BUILD_COMMIT
+source> cargo:rustc-env=SIGIRO_VERSION=0.2.0
+source> cargo:rerun-if-env-changed=SIGIRO_REQUIRE_DASHBOARD
+source> cargo:rerun-if-env-changed=SIGIRO_REQUIRE_DOCS
+source> cargo:rustc-link-arg=-lstdc++
+source> cargo:rustc-link-arg=-lc
+building '/nix/store/ds8n5nv8mi84pvms7lkdcvqw9kw3n2rz-source.drv'...
+building '/nix/store/6imygkwpfbxhrkfpq7n89a2jpq08h0kc-source.drv'...
+building '/nix/store/h74kmgm7rnl57dnqjj7w3lb60rs4a7qn-dyndrv-benchmark-graph-0.2.0-sigiro.drv'...
+building '/nix/store/3rz1hsz9ghbs0030m35faf4vhz9fhwki-sigiro-dyndrv-dev-0.2.0.drv'...
+wall_seconds=51.058

@@ -1,0 +1,64 @@
+warning: Git tree '<checkout>' is dirty
+warning: ignoring untrusted flake configuration setting 'extra-substituters'.
+Pass '--accept-flake-config' to trust it
+warning: ignoring untrusted flake configuration setting 'extra-trusted-public-keys'.
+Pass '--accept-flake-config' to trust it
+warning: Ignoring dynamic derivation /nix/store/1jz0vm6w3yp7a7f4qc52v73cap37ba6f-cargo-dyndrv-build.drv^dyndrv-repro.drv while querying missing paths; not yet implemented
+this derivation will be built:
+  /nix/store/q7yiifnwbdwz9i78zlqysnaaw1giymv5-dyndrv-repro-0.1.0.drv
+building '/nix/store/xig2dsbyhzm3c90hxsrqi144cgaj3yfa-cargo-dyndrv-build.drv'...
+cargo-dyndrv-build> Running phase: unpackPhase
+cargo-dyndrv-build> unpacking source archive /nix/store/17cgqfyskzqnp638xih6jfg1sb7cn38m-source
+cargo-dyndrv-build> source root is source
+cargo-dyndrv-build> Executing cargoSetupPostUnpackHook
+cargo-dyndrv-build> Finished cargoSetupPostUnpackHook
+cargo-dyndrv-build> Running phase: patchPhase
+cargo-dyndrv-build> Executing cargoSetupPostPatchHook
+cargo-dyndrv-build> Validating consistency between /build/source/Cargo.lock and /build/cargo-vendor-dir/Cargo.lock
+cargo-dyndrv-build> Finished cargoSetupPostPatchHook
+cargo-dyndrv-build> Running phase: updateAutotoolsGnuConfigScriptsPhase
+cargo-dyndrv-build> Running phase: configurePhase
+cargo-dyndrv-build> Running phase: buildPhase
+cargo-dyndrv-build> Executing cargoBuildHook
+cargo-dyndrv-build> cargoBuildHook flags: -j 4 --target x86_64-unknown-linux-gnu --offline --profile release --bin dyndrv-repro --features package-env
+cargo-dyndrv-build> /nix/store/pfa7g0200sxdcwswdxjdl5m0bn15q479-source.drv
+cargo-dyndrv-build> Finished cargoBuildHook
+cargo-dyndrv-build> Running phase: installPhase
+cargo-dyndrv-build> no Makefile or custom installPhase, doing nothing
+building '/nix/store/l24xvp68i9h3x7fcim098lcjl2pkzzg8-source.drv'...
+building '/nix/store/4p2dxbvfgklwb13xlcwpvcnvnx4ylnqj-source.drv'...
+building '/nix/store/hjgavkv34shdmgjv540cldjwi6qzfrfh-source.drv'...
+source> error: environment variable `CARGO_PKG_NAME` not defined at compile time
+source>  --> /nix/store/3yfzj394k5rrqgi6ky2s4ircrvrw06wr-source-src/src/lib.rs:2:32
+source>   |
+source> 2 | pub const PACKAGE_NAME: &str = env!("CARGO_PKG_NAME");
+source>   |                                ^^^^^^^^^^^^^^^^^^^^^^
+source>   |
+source>   = help: `CARGO_PKG_NAME` may not be available for the current Cargo target
+source>   = help: Cargo sets build script variables at run time. Use `std::env::var("CARGO_PKG_NAME")` instead
+source> 
+source> error: aborting due to 1 previous error
+source> 
+error: Cannot build '/nix/store/hjgavkv34shdmgjv540cldjwi6qzfrfh-source.drv'.
+       Reason: builder failed with exit code 1.
+       Last 11 log lines:
+       > error: environment variable `CARGO_PKG_NAME` not defined at compile time
+       >  --> /nix/store/3yfzj394k5rrqgi6ky2s4ircrvrw06wr-source-src/src/lib.rs:2:32
+       >   |
+       > 2 | pub const PACKAGE_NAME: &str = env!("CARGO_PKG_NAME");
+       >   |                                ^^^^^^^^^^^^^^^^^^^^^^
+       >   |
+       >   = help: `CARGO_PKG_NAME` may not be available for the current Cargo target
+       >   = help: Cargo sets build script variables at run time. Use `std::env::var("CARGO_PKG_NAME")` instead
+       >
+       > error: aborting due to 1 previous error
+       >
+       For full logs, run:
+         nix log /nix/store/hjgavkv34shdmgjv540cldjwi6qzfrfh-source.drv
+error: build of resolved derivation '/nix/store/hjgavkv34shdmgjv540cldjwi6qzfrfh-source.drv' failed
+error: Cannot build '/nix/store/pfa7g0200sxdcwswdxjdl5m0bn15q479-source.drv'.
+       Reason: 1 dependency failed.
+error: Cannot build '/nix/store/1v3p6jz96xs6jdfjz63zmxjlahl2ma02-cargo-dyndrv-build-dyndrv-repro.drv'.
+       Reason: 1 dependency failed.
+error: Cannot build '/nix/store/q7yiifnwbdwz9i78zlqysnaaw1giymv5-dyndrv-repro-0.1.0.drv'.
+       Reason: 1 dependency failed.

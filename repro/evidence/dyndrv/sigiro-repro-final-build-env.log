@@ -1,0 +1,49 @@
+warning: Git tree '<checkout>' is dirty
+warning: ignoring untrusted flake configuration setting 'extra-substituters'.
+Pass '--accept-flake-config' to trust it
+warning: ignoring untrusted flake configuration setting 'extra-trusted-public-keys'.
+Pass '--accept-flake-config' to trust it
+warning: Ignoring dynamic derivation /nix/store/zvpc8np9bldjgylli0vqpnim2axjckwg-cargo-dyndrv-build.drv^dyndrv-repro.drv while querying missing paths; not yet implemented
+this derivation will be built:
+  /nix/store/r2qpfnmf8wmmfybm7izdgq8yn6s6gq2p-dyndrv-repro-0.1.0.drv
+building '/nix/store/xiy6kb9arjmdj30qng7rd5jzmrb02rwh-cargo-dyndrv-build.drv'...
+cargo-dyndrv-build> Running phase: unpackPhase
+cargo-dyndrv-build> unpacking source archive /nix/store/17cgqfyskzqnp638xih6jfg1sb7cn38m-source
+cargo-dyndrv-build> source root is source
+cargo-dyndrv-build> Executing cargoSetupPostUnpackHook
+cargo-dyndrv-build> Finished cargoSetupPostUnpackHook
+cargo-dyndrv-build> Running phase: patchPhase
+cargo-dyndrv-build> Executing cargoSetupPostPatchHook
+cargo-dyndrv-build> Validating consistency between /build/source/Cargo.lock and /build/cargo-vendor-dir/Cargo.lock
+cargo-dyndrv-build> Finished cargoSetupPostPatchHook
+cargo-dyndrv-build> Running phase: updateAutotoolsGnuConfigScriptsPhase
+cargo-dyndrv-build> Running phase: configurePhase
+cargo-dyndrv-build> Running phase: buildPhase
+cargo-dyndrv-build> Executing cargoBuildHook
+cargo-dyndrv-build> cargoBuildHook flags: -j 4 --target x86_64-unknown-linux-gnu --offline --profile release --bin dyndrv-repro --features build-env
+cargo-dyndrv-build> /nix/store/6skvqfj1d56ny7win16dsnz4k7ygxfjc-source.drv
+cargo-dyndrv-build> Finished cargoBuildHook
+cargo-dyndrv-build> Running phase: installPhase
+cargo-dyndrv-build> no Makefile or custom installPhase, doing nothing
+building '/nix/store/yaw6ggnjlhy6ysj81fi62laxnh9hjhz8-source.drv'...
+building '/nix/store/a1s31ma66gjzbgvs4p37pk2w5ym1ccxv-source.drv'...
+source> 
+source> thread 'main' (2) panicked at /nix/store/3yfzj394k5rrqgi6ky2s4ircrvrw06wr-source-src/build.rs:5:37:
+source> Cargo build-script variable DEBUG missing: environment variable not found
+source> note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: Cannot build '/nix/store/a1s31ma66gjzbgvs4p37pk2w5ym1ccxv-source.drv'.
+       Reason: builder failed with exit code 101.
+       Last 4 log lines:
+       >
+       > thread 'main' (2) panicked at /nix/store/3yfzj394k5rrqgi6ky2s4ircrvrw06wr-source-src/build.rs:5:37:
+       > Cargo build-script variable DEBUG missing: environment variable not found
+       > note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+       For full logs, run:
+         nix log /nix/store/a1s31ma66gjzbgvs4p37pk2w5ym1ccxv-source.drv
+error: build of resolved derivation '/nix/store/a1s31ma66gjzbgvs4p37pk2w5ym1ccxv-source.drv' failed
+error: Cannot build '/nix/store/6skvqfj1d56ny7win16dsnz4k7ygxfjc-source.drv'.
+       Reason: 1 dependency failed.
+error: Cannot build '/nix/store/zxy2acykdcczivfwgsm3l9df7c6494hw-cargo-dyndrv-build-dyndrv-repro.drv'.
+       Reason: 1 dependency failed.
+error: Cannot build '/nix/store/r2qpfnmf8wmmfybm7izdgq8yn6s6gq2p-dyndrv-repro-0.1.0.drv'.
+       Reason: 1 dependency failed.

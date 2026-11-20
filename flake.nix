@@ -109,6 +109,7 @@
               version
               ;
           };
+          repros = pkgs.callPackage ./nix/dyndrv-repros.nix { inherit craneLib; };
           dashboard = pkgs.callPackage ./nix/dashboard.nix { inherit version; };
           docs = pkgs.callPackage ./nix/docs.nix {
             inherit version;
@@ -177,6 +178,12 @@
             dyndrv-dev = benchmark.dynamic;
             crane-dev = benchmark.crane;
             dyndrv-tool = benchmark.tool;
+            dyndrv-repro-package-env = repros.package-env;
+            dyndrv-repro-build-env = repros.build-env;
+            dyndrv-repro-rustflags = repros.rustflags;
+            dyndrv-repro-lib-bin = repros.lib-bin;
+            dyndrv-repro-lib-bin-edited = repros.lib-bin-edited;
+            dyndrv-repro-cargo-control = repros.cargo-control;
           }
           // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
             image = pkgs.callPackage ./nix/image.nix { inherit sigiro version; };

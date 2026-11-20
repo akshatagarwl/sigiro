@@ -1,0 +1,5 @@
+this derivation will be built:
+  /nix/store/kdddjn56dvbkw80mgndzz3sxwy5ccffj-sigiro-ca-realisations-probe.drv
+error: Cannot build '/nix/store/kdddjn56dvbkw80mgndzz3sxwy5ccffj-sigiro-ca-realisations-probe.drv'.
+       Reason: local builds are disabled (max-jobs = 0)
+       Hint: set 'max-jobs' to a non-zero value to enable local builds, or configure remote builders via 'builders'

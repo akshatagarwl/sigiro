@@ -1,0 +1,34 @@
+warning: Git tree '<checkout>' is dirty
+warning: ignoring untrusted flake configuration setting 'extra-substituters'.
+Pass '--accept-flake-config' to trust it
+warning: ignoring untrusted flake configuration setting 'extra-trusted-public-keys'.
+Pass '--accept-flake-config' to trust it
+warning: Ignoring dynamic derivation /nix/store/v0vxxa6fadwgrp8qna3qfx9csa7ajpq2-cargo-dyndrv-build.drv^dyndrv-repro.drv while querying missing paths; not yet implemented
+this derivation will be built:
+  /nix/store/l5dxmp5js4arwm45sgxqk49f2b518wv9-dyndrv-repro-0.1.0.drv
+building '/nix/store/bl9vm362yz1pfx0i7cqh7czbx5vp1zkx-source.drv'...
+building '/nix/store/6qbi0pp18i61f26148ch4vcaphh8yhhm-cargo-dyndrv-build.drv'...
+cargo-dyndrv-build> Running phase: unpackPhase
+cargo-dyndrv-build> unpacking source archive /nix/store/8apwfxbxfiv4p47ac53b5mx85xni8b90-source
+cargo-dyndrv-build> source root is source
+cargo-dyndrv-build> Executing cargoSetupPostUnpackHook
+cargo-dyndrv-build> Finished cargoSetupPostUnpackHook
+cargo-dyndrv-build> Running phase: patchPhase
+cargo-dyndrv-build> Executing cargoSetupPostPatchHook
+cargo-dyndrv-build> Validating consistency between /build/source/Cargo.lock and /build/cargo-vendor-dir/Cargo.lock
+cargo-dyndrv-build> Finished cargoSetupPostPatchHook
+cargo-dyndrv-build> Running phase: updateAutotoolsGnuConfigScriptsPhase
+cargo-dyndrv-build> Running phase: configurePhase
+cargo-dyndrv-build> Running phase: buildPhase
+cargo-dyndrv-build> Executing cargoBuildHook
+cargo-dyndrv-build> cargoBuildHook flags: -j 4 --target x86_64-unknown-linux-gnu --offline --profile release --bin dyndrv-repro
+cargo-dyndrv-build> /nix/store/24r84wlm129yx9zsb2jn8y2475drmz4c-source.drv
+cargo-dyndrv-build> Finished cargoBuildHook
+cargo-dyndrv-build> Running phase: installPhase
+cargo-dyndrv-build> no Makefile or custom installPhase, doing nothing
+building '/nix/store/hn7myac2wdknvh58pqr02qnwgrnafbj1-source.drv'...
+building '/nix/store/ws96fddalr36rm8wx19nkg6nm6nrscs3-source.drv'...
+building '/nix/store/ai19pqmb31zmv3y7ld30m8chsdwxaj6y-source.drv'...
+building '/nix/store/aaaw410jncj1yhjvpfsx9wzgwjlnrlbw-source.drv'...
+building '/nix/store/wksflg2m48fh5nb52jz4k77g6argl3f0-cargo-dyndrv-build-dyndrv-repro.drv'...
+building '/nix/store/kxabigisxnp6cdrv27njmlapb5wx52h4-dyndrv-repro-0.1.0.drv'...

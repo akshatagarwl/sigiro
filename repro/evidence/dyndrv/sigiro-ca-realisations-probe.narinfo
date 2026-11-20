@@ -1,0 +1,10 @@
+StorePath: /nix/store/n7ljimksma8r35gzahrw4z8njy59vn5r-sigiro-ca-realisations-probe
+URL: nar/edaff3e7-3aac-4c34-a461-ba0b183c29d3.nar.zst
+Compression: zstd
+FileHash: sha256:84abeee23edc68dfaba383d4f59e5493d0ba64f367a666e2190caea9bbf2c4ca
+FileSize: 104
+NarHash: sha256:09h9m4483xq3qz6w3nlckcx4dga02xkq8b5h16jjr3r8naiy79p1
+NarSize: 144
+References: 
+Deriver: kdddjn56dvbkw80mgndzz3sxwy5ccffj-sigiro-ca-realisations-probe.drv
+Sig: akshat-sigiro-builds.cachix.org-1:SNSjSuusIt9ARfe09f7wn/pTRU0TkYp6eLRCozDWwb5X0z3V//xOTnH7POWgkMiwTqpzMaQKF8orokAitJlbAw==
