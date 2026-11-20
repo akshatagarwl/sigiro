@@ -88,19 +88,28 @@ key above through `nix.settings.extra-substituters` and
 `nix.settings.extra-trusted-public-keys` instead of editing the generated
 `nix.conf`.
 
-To upload existing project outputs after `nix build` or `nix flake check`:
+CI uses the official `cachix/cachix-action` with its post-build-hook daemon.
+The Cachix client is pinned through `.#cache-client`. New build outputs upload
+automatically; no repository scripts or changes to build commands are needed.
+Forked CI runs without a write token remain read-only.
 
-```sh
-bash nix/push-cache.sh
-```
+On hcpc, Nix's system-wide `post-build-hook` queues newly built Sigiro outputs
+to a systemd-managed Cachix daemon. Normal `nix build` and `nix flake check`
+commands trigger background uploads. The hook selects store names containing
+`-sigiro-`; required runtime closures upload too. Unrelated output roots are
+not queued. Do not use a whole-store watcher with this public cache: it could
+publish machine configuration and unrelated projects.
 
-The script uses the pinned `.#cache-client` package and uploads only explicitly
-selected Sigiro outputs and their required closures, not the whole Nix store.
-It reads `CACHIX_AUTH_TOKEN` in CI, or a local cache-scoped write token from
-`${XDG_CONFIG_HOME:-$HOME/.config}/cachix/akshat-sigiro-builds.token` (mode `0600`).
-Keep credentials outside the repository and Nix store; never put them in Nix
-settings. Use separate tokens for CI and each developer machine. Forked CI
-runs without a write token remain read-only.
+The PC daemon receives its cache-scoped token using systemd `LoadCredential`
+from `~hc/.config/cachix/akshat-sigiro-builds.token` (mode `0600`). CI uses its
+separate `CACHIX_AUTH_TOKEN` secret. Keep credentials outside the repository and
+Nix store; never put token contents in Nix settings.
+
+Hooks apply to newly built outputs, not substituted or already-valid paths.
+The initial existing PC artifacts have been seeded separately. Uploading is
+asynchronous, so a build can finish before its outputs become downloadable.
+For another machine, use Cachix's documented post-build-hook/daemon setup or
+`cachix watch-exec akshat-sigiro-builds -- nix build` for a one-off session.
 
 The exposed `rust-deps`, `rust-workspace-deps`, and `rust-wasm-deps` packages
 make Crane artifacts reusable alongside application, dashboard, docs, and check

@@ -24,6 +24,11 @@ jobs:
       - uses: jdx/aube-action@f82ca2f6c943dbde1904945d9f0ee1a0faf8e945 # v1.0.0
         with:
           version: 2.8.4
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        with:
+          name: akshat-sigiro-builds
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          installCommand: nix profile add .#cache-client
       # rustfmt, clippy (native and wasm32), the tests, the release binary with
       # its dashboard and docs, and the check that it links nothing but the OS.
       - run: nix flake check -L
@@ -69,11 +74,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Share Nix build artifacts
-        if: always()
-        env:
-          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-        run: bash nix/push-cache.sh
 
   auth:
     runs-on: ubuntu-latest
@@ -105,13 +105,13 @@ jobs:
         with:
           # DuckDB comes prebuilt from duckdb-static's cache (flake.nix).
           extra_nix_config: *shared-nix-cache
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        with:
+          name: akshat-sigiro-builds
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          installCommand: nix profile add .#cache-client
       - name: Verify the container image
         run: |
           set -euo pipefail
           nix build .#image
           docker load < result
-      - name: Share Nix build artifacts
-        if: always()
-        env:
-          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
-        run: bash nix/push-cache.sh
