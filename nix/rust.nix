@@ -25,7 +25,10 @@ let
   target = pkgsStatic.stdenv.hostPlatform.rust.rustcTarget;
   targetUpper = lib.toUpper (builtins.replaceStrings [ "-" ] [ "_" ] target);
   targetLower = builtins.replaceStrings [ "-" ] [ "_" ] target;
-  cc = pkgsStatic.stdenv.cc;
+  # Darwin build scripts share the application's Rust target triple. Its
+  # static compiler wrapper cannot link their SDK libraries (such as iconv).
+  # Native clang still links DuckDB's explicit static archive and OS libraries.
+  cc = if stdenv.hostPlatform.isDarwin then stdenv.cc else pkgsStatic.stdenv.cc;
 
   # Point cargo, cc-rs and the linker at the static toolchain for the target.
   # Build scripts still run on the build machine with its own compiler.
