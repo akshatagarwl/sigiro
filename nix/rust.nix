@@ -18,6 +18,7 @@
   file,
   nukeReferences,
   darwin,
+  writeShellScript,
   version,
 }:
 let
@@ -27,12 +28,22 @@ let
   targetUpper = lib.toUpper (builtins.replaceStrings [ "-" ] [ "_" ] target);
   targetLower = builtins.replaceStrings [ "-" ] [ "_" ] target;
   cc = pkgsStatic.stdenv.cc;
+  # Rust's standard library links iconv on Apple targets. Darwin build scripts
+  # share the application's target triple and so this linker, whose search
+  # path has no iconv: give it the static archive (in libiconv's dev output).
+  linker =
+    if stdenv.hostPlatform.isDarwin then
+      writeShellScript "sigiro-darwin-linker" ''
+        exec ${cc}/bin/${cc.targetPrefix}cc "$@" -L${lib.getDev pkgsStatic.libiconv}/lib
+      ''
+    else
+      "${cc}/bin/${cc.targetPrefix}cc";
 
   # Point cargo, cc-rs and the linker at the static toolchain for the target.
   # Build scripts still run on the build machine with its own compiler.
   targetEnv = {
     CARGO_BUILD_TARGET = target;
-    "CARGO_TARGET_${targetUpper}_LINKER" = "${cc}/bin/${cc.targetPrefix}cc";
+    "CARGO_TARGET_${targetUpper}_LINKER" = "${linker}";
     "CC_${targetLower}" = "${cc}/bin/${cc.targetPrefix}cc";
     "CXX_${targetLower}" = "${cc}/bin/${cc.targetPrefix}c++";
     "AR_${targetLower}" = "${cc.bintools.bintools}/bin/${cc.targetPrefix}ar";
@@ -69,11 +80,6 @@ let
     inherit src version;
     pname = "sigiro";
     strictDeps = true;
-    # Darwin's Rust build scripts use the same target triple as the application.
-    # Both need the static iconv archive, which lives in its dev output.
-    buildInputs = lib.optionals stdenv.hostPlatform.isDarwin [
-      (lib.getDev pkgsStatic.libiconv)
-    ];
     env = targetEnv;
   };
 

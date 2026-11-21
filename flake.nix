@@ -113,14 +113,17 @@
               cc = pkgs.pkgsStatic.stdenv.cc;
               # Give GCC a supported linker name and the static-target prefix;
               # the native mold/Wild packages do not provide these aliases.
+              # Unwrapped: the native wrapper assumes a glibc dynamic link and
+              # adds glibc's loader, which aarch64 GCC's `-Bstatic` does not stop.
+              linkerExe = lib.getExe pkgs."${linker}-unwrapped";
               linkerBins = pkgs.linkFarm "sigiro-${linker}-bin" [
                 {
                   name = "${cc.targetPrefix}ld.bfd";
-                  path = lib.getExe pkgs.${linker};
+                  path = linkerExe;
                 }
                 {
                   name = "ld.bfd";
-                  path = lib.getExe pkgs.${linker};
+                  path = linkerExe;
                 }
               ];
               driver = pkgs.writeShellScript "sigiro-${linker}-linker" ''
