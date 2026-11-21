@@ -93,23 +93,30 @@ let
     ++ lib.optionals stdenv.hostPlatform.isDarwin [
       darwin.sigtool
     ];
-    # Scrubbing cannot make a dynamic dependency portable: it corrupts the
-    # loader path. Reject those paths before touching Mach-O debug references.
+    # The binary runs outside Nix, so any store path left in it is dead: debug
+    # info naming the static libraries' sources, mostly. Scrub them all, and
+    # let `allowedReferences = [ ]` (on the bundle) catch a real dependency.
     postFixup =
-      lib.optionalString stdenv.hostPlatform.isDarwin ''
-        otool -L "$out/bin/sigiro" > runtime-libraries.txt
-        if tail -n +2 runtime-libraries.txt | grep -q '/nix/store/'; then
-          cat runtime-libraries.txt >&2
-          echo "sigiro still links a Nix runtime library" >&2
-          exit 1
-        fi
-      ''
-      + ''
-        nuke-refs "$out/bin/sigiro"
-      ''
-      + lib.optionalString stdenv.hostPlatform.isDarwin ''
-        codesign --force --sign - "$out/bin/sigiro"
-      '';
+      if stdenv.hostPlatform.isDarwin then
+        # Scrubbing cannot make a dynamic dependency portable: it corrupts the
+        # loader path. Reject those first, and re-sign the edited Mach-O.
+        # buildDepsOnly reuses these arguments but builds no binary.
+        ''
+          if [ -e "$out/bin/sigiro" ]; then
+            otool -L "$out/bin/sigiro" > runtime-libraries.txt
+            if tail -n +2 runtime-libraries.txt | grep -q '/nix/store/'; then
+              cat runtime-libraries.txt >&2
+              echo "sigiro still links a Nix runtime library" >&2
+              exit 1
+            fi
+            nuke-refs "$out/bin/sigiro"
+            codesign --force --sign - "$out/bin/sigiro"
+          fi
+        ''
+      else
+        ''
+          nuke-refs "$out/bin/sigiro"
+        '';
     # Cargo.toml keeps line tables (`debug = "line-tables-only"`,
     # `strip = false`) for in-process symbolization of self-profiles. Nix's
     # default `strip -S` would remove them.
