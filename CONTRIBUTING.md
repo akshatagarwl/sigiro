@@ -77,17 +77,22 @@ from `Cargo.toml`.
   there is no lockfile translation or second package manager.
 * The docs' API reference is rendered from `sigiro openapi`, the spec of the
   binary being built, rather than from the live sigiro.com spec.
-* `image.nix`: the container image, which holds just the static binary.
-  `nix build .#image` builds this Linux system's image (`docker load < result`).
-* `image-index.nix`: the multi-platform image. `nix build .#images` is an OCI
-  layout holding the linux/amd64 and linux/arm64 images under one tag. Each
-  binary is compiled natively on its own system and fetched from the cache;
-  assembling the images only copies files, so any Linux host builds both
-  without QEMU. `nix run .#publish-image -- ghcr.io/akshatagarwl/sigiro:<tag>`
-  pushes it (log in first), uploading only the layers the registry lacks. The
-  Image workflow (`.github/workflows/image.yml`) runs the same steps: it builds
-  both binaries on native runners, checks each image becomes healthy, and with
-  `push` publishes.
+* `image.nix`: nix2container image metadata referencing just the static binary;
+  no image archive is stored in the Nix store. `nix build .#image` builds this
+  Linux system's metadata; `nix run .#image.copyToDockerDaemon` loads Docker.
+  The pinned `akshatagarwl/nix2container` fork preserves Docker's Healthcheck
+  field (upstream PR #198); return upstream once that fix is merged.
+* `image-check.nix`: sandboxed config, ownership, layer and binary-identity
+  checks, run by `nix flake check` without Docker or network access.
+* `publish-image.nix`: `nix run .#publish-image -- ghcr.io/akshatagarwl/sigiro:<tag>`
+  pushes the linux/amd64 and linux/arm64 images as `<tag>-amd64` and
+  `<tag>-arm64`, then makes `<tag>` an index over both, skipping blobs the
+  registry already has (log in with `docker login` first). Each binary is
+  compiled natively on its own system and fetched from the cache; publishing
+  needs both cached binaries but no QEMU. Platform verification builds and
+  health-checks images on native runners. The Release workflow publishes
+  version and `latest` image tags on version-tag releases; manual runs remain
+  artifact-only. There is no separate image workflow.
 
 After changing `dashboard/pnpm-lock.yaml` or `www/pnpm-lock.yaml`, update the
 matching `hash` in `nix/dashboard.nix` or `nix/docs.nix`: set it to `""`,

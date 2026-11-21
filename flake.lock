@@ -33,6 +33,27 @@
         "type": "github"
       }
     },
+    "nix2container": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1793778058,
+        "narHash": "sha256-xrnYTrh6u9amwZMb+8ewuFRt6BK95CHjl0MnqmS1/TQ=",
+        "owner": "akshatagarwl",
+        "repo": "nix2container",
+        "rev": "fad44f49b49bf0501546967e48d484550730b3e8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "akshatagarwl",
+        "ref": "healthcheck",
+        "repo": "nix2container",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1794890597,
@@ -53,6 +74,7 @@
       "inputs": {
         "crane": "crane",
         "duckdb-static": "duckdb-static",
+        "nix2container": "nix2container",
         "nixpkgs": [
           "duckdb-static",
           "nixpkgs"

@@ -1,8 +1,9 @@
 name: Release
 
 # A v* tag builds the three CLI archives in the build matrix and publishes them,
-# with SHA256SUMS, as a GitHub Release. A manual run builds and uploads workflow
-# artifacts only.
+# with SHA256SUMS, as a GitHub Release, and publishes the linux/amd64 +
+# linux/arm64 container image to ghcr.io/akshatagarwl/sigiro. A manual run
+# builds and uploads workflow artifacts only.
 #
 # tag-on-main.yml also calls this workflow (workflow_call) right after it pushes
 # the tag, because a tag pushed with GITHUB_TOKEN starts no workflow run. In a
@@ -185,3 +186,38 @@ jobs:
           gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "sigiro ${TAG#v}" --generate-notes
+
+  # Tags only. The build matrix compiled both Linux binaries natively and pushed
+  # them to the binary cache; this job fetches them and publishes the image.
+  # Assembling it only copies those binaries: no QEMU, no Docker build.
+  # GITHUB_TOKEN can write ghcr.io/akshatagarwl/sigiro because the package is
+  # linked to this repository (the first push creates it that way).
+  image:
+    needs: [preflight, build]
+    if: needs.preflight.outputs.tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          extra_nix_config: |
+            extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+            extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+      # Substitute-only: the binaries the build matrix released, never a
+      # rebuild (or emulation) on this runner.
+      - name: Fetch binaries
+        run: nix build -L --max-jobs 0 .#packages.x86_64-linux.sigiro .#packages.aarch64-linux.sigiro
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          nix run .#publish-image -- "ghcr.io/akshatagarwl/sigiro:${TAG#v}" ghcr.io/akshatagarwl/sigiro:latest

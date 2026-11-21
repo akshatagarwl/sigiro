@@ -26,6 +26,13 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # The container image builder (nix/image.nix). A fork of
+    # nlewo/nix2container carrying nlewo/nix2container#198, which keeps the
+    # image's Healthcheck; return to upstream once that merges.
+    nix2container = {
+      url = "github:akshatagarwl/nix2container/healthcheck";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -35,6 +42,7 @@
       duckdb-static,
       crane,
       rust-overlay,
+      nix2container,
     }:
     let
       inherit (nixpkgs) lib;
@@ -151,19 +159,18 @@
                 CARGO_TARGET_DIR = "target/dev-${linker}";
               };
             };
-          # One image per Linux system, all assembled by this system from the
-          # binaries the others build.
+          # One image per Linux system, all assembled by this system's tools
+          # from the binaries the others build.
+          containerTools = nix2container.packages.${system};
           linuxImages = lib.mapAttrs (
             architecture: imageSystem:
             pkgs.callPackage ./nix/image.nix {
               inherit version architecture;
+              inherit (containerTools) nix2container;
               inherit (bySystem.${imageSystem}.packages) sigiro;
             }
           ) imageSystems;
-          imageIndex = pkgs.callPackage ./nix/image-index.nix {
-            inherit version;
-            images = linuxImages;
-          };
+          hostArchitecture = pkgs.stdenv.hostPlatform.go.GOARCH;
           sigiro = rust.bundle {
             inherit dashboard docs;
             # `sigiro --version` names the commit.
@@ -186,17 +193,29 @@
             rust-wasm-deps = rust.wasmArtifacts;
           }
           // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-            # This system's image: `docker load < result`.
-            image = linuxImages.${pkgs.stdenv.hostPlatform.go.GOARCH};
-            # Every Linux platform under one tag (nix/image-index.nix).
-            images = imageIndex.index;
-            publish-image = imageIndex.publish;
+            # This system's image: `nix run .#image.copyToDockerDaemon`.
+            image = linuxImages.${hostArchitecture};
+            # Every Linux platform under one tag (nix/publish-image.nix).
+            publish-image = pkgs.callPackage ./nix/publish-image.nix {
+              skopeo = containerTools.skopeo-nix2container;
+              images = linuxImages;
+            };
           };
 
-          checks = rust.checks // {
-            inherit sigiro;
-            portable = rust.portable sigiro;
-          };
+          checks =
+            rust.checks
+            // {
+              inherit sigiro;
+              portable = rust.portable sigiro;
+            }
+            // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+              image = pkgs.callPackage ./nix/image-check.nix {
+                skopeo = containerTools.skopeo-nix2container;
+                image = linuxImages.${hostArchitecture};
+                architecture = hostArchitecture;
+                inherit sigiro;
+              };
+            };
 
           devShells = {
             javascript = pkgs.mkShell {

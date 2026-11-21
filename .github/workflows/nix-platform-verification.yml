@@ -1,8 +1,18 @@
 name: Nix platform verification
 
+# Builds and checks sigiro natively on every release system, including each
+# Linux container image. Pushes to main that change the build run it; the
+# binaries it pushes to the cache are what the release's image job fetches.
 on:
   push:
-    branches: [verify/nix-platform-builds]
+    branches: [main]
+    paths:
+      - flake.nix
+      - flake.lock
+      - nix/**
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .github/workflows/nix-platform-verification.yml
   workflow_dispatch:
 
 permissions:
@@ -79,6 +89,24 @@ jobs:
           for linker in default mold wild; do
             nix develop ".#$linker" --command bash "$RUNNER_TEMP/linker-smoke.sh"
           done
+      # This system's image starts and reports ready on its own architecture.
+      # `nix flake check` already checked its config and contents.
+      - name: Image health
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          nix run .#image.copyToDockerDaemon
+          image="$(nix eval --raw .#image.imageRefUnsafe)"
+          docker run -d --name sigiro "$image"
+          status=starting
+          for _ in $(seq 90); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' sigiro)"
+            [ "$status" = healthy ] && break
+            sleep 2
+          done
+          docker logs sigiro
+          [ "$status" = healthy ] || { echo "::error::image did not become healthy ($status)"; exit 1; }
+          docker inspect -f '{{.Os}}/{{.Architecture}}' "$image"
       - name: Package verified executable
         env:
           SYSTEM: ${{ matrix.system }}

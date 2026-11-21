@@ -31,5 +31,4 @@ jobs:
       - name: Verify the container image
         run: |
           set -euo pipefail
-          nix build .#image
-          docker load < result
+          nix run .#image.copyToDockerDaemon
