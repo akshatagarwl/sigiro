@@ -1,0 +1,126 @@
+name: Image
+
+# Builds the multi-platform container image (linux/amd64 + linux/arm64) with
+# Nix, and with `push` publishes it. Each binary compiles natively on its own
+# runner (usually a binary-cache hit); one runner then assembles both images
+# and the index from those binaries, which only copies files: no QEMU, no
+# Dockerfile, no BuildKit cache (nix/image-index.nix).
+#
+# Publishing needs a token that can write the target package. GITHUB_TOKEN can
+# write only packages this repository may publish to. Pull requests that touch
+# the image build it without publishing.
+on:
+  pull_request:
+    paths:
+      - flake.nix
+      - flake.lock
+      - nix/image.nix
+      - nix/image-index.nix
+      - .github/workflows/image.yml
+  workflow_dispatch:
+    inputs:
+      push:
+        description: Publish to the registry. Off builds and checks only.
+        type: boolean
+        default: false
+      repository:
+        description: Image repository to publish to.
+        type: string
+        default: ghcr.io/sigiroai/sigiro
+      latest:
+        description: Also tag the image latest.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  binary:
+    name: ${{ matrix.system }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          extra_nix_config: |
+            extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+            extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+      # Pushes the binary, so the image job fetches it instead of building it.
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        with:
+          name: akshat-sigiro-builds
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          installCommand: nix profile add .#cache-client
+          # extra_nix_config already lists this cache. `cachix use` would write a
+          # user-level `substituters =` that drops the duckdb-static cache.
+          skipAddingSubstituter: true
+      - name: Build
+        run: nix build -L .#sigiro
+      - name: Portable
+        run: nix build -L '.#checks.${{ matrix.system }}.portable'
+      # Each image starts and reports ready on its own architecture.
+      - name: Image health
+        run: |
+          set -euo pipefail
+          nix build -L .#image
+          image="$(docker load < result | sed -n 's/^Loaded image: //p')"
+          docker run -d --name sigiro "$image"
+          for _ in $(seq 90); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' sigiro)"
+            [ "$status" = healthy ] && break
+            sleep 2
+          done
+          docker logs sigiro
+          [ "$status" = healthy ] || { echo "::error::image did not become healthy ($status)"; exit 1; }
+          docker inspect -f '{{.Architecture}}' "$image"
+
+  image:
+    needs: binary
+    # A fork's run cannot fill the cache, so it has no arm64 binary to fetch.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          extra_nix_config: |
+            extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+            extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+      # Substitute-only: the binaries come from the cache the binary jobs
+      # filled, never from a build (or emulation) on this runner.
+      - name: Fetch binaries
+        run: nix build -L --max-jobs 0 .#packages.x86_64-linux.sigiro .#packages.aarch64-linux.sigiro
+      # Prints the index and both platforms.
+      - name: Assemble
+        run: nix build -L .#images
+      - name: Publish
+        if: inputs.push
+        env:
+          REPOSITORY: ${{ inputs.repository }}
+          LATEST: ${{ inputs.latest }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          version="$(nix eval --raw .#sigiro.version)"
+          refs=("$REPOSITORY:$version")
+          [ "$LATEST" = true ] && refs+=("$REPOSITORY:latest")
+          nix run .#publish-image -- "${refs[@]}"

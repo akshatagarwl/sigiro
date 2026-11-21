@@ -46,6 +46,13 @@
         "aarch64-darwin"
       ];
 
+      # Container platforms: Docker architecture name -> the system whose
+      # static binary it ships.
+      imageSystems = {
+        amd64 = "x86_64-linux";
+        arm64 = "aarch64-linux";
+      };
+
       cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
       version = cargoToml.package.version;
       toolchainFile = (builtins.fromTOML (builtins.readFile ./rust-toolchain.toml)).toolchain;
@@ -144,6 +151,19 @@
                 CARGO_TARGET_DIR = "target/dev-${linker}";
               };
             };
+          # One image per Linux system, all assembled by this system from the
+          # binaries the others build.
+          linuxImages = lib.mapAttrs (
+            architecture: imageSystem:
+            pkgs.callPackage ./nix/image.nix {
+              inherit version architecture;
+              inherit (bySystem.${imageSystem}.packages) sigiro;
+            }
+          ) imageSystems;
+          imageIndex = pkgs.callPackage ./nix/image-index.nix {
+            inherit version;
+            images = linuxImages;
+          };
           sigiro = rust.bundle {
             inherit dashboard docs;
             # `sigiro --version` names the commit.
@@ -166,7 +186,11 @@
             rust-wasm-deps = rust.wasmArtifacts;
           }
           // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-            image = pkgs.callPackage ./nix/image.nix { inherit sigiro version; };
+            # This system's image: `docker load < result`.
+            image = linuxImages.${pkgs.stdenv.hostPlatform.go.GOARCH};
+            # Every Linux platform under one tag (nix/image-index.nix).
+            images = imageIndex.index;
+            publish-image = imageIndex.publish;
           };
 
           checks = rust.checks // {

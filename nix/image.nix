@@ -2,11 +2,18 @@
 # else. It keeps the contract of the distroless image it replaces: the binary at
 # /usr/local/bin/sigiro, data in /var/lib/sigiro, user nonroot (65532), the
 # shell-free healthcheck, and `serve` by default.
+#
+# `sigiro` may belong to another Linux system than the one building the image:
+# assembling it only copies the static binary, so `architecture` names the
+# binary's architecture and no emulator is needed (nix/image-index.nix).
 {
   lib,
+  stdenv,
   dockerTools,
   sigiro,
   version,
+  # Docker's name for the binary's architecture (amd64, arm64).
+  architecture ? stdenv.hostPlatform.go.GOARCH,
 }:
 let
   seconds = s: s * 1000000000;
@@ -14,7 +21,7 @@ in
 dockerTools.buildLayeredImage {
   name = "ghcr.io/sigiroai/sigiro";
   tag = version;
-
+  inherit architecture;
   # Copied, not referenced: the image holds one file, not a store closure.
   extraCommands = ''
     mkdir -p usr/local/bin var/lib/sigiro tmp etc

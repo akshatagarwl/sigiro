@@ -78,8 +78,16 @@ from `Cargo.toml`.
 * The docs' API reference is rendered from `sigiro openapi`, the spec of the
   binary being built, rather than from the live sigiro.com spec.
 * `image.nix`: the container image, which holds just the static binary.
-  `nix build .#image` builds it for the host's Linux system only. Nothing here
-  publishes the multi-arch `ghcr.io/sigiroai/sigiro` manifest yet.
+  `nix build .#image` builds this Linux system's image (`docker load < result`).
+* `image-index.nix`: the multi-platform image. `nix build .#images` is an OCI
+  layout holding the linux/amd64 and linux/arm64 images under one tag. Each
+  binary is compiled natively on its own system and fetched from the cache;
+  assembling the images only copies files, so any Linux host builds both
+  without QEMU. `nix run .#publish-image -- ghcr.io/sigiroai/sigiro:<tag>`
+  pushes it (log in first), uploading only the layers the registry lacks. The
+  Image workflow (`.github/workflows/image.yml`) runs the same steps: it builds
+  both binaries on native runners, checks each image becomes healthy, and with
+  `push` publishes.
 
 After changing `dashboard/pnpm-lock.yaml` or `www/pnpm-lock.yaml`, update the
 matching `hash` in `nix/dashboard.nix` or `nix/docs.nix`: set it to `""`,
