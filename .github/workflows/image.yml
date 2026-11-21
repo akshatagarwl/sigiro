@@ -6,9 +6,10 @@ name: Image
 # and the index from those binaries, which only copies files: no QEMU, no
 # Dockerfile, no BuildKit cache (nix/image-index.nix).
 #
-# Publishing needs a token that can write the target package. GITHUB_TOKEN can
-# write only packages this repository may publish to. Pull requests that touch
-# the image build it without publishing.
+# Publishing uses GITHUB_TOKEN: the first push creates
+# ghcr.io/akshatagarwl/sigiro linked to this repository, so later runs can
+# write it. Publishing stays a manual run. Pull requests that touch the image
+# build it without publishing.
 on:
   pull_request:
     paths:
@@ -26,7 +27,7 @@ on:
       repository:
         description: Image repository to publish to.
         type: string
-        default: ghcr.io/sigiroai/sigiro
+        default: ghcr.io/akshatagarwl/sigiro
       latest:
         description: Also tag the image latest.
         type: boolean

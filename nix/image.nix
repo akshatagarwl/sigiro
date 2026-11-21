@@ -1,7 +1,7 @@
-# The container image (ghcr.io/sigiroai/sigiro): the static binary and nothing
-# else. It keeps the contract of the distroless image it replaces: the binary at
-# /usr/local/bin/sigiro, data in /var/lib/sigiro, user nonroot (65532), the
-# shell-free healthcheck, and `serve` by default.
+# The container image (ghcr.io/akshatagarwl/sigiro): the static binary and
+# nothing else. It keeps the contract of the distroless image it replaces: the
+# binary at /usr/local/bin/sigiro, data in /var/lib/sigiro, user nonroot
+# (65532), the shell-free healthcheck, and `serve` by default.
 #
 # `sigiro` may belong to another Linux system than the one building the image:
 # assembling it only copies the static binary, so `architecture` names the
@@ -19,7 +19,7 @@ let
   seconds = s: s * 1000000000;
 in
 dockerTools.buildLayeredImage {
-  name = "ghcr.io/sigiroai/sigiro";
+  name = "ghcr.io/akshatagarwl/sigiro";
   tag = version;
   inherit architecture;
   # Copied, not referenced: the image holds one file, not a store closure.

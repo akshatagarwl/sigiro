@@ -83,7 +83,7 @@ from `Cargo.toml`.
   layout holding the linux/amd64 and linux/arm64 images under one tag. Each
   binary is compiled natively on its own system and fetched from the cache;
   assembling the images only copies files, so any Linux host builds both
-  without QEMU. `nix run .#publish-image -- ghcr.io/sigiroai/sigiro:<tag>`
+  without QEMU. `nix run .#publish-image -- ghcr.io/akshatagarwl/sigiro:<tag>`
   pushes it (log in first), uploading only the layers the registry lacks. The
   Image workflow (`.github/workflows/image.yml`) runs the same steps: it builds
   both binaries on native runners, checks each image becomes healthy, and with

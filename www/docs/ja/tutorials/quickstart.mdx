@@ -53,7 +53,7 @@ sigiro serve
 docker run -d --name sigiro --restart unless-stopped \
   -e SIGIRO_BIND=0.0.0.0 \
   -p 127.0.0.1:4317:4317 -p 127.0.0.1:4318:4318 -p 127.0.0.1:9999:9999 \
-  -v sigiro-data:/var/lib/sigiro ghcr.io/sigiroai/sigiro
+  -v sigiro-data:/var/lib/sigiro ghcr.io/akshatagarwl/sigiro
 ```
 
 名前付きボリュームにより、コンテナを再起動してもデータが残ります。再起動ポリシーに
