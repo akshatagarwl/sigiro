@@ -17,6 +17,8 @@
   cacert,
   file,
   nukeReferences,
+  darwin,
+  writeShellScript,
   version,
 }:
 let
@@ -25,16 +27,24 @@ let
   target = pkgsStatic.stdenv.hostPlatform.rust.rustcTarget;
   targetUpper = lib.toUpper (builtins.replaceStrings [ "-" ] [ "_" ] target);
   targetLower = builtins.replaceStrings [ "-" ] [ "_" ] target;
-  # Darwin build scripts share the application's Rust target triple. Its
-  # static compiler wrapper cannot link their SDK libraries (such as iconv).
-  # Native clang still links DuckDB's explicit static archive and OS libraries.
-  cc = if stdenv.hostPlatform.isDarwin then stdenv.cc else pkgsStatic.stdenv.cc;
+  cc = pkgsStatic.stdenv.cc;
+  # Rust's standard library links iconv on Apple targets. Darwin build scripts
+  # share the application's target triple and so this linker, whose search
+  # path has no iconv: give it the static archive (in libiconv's dev output).
+  linker =
+    if stdenv.hostPlatform.isDarwin then
+      writeShellScript "sigiro-darwin-linker" ''
+        exec ${cc}/bin/${cc.targetPrefix}cc "$@" -L${lib.getDev pkgsStatic.libiconv}/lib
+      ''
+    else
+      "${cc}/bin/${cc.targetPrefix}cc";
 
   # Point cargo, cc-rs and the linker at the static toolchain for the target.
-  # Build scripts still run on the build machine with its own compiler.
+  # Linux build scripts target the build machine's own triple and keep its
+  # compiler; Darwin build scripts share the target triple (see `linker`).
   targetEnv = {
     CARGO_BUILD_TARGET = target;
-    "CARGO_TARGET_${targetUpper}_LINKER" = "${cc}/bin/${cc.targetPrefix}cc";
+    "CARGO_TARGET_${targetUpper}_LINKER" = "${linker}";
     "CC_${targetLower}" = "${cc}/bin/${cc.targetPrefix}cc";
     "CXX_${targetLower}" = "${cc}/bin/${cc.targetPrefix}c++";
     "AR_${targetLower}" = "${cc.bintools.bintools}/bin/${cc.targetPrefix}ar";
@@ -78,13 +88,36 @@ let
   binArgs = commonArgs // {
     cargoExtraArgs = "--locked --package sigiro --bin sigiro";
     doCheck = false;
-    nativeBuildInputs = [ nukeReferences ];
+    nativeBuildInputs = [
+      nukeReferences
+    ]
+    ++ lib.optionals stdenv.hostPlatform.isDarwin [
+      darwin.sigtool
+    ];
     # The binary runs outside Nix, so any store path left in it is dead: debug
     # info naming the static libraries' sources, mostly. Scrub them all, and
     # let `allowedReferences = [ ]` (on the bundle) catch a real dependency.
-    postFixup = ''
-      nuke-refs "$out/bin/sigiro"
-    '';
+    postFixup =
+      if stdenv.hostPlatform.isDarwin then
+        # Scrubbing cannot make a dynamic dependency portable: it corrupts the
+        # loader path. Reject those first, and re-sign the edited Mach-O.
+        # buildDepsOnly reuses these arguments but builds no binary.
+        ''
+          if [ -e "$out/bin/sigiro" ]; then
+            otool -L "$out/bin/sigiro" > runtime-libraries.txt
+            if tail -n +2 runtime-libraries.txt | grep -q '/nix/store/'; then
+              cat runtime-libraries.txt >&2
+              echo "sigiro still links a Nix runtime library" >&2
+              exit 1
+            fi
+            nuke-refs "$out/bin/sigiro"
+            codesign --force --sign - "$out/bin/sigiro"
+          fi
+        ''
+      else
+        ''
+          nuke-refs "$out/bin/sigiro"
+        '';
     # Cargo.toml keeps line tables (`debug = "line-tables-only"`,
     # `strip = false`) for in-process symbolization of self-profiles. Nix's
     # default `strip -S` would remove them.
