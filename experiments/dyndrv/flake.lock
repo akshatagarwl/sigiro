@@ -1,0 +1,128 @@
+{
+  "nodes": {
+    "cargo-dyndrv": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1789594638,
+        "narHash": "sha256-/c+ZhXCAyalEZoVld0qnA86hnLS9UqE3FJFAMKW2DZ4=",
+        "owner": "obsidiansystems",
+        "repo": "cargo-dyndrv",
+        "rev": "d5245b85f82627fcaf041e2c57c8aeb7d57d20fe",
+        "type": "github"
+      },
+      "original": {
+        "owner": "obsidiansystems",
+        "repo": "cargo-dyndrv",
+        "rev": "d5245b85f82627fcaf041e2c57c8aeb7d57d20fe",
+        "type": "github"
+      }
+    },
+    "crane": {
+      "locked": {
+        "lastModified": 1794962885,
+        "narHash": "sha256-zrweT2tXbcWiJMACOhOr2eYFJKVa6g59ouRaZ3BS5Do=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "95e62def851e9d650f0eab63cb4f59a3306e20bd",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ipetkov",
+        "repo": "crane",
+        "type": "github"
+      }
+    },
+    "duckdb-static": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "lastModified": 1795118163,
+        "narHash": "sha256-/cA+jzn3h4q5MZS7ZMH/pPfttr+BL2QPX6bJf8jpfLE=",
+        "owner": "akshatagarwl",
+        "repo": "duckdb-static",
+        "rev": "3e038ad137f7df15a4f4667c2420a45d34c274d4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "akshatagarwl",
+        "repo": "duckdb-static",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1794890597,
+        "narHash": "sha256-lME2lHoDHAaSHP3/okgiVoJ0icVEvsQH8LeU3We7tcc=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "04906337b6d53e8bb0eaf0470ae9f070a4d4eb55",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "cargo-dyndrv": "cargo-dyndrv",
+        "nixpkgs": [
+          "sigiro",
+          "nixpkgs"
+        ],
+        "sigiro": "sigiro"
+      }
+    },
+    "rust-overlay": {
+      "inputs": {
+        "nixpkgs": [
+          "sigiro",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1794995857,
+        "narHash": "sha256-XWidHsxcg0iQuGea4URxcPV3rY+dB595L3Xs2xFrsPo=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "6b05b928a40211beecaaa294e6f719aa2145a2a8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "sigiro": {
+      "inputs": {
+        "crane": "crane",
+        "duckdb-static": "duckdb-static",
+        "nixpkgs": [
+          "sigiro",
+          "duckdb-static",
+          "nixpkgs"
+        ],
+        "rust-overlay": "rust-overlay"
+      },
+      "locked": {
+        "path": "../..",
+        "type": "path"
+      },
+      "original": {
+        "path": "../..",
+        "type": "path"
+      },
+      "parent": []
+    }
+  },
+  "root": "root",
+  "version": 7
+}
