@@ -110,6 +110,9 @@ jobs:
           name: akshat-sigiro-builds
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
           installCommand: nix profile add .#cache-client
+          # extra_nix_config already lists this cache. `cachix use` would write a
+          # user-level `substituters =` that drops the duckdb-static cache.
+          skipAddingSubstituter: true
 
       # `sigiro --version` names the commit (flake.nix passes it in).
       - name: Build

@@ -24,6 +24,9 @@ jobs:
           name: akshat-sigiro-builds
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
           installCommand: nix profile add .#cache-client
+          # extra_nix_config already lists this cache. `cachix use` would write a
+          # user-level `substituters =` that drops the duckdb-static cache.
+          skipAddingSubstituter: true
       - name: Require PC-built outputs without compiling
         run: |
           nix build --max-jobs 0 --no-link -L \
