@@ -1,5 +1,8 @@
 # Results-first logs: local ClickStack-inspired iteration
 
+Historical command names are preserved below. For current Nix/pnpm setup and
+commands, see [Contributing](../CONTRIBUTING.md).
+
 Iteration base: `660b4e28b0367cab2c95de7aad834e98203b32a6`, branch `feat/base-ui-explorer`. This follows the [initial extraction](observability-ui.md), not a dashboard-wide Base UI migration. **Solo local self-verification, not independent review or CI.** No push, PR, merge, deployment, infrastructure change or publication.
 
 Preview: <http://127.0.0.1:19990/dashboard/logs/?timestamp=1794243300000-1794243450000>.

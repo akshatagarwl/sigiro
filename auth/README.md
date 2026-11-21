@@ -31,11 +31,11 @@ PostgreSQL remains private. The service connects directly to it over the Alchemy
 ## Local development
 
 ```sh
-cp .env.example .env
-aube install --frozen-lockfile
-aube run check
-aube run lint
-docker buildx bake sigiro-auth --load
+# From the repository root
+nix develop .#javascript
+pnpm -C auth install --frozen-lockfile
+pnpm -C auth run check
+pnpm -C auth run dev
 ```
 
 The automated email-delivery test has been retired. Validate authorization flows by driving the running service with a real agent and inspecting traces and call-stack diffs. The Worker test environment remains available for local and agent-driven E2E workflows.
@@ -43,10 +43,10 @@ The automated email-delivery test has been retired. Validate authorization flows
 ## Build and migration
 
 ```sh
-aube run check
-aube run build
-aube run migrate
-docker buildx bake sigiro-auth --load
+# From the repository root, inside the Nix shell
+pnpm -C auth run check
+pnpm -C auth run build
+pnpm -C auth --silent run schema:sql
 ```
 
 Run migrations from a trusted network path before deployment. The migrator uses Better Auth's programmatic migration API and rejects unsafe schema changes.

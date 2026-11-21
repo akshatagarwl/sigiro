@@ -23,7 +23,7 @@ docker run -d --name sigiro-trial --restart unless-stopped \
   -p 127.0.0.1:14318:4318 \
   -p 127.0.0.1:9999:9999 \
   -v sigiro-trial-data:/var/lib/sigiro \
-  ghcr.io/sigiroai/sigiro
+  ghcr.io/akshatagarwl/sigiro
 curl --fail http://127.0.0.1:9999/health
 ```
 

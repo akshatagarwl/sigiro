@@ -294,10 +294,16 @@ static PUBLIC_SPEC: std::sync::LazyLock<utoipa::openapi::OpenApi> =
         spec
     });
 
+/// The public OpenAPI document, as served at `/openapi.json`. Also printed by
+/// `sigiro openapi` for the docs build.
+pub fn public_openapi() -> &'static utoipa::openapi::OpenApi {
+    &PUBLIC_SPEC
+}
+
 /// GET /openapi.json — the single public discoverability surface: the
 /// machine-readable OpenAPI contract. No Swagger UI or extra doc endpoints.
 async fn openapi_json() -> axum::Json<&'static utoipa::openapi::OpenApi> {
-    axum::Json(&*PUBLIC_SPEC)
+    axum::Json(public_openapi())
 }
 
 async fn oauth_protected_resource_metadata(
@@ -782,7 +788,9 @@ pub async fn run_servers(
         pool: Arc::clone(&pool),
         admin_conn,
         alerts,
-        http_client: reqwest::Client::new(),
+        http_client: crate::tls::http_client()
+            .build()
+            .context("failed to build the HTTP client")?,
         router: Arc::clone(&router),
         auth_mode: auth_mode.clone(),
         data_dir,

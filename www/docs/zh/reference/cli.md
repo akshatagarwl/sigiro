@@ -54,7 +54,7 @@ sigiro 在内部使用官方的 Agent Auth 实现，不提供第二个用于注�
 | `--otlp-http-port <PORT>` | `SIGIRO_OTLP_HTTP_PORT` | `4318`                  |
 | `--otlp-grpc-port <PORT>` | `SIGIRO_GRPC_PORT`      | `4317`                  |
 
-首次启动时会把查询扩展下载到数据目录。下载需要 30–90 秒，期间启动会被阻塞。
+服务器所需的一切都已内置在二进制文件中：启动时不下载任何内容，可以离线运行。
 
 未启用认证的服务器（自托管的默认方式）还会在 `http://localhost:9999/dashboard/`
 提供 Web 仪表盘。仪表盘内置在二进制文件中。若要改用其他静态构建，请把

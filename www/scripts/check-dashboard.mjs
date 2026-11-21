@@ -10,7 +10,7 @@
  * microseconds). The first query is answered 429 once to prove the client
  * retries instead of failing.
  *
- *   DASHBOARD_DIST  default ../dashboard/dist (run `aube -C ../dashboard run build`)
+ *   DASHBOARD_DIST  default ../dashboard/dist (run `pnpm -C ../dashboard run build`)
  *   SHOTS           directory for light and dark screenshots (optional)
  */
 import assert from "node:assert/strict";

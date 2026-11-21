@@ -18,7 +18,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-aube run --silent schema:sql > "$state/schema.sql"
+pnpm --silent run schema:sql > "$state/schema.sql"
 wrangler d1 execute DB --local --env preview --persist-to "$state/d1" --file "$state/schema.sql" >/dev/null
 
 wrangler dev --env preview --port "$port" --persist-to "$state/d1" \

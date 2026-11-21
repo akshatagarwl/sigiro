@@ -8,7 +8,7 @@ import { is } from "drizzle-orm";
  * So the checked-in Drizzle schema is the source of truth and this renders it.
  *
  * Usage:
- *   aube run schema:sql > schema.sql
+ *   pnpm run schema:sql > schema.sql
  *   wrangler d1 execute sigiro-auth --file=schema.sql [--local|--remote]
  */
 import { getTableConfig } from "drizzle-orm/sqlite-core";

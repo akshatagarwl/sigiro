@@ -76,7 +76,7 @@
         },
         {
           "registryType": "oci",
-          "identifier": "ghcr.io/sigiroai/sigiro"
+          "identifier": "ghcr.io/akshatagarwl/sigiro"
         }
       ],
       "basis": {

@@ -36,6 +36,7 @@ pub mod schema;
 pub mod server;
 pub(crate) mod static_site;
 pub mod storage;
+pub mod tls;
 pub mod types;
 pub mod workload;
 

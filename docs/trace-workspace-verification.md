@@ -1,5 +1,8 @@
 # Trace workspace verification
 
+Historical command names are preserved below. For current Nix/pnpm setup and
+commands, see [Contributing](../CONTRIBUTING.md).
+
 The dashboard now opens a trace as a wide investigation workspace. Laminar's timeline interaction informed the layout. Sigiro's existing query API, explorer filters, and shadcn shell remain in place.
 
 ![Investigation flow](assets/trace-workspace/workflow.svg)

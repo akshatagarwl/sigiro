@@ -11,18 +11,135 @@ For a larger change, open an issue first so we can agree on the approach.
 
 ## Set up
 
-Follow [Build from source](README.md#build-from-source). Toolchains are pinned in
-`mise.toml`; no cloud accounts or secrets are needed to build or test.
-
-DuckDB is linked statically from a pinned, checksum-verified prebuilt archive
-(`scripts/prepare-duckdb-static.sh`), so DuckDB is never compiled here.
+Follow [Build from source](README.md#build-from-source): the binary is built
+with Nix. `nix develop` supplies Rust, wasm-bindgen, Python, Node and pnpm;
+`nix develop .#javascript` is the smaller shell for website, auth and release
+work. All tool versions come
+from the locked Nix inputs and `rust-toolchain.toml`. No cloud accounts or
+secrets are needed to build or test. There is no task runner or Git-hook installer.
 
 Install JavaScript dependencies from the repository root with
-`aube install --frozen-lockfile`, and in each package directory (`auth/`,
+`pnpm install --frozen-lockfile`, and in each package directory (`auth/`,
 `cloud/`, `dashboard/`, `www/`) with its own frozen lockfile, for example
-`aube -C dashboard install --frozen-lockfile`. `cloud/` imports a generated
-WASM module, so run `aube -C cloud run build:wasm` once before
-`aube -C cloud run check`.
+`pnpm -C dashboard install --frozen-lockfile`. Run installs explicitly; package
+scripts do not install dependencies. `cloud/` imports a generated WASM module,
+so run `pnpm -C cloud run build:wasm` once before `pnpm -C cloud run check`.
+
+For a complete binary with embedded dashboard and docs, use `nix run . -- serve`.
+For frontend editing, use `pnpm -C dashboard run dev` or `pnpm -C www run dev`.
+If local PostgreSQL and RustFS are needed, run `scripts/dev-certs.sh` followed
+by `pnpm -C www run alchemy:dev:deploy` (Docker required). Preview that stack
+with `pnpm -C www run alchemy:dev:plan`. Its explicit
+`pnpm -C www run alchemy:dev:destroy` command also deletes its local volumes;
+there is no automatic teardown. Production planning/deployment remain explicit
+`pnpm -C www run alchemy:plan` / `pnpm -C www run alchemy:deploy` commands.
+
+### Fast local Rust development
+
+Use `nix develop` and `cargo build --locked` for the edit/build loop, not
+`nix build`: Cargo keeps incremental workspace artifacts in `target/`.
+The dev and test profiles explicitly enable incremental compilation; release
+optimization settings are unchanged. With direnv and nix-direnv installed,
+run `direnv allow` once to activate the pinned shell automatically.
+
+Linux additionally provides `nix develop .#mold` and `nix develop .#wild`
+for linker comparisons. They keep separate caches in `target/dev-mold` and
+`target/dev-wild`; the first build of each is cold. Neither linker is selected
+by default. Apple Silicon macOS uses its normal linker and the default shell; mold and Wild
+shells are intentionally absent there. These are development-only choices:
+release and CI builds continue to use the existing toolchain.
+
+### How the build works
+
+`flake.nix` and `nix/` build the binary from locked inputs in an offline build
+sandbox. `nix build --rebuild` can check whether a rebuild is byte-for-byte
+identical; that comparison has not been recorded for this build. Nothing is pinned twice: Rust comes from
+`rust-toolchain.toml`, Node and pnpm from the locked nixpkgs, and the version
+from `Cargo.toml`.
+
+* DuckDB comes from the [duckdb-static](https://github.com/akshatagarwl/duckdb-static)
+  flake input: one static archive with every extension sigiro uses compiled
+  in (core_functions, parquet, json, icu, ducklake, httpfs, postgres_scanner,
+  quack) and their C dependencies. It updates itself and has its own binary
+  cache; sigiro follows its nixpkgs so the archive is a cache hit. sigiro
+  registers the extensions at startup (`src/pool.rs`) and never downloads or
+  loads an extension at run time. To pick up a new DuckDB, run
+  `nix flake update duckdb-static` and update the version pins in
+  `src/storage.rs` and `src/quack.rs` if they changed.
+* `rust.nix`: crane builds for nixpkgs' static platform: musl on Linux, so the
+  binary is fully static; static libraries on macOS, linking only the system's
+  libSystem and libc++. Dependencies are compiled once and shared. The
+  `portable` check fails if the binary links anything outside the OS, and the
+  build fails if any store path is left in it.
+* `dashboard.nix`, `docs.nix`: the two static exports the binary embeds.
+  Their npm dependencies come directly from committed `pnpm-lock.yaml` files.
+  `pnpm-project.nix` fetches the locked dependencies for offline, frozen installs;
+  there is no lockfile translation or second package manager.
+* The docs' API reference is rendered from `sigiro openapi`, the spec of the
+  binary being built, rather than from the live sigiro.com spec.
+* `image.nix`: the container image, which holds just the static binary.
+  `nix build .#image` builds this Linux system's image (`docker load < result`).
+* `image-index.nix`: the multi-platform image. `nix build .#images` is an OCI
+  layout holding the linux/amd64 and linux/arm64 images under one tag. Each
+  binary is compiled natively on its own system and fetched from the cache;
+  assembling the images only copies files, so any Linux host builds both
+  without QEMU. `nix run .#publish-image -- ghcr.io/akshatagarwl/sigiro:<tag>`
+  pushes it (log in first), uploading only the layers the registry lacks. The
+  Image workflow (`.github/workflows/image.yml`) runs the same steps: it builds
+  both binaries on native runners, checks each image becomes healthy, and with
+  `push` publishes.
+
+After changing `dashboard/pnpm-lock.yaml` or `www/pnpm-lock.yaml`, update the
+matching `hash` in `nix/dashboard.nix` or `nix/docs.nix`: set it to `""`,
+run `nix build .#dashboard` (or `.#docs`), and copy the `got:` hash from the
+error.
+
+Without the duckdb-static cache, the first build compiles DuckDB (most of an
+hour). Nix uses the cache the flake declares only for trusted users; otherwise
+add it to `/etc/nix/nix.conf` (or `nix.settings` on NixOS):
+
+```
+extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+```
+
+### Shared build cache
+
+CI and developer machines share the public `akshat-sigiro-builds` Cachix cache.
+Downloads require no credentials. On NixOS, declare the cache URL and public
+key above through `nix.settings.extra-substituters` and
+`nix.settings.extra-trusted-public-keys` instead of editing the generated
+`nix.conf`.
+
+CI uses the official `cachix/cachix-action` with its post-build-hook daemon.
+The Cachix client is pinned through `.#cache-client`. New build outputs upload
+automatically; no repository scripts or changes to build commands are needed.
+Forked CI runs without a write token remain read-only.
+
+On hcpc, Nix's system-wide `post-build-hook` queues newly built Sigiro outputs
+to a systemd-managed Cachix daemon. Normal `nix build` and `nix flake check`
+commands trigger background uploads. The hook selects store names containing
+`-sigiro-`; required runtime closures upload too. Unrelated output roots are
+not queued. Do not use a whole-store watcher with this public cache: it could
+publish machine configuration and unrelated projects.
+
+The PC daemon receives its cache-scoped token using systemd `LoadCredential`
+from `~hc/.config/cachix/akshat-sigiro-builds.token` (mode `0600`). CI uses its
+separate `CACHIX_AUTH_TOKEN` secret. Keep credentials outside the repository and
+Nix store; never put token contents in Nix settings.
+
+Hooks apply to newly built outputs, not substituted or already-valid paths.
+The initial existing PC artifacts have been seeded separately. Uploading is
+asynchronous, so a build can finish before its outputs become downloadable.
+For another machine, use Cachix's documented post-build-hook/daemon setup or
+`cachix watch-exec akshat-sigiro-builds -- nix build` for a one-off session.
+
+The exposed `rust-deps`, `rust-workspace-deps`, and `rust-wasm-deps` packages
+make Crane artifacts reusable alongside application, dashboard, docs, and check
+outputs. These are Nix outputs, not the incremental Cargo `target/` directory.
+Reusing an output requires the same derivation, including platform and locked
+inputs; Linux builds do not replace native macOS or ARM64 builds. Monitor cache
+storage: three platforms and multiple revisions may exceed the free 5 GB tier.
 
 ## Repository layout
 
@@ -40,11 +157,12 @@ WASM module, so run `aube -C cloud run build:wasm` once before
 1. Branch from `main`.
 2. Keep the change to one concern and include tests for behaviour changes.
 3. Run the checks for what you touched:
-   * Rust: `mise run full` (rustfmt, cargo check, clippy, deployment contract
-     tests; format with `mbx fmt`) and
-     `scripts/run-with-duckdb-static.sh cargo test --workspace --locked`
-   * TypeScript: `aube run fmt:check && aube run lint`, plus the package's own
-     `check` script (for example `aube -C auth run check`)
+   * Rust: `nix flake check` (rustfmt, clippy, tests, the binary and its
+     portability), plus `nix develop --command python3 -m unittest tests.deployment.test_sync_postgres_boundary`
+     for the deployment contract. In `nix develop`, `cargo fmt`, `cargo clippy` and `cargo test`
+     work directly.
+   * TypeScript: `pnpm run fmt:check && pnpm run lint`, plus the package's own
+     `check` script (for example `pnpm -C auth run check`)
 4. Use [Conventional Commits](https://www.conventionalcommits.org/) for commit
    messages and the PR title, for example `fix(ingest): reject empty batches`.
 5. If the change is visible to people who run `sigiro`, add a changeset (below).
@@ -54,7 +172,7 @@ WASM module, so run `aube -C cloud run build:wasm` once before
 
 The changelog and the version of the `sigiro` binary come from
 [Changesets](https://github.com/changesets/changesets). Run
-`aube run changeset`, choose the bump (`patch` for fixes, `minor` for features,
+`pnpm run changeset`, choose the bump (`patch` for fixes, `minor` for features,
 `major` for breaking changes), and write one line for the changelog. Commit the
 generated `.changeset/*.md` file with your change.
 
@@ -63,20 +181,20 @@ package; its `version` is the binary's version. `auth/`, `cloud/`,
 `dashboard/` and `www/` are not versioned. A PR that touches `src/`, `crates/`,
 `dashboard/`, `build.rs` or `Cargo.toml` without a changeset gets a CI warning,
 never a failure. For changes that need no changelog line, ignore it or run
-`aube run changeset --empty`.
+`pnpm run changeset --empty`.
 
 ## Releases
 
 1. When `main` has pending changesets, a maintainer (or an agent) runs
-   `aube run release:pr`. From `origin/main` it runs `aube run release:version`,
+   `pnpm run release:pr`. From `origin/main` it runs `pnpm run release:version`,
    which bumps `package.json`, copies the version into `Cargo.toml` and
    `Cargo.lock`, adds the release to `CHANGELOG.md` and deletes the consumed
    changesets. It then commits on `release/v<version>`, pushes and opens the PR
-   with `gh`. `aube run release:pr -- --dry-run` shows the commit without pushing.
+   with `gh`. `pnpm run release:pr --dry-run` shows the commit without pushing.
 2. CI runs on that PR like any other. Review the bump and the changelog, then
    merge it.
 3. On the push to `main`, `tag-on-main.yml` sees a version with no tag, pushes
-   `v<version>` and, in the same run, calls `release.yml`: four archives and
+   `v<version>` and, in the same run, calls `release.yml`: three archives and
    `SHA256SUMS` on a GitHub Release. sigiro-infra then copies the release to
    sigiro.com/dl.
 

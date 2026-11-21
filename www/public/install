@@ -48,16 +48,18 @@ else
   die 'this script needs sha256sum or shasum'
 fi
 
+# Linux builds are fully static (musl) and run on any distribution. Releases
+# before 0.3 published glibc builds instead, under `unknown-linux-gnu`.
 case "$(uname -s)" in
-  Linux)  os='unknown-linux-gnu' ;;
-  Darwin) os='apple-darwin' ;;
-  *) die "no build for $(uname -s). Run the container instead: ghcr.io/sigiroai/sigiro" ;;
+  Linux)  os='unknown-linux-musl'; legacy_os='unknown-linux-gnu' ;;
+  Darwin) os='apple-darwin'; legacy_os='' ;;
+  *) die "no build for $(uname -s). Run the container instead: ghcr.io/akshatagarwl/sigiro" ;;
 esac
 
 case "$(uname -m)" in
   x86_64 | amd64)  arch='x86_64' ;;
   aarch64 | arm64) arch='aarch64' ;;
-  *) die "no build for $(uname -m). Run the container instead: ghcr.io/sigiroai/sigiro" ;;
+  *) die "no build for $(uname -m). Run the container instead: ghcr.io/akshatagarwl/sigiro" ;;
 esac
 
 target="${arch}-${os}"
@@ -80,7 +82,13 @@ say "sigiro ${version} for ${target}"
 # A missing archive is the normal way a reader finds out their platform has no
 # build yet, so it must not read like a network fault. Not every target is
 # published for every version.
-fetch "$url" "$tmp/$archive" || die "no ${version} build for ${target}. Run the container instead: ghcr.io/sigiroai/sigiro"
+if ! fetch "$url" "$tmp/$archive"; then
+  [ -n "$legacy_os" ] || die "no ${version} build for ${target}. Run the container instead: ghcr.io/akshatagarwl/sigiro"
+  target="${arch}-${legacy_os}"
+  archive="sigiro-${version}-${target}.tar.gz"
+  url="$BASE/${version}/${archive}"
+  fetch "$url" "$tmp/$archive" || die "no ${version} build for ${arch} Linux. Run the container instead: ghcr.io/akshatagarwl/sigiro"
+fi
 fetch "$BASE/${version}/SHA256SUMS" "$tmp/SHA256SUMS" || die 'cannot download SHA256SUMS'
 
 want="$(grep " ${archive}\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)"

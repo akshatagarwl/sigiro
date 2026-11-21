@@ -24,19 +24,9 @@ use duckdb::vtab::arrow::WritableVector;
 /// authorization semantics underneath this gate without a deliberate,
 /// re-verified bump here.
 ///
-/// Empirically, against the pinned DuckDB v2.0.0: quack is NOT in
-/// DuckDB's autoloadable "known extensions" list, so a bare `LOAD quack;`
-/// always fails with "Extension \"quack\" is an existing extension. Install
-/// it first" — [`load_and_pin`] must always `INSTALL` it explicitly. The
-/// `core` repository (DuckDB's default, i.e. plain `INSTALL quack;` with no
-/// `FROM` clause) serves this pinned version.
-///
-/// `core` serves a different quack build per DuckDB version, so a DuckDB
-/// bump moves this constant too. Never fall back to
-/// `core_nightly`. If `core` stops serving this exact version, that is
-/// exactly the drift this pin exists to catch — re-verify the authorization
-/// gate against the new build and bump this constant deliberately, rather
-/// than widening the install source.
+/// It is the commit DuckDB v2.0.0 pins for quack, compiled into the binary
+/// (duckdb-static fails its build if the two disagree). Bump it only together
+/// with DuckDB, after re-verifying the authorization gate against the new build.
 pub(crate) const EXPECTED_QUACK_VERSION: &str = "f96420ed46";
 
 /// Scalar UDF name installed as the quack authorization gate. Re-registered
@@ -56,22 +46,12 @@ const AUTH_FUNCTION_NAME: &str = "sigiro_quack_authorize";
 )]
 pub(crate) struct QuackToken(String);
 
-/// Install (if needed) and load the `quack` DuckDB extension on `conn`, then
+/// Load the statically linked `quack` DuckDB extension on `conn`, then
 /// assert the loaded build matches [`EXPECTED_QUACK_VERSION`]. Fails loud on
 /// a mismatch — refuses to serve rather than trust an unpinned extension.
 pub(crate) fn load_and_pin(conn: &Connection) -> Result<()> {
-    if let Err(bare_load_error) = conn.execute_batch("LOAD quack;") {
-        // `FROM core` is required, not merely the default: see
-        // [`EXPECTED_QUACK_VERSION`]'s doc comment for why `core_nightly`
-        // must never be used here.
-        conn.execute_batch("INSTALL quack FROM core; LOAD quack;")
-            .with_context(|| {
-                format!(
-                    "failed to INSTALL/LOAD the quack extension from the core repository; \
-                     bare `LOAD quack;` failed first with: {bare_load_error:#}"
-                )
-            })?;
-    }
+    conn.execute_batch("LOAD quack;")
+        .context("failed to load the quack extension")?;
 
     let installed_version: String = conn
         .query_row(

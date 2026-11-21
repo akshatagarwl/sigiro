@@ -1054,7 +1054,7 @@ mod tests {
         (result.is_error == Some(true), text)
     }
 
-    /// A binary built by `mise run build` carries the real snapshot; check
+    /// A binary built by `nix build` carries the real snapshot; check
     /// it parses whenever this build has one.
     #[test]
     fn embedded_snapshot_parses_when_built_in() {

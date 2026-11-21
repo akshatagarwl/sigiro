@@ -10,6 +10,13 @@
 # host are then removed, so the directory holds exactly what the binary embeds.
 set -euo pipefail
 
+# SIGIRO_OPENAPI_SPEC, when set, is a local OpenAPI file for the API
+# reference (www/blume.config.ts); unset, the reference reads sigiro.com's.
+if [ -n "${SIGIRO_OPENAPI_SPEC:-}" ]; then
+  SIGIRO_OPENAPI_SPEC="$(cd "$(dirname "$SIGIRO_OPENAPI_SPEC")" && pwd)/$(basename "$SIGIRO_OPENAPI_SPEC")"
+  export SIGIRO_OPENAPI_SPEC
+fi
+
 www="$(cd "$(dirname "$0")/../www" && pwd)"
 cd "$www"
 
@@ -32,9 +39,9 @@ rm -rf dist dist-binary dist-mcp
 # The MCP snapshot comes from the sigiro.com config, not the binary one, so its
 # routes and URLs are the hosted docs MCP's.
 mkdir dist-mcp
-env -u SIGIRO_DOCS_TARGET aube exec tsx scripts/export-mcp-data.ts dist-mcp/mcp-data.json
+env -u SIGIRO_DOCS_TARGET pnpm exec tsx scripts/export-mcp-data.ts dist-mcp/mcp-data.json
 gzip -9n dist-mcp/mcp-data.json
-SIGIRO_DOCS_TARGET=binary aube run build
+SIGIRO_DOCS_TARGET=binary pnpm run build
 mv dist dist-binary
 
 cd dist-binary

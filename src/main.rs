@@ -112,6 +112,14 @@ enum Command {
     /// Register it with an agent as a stdio server, for example
     /// `claude mcp add sigiro -- sigiro mcp`.
     Mcp,
+    /// Print the public OpenAPI document this binary serves at /openapi.json.
+    ///
+    /// Build tooling only: the docs export (`scripts/build-docs-export.sh`)
+    /// renders its API reference from this, so the reference embedded in a
+    /// binary describes that binary's API rather than whatever sigiro.com
+    /// happened to serve at build time.
+    #[command(hide = true)]
+    Openapi,
 }
 
 #[derive(Subcommand)]
@@ -215,6 +223,12 @@ async fn main() -> Result<()> {
     }
 
     match cli.command {
+        Some(Command::Openapi) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(sigiro::server::public_openapi())?
+            );
+        }
         Some(Command::Serve {
             data_dir,
             http_port,

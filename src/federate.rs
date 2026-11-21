@@ -1326,7 +1326,7 @@ pub async fn run_federated_query(
     let coord =
         crate::pool::open_duckdb().context("failed to open the embedded coordinator connection")?;
     coord
-        .execute_batch("INSTALL json; LOAD json;")
+        .execute_batch("LOAD json;")
         .context("failed to load the json extension needed to plan the federated query")?;
 
     let parsed = plan_query(&coord, sql)?;

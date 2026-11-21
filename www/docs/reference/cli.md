@@ -64,8 +64,8 @@ Starts the OTLP gRPC server, the OTLP HTTP server, and the query API.
 | `--otlp-http-port <PORT>` | `SIGIRO_OTLP_HTTP_PORT` | `4318`                  |
 | `--otlp-grpc-port <PORT>` | `SIGIRO_GRPC_PORT`      | `4317`                  |
 
-The first start downloads the query extensions into the data directory. That
-download takes 30–90 seconds and blocks the start.
+Everything the server needs is built into the binary: it downloads nothing at
+start and runs offline.
 
 A server without auth (the default for a self-hosted server) also serves the
 web dashboard at `http://localhost:9999/dashboard/`. The dashboard is built into

@@ -35,7 +35,7 @@ sigiro serve
 
 我们为 arm64 架构的 Linux 和 macOS，以及 x86-64 架构的 Linux 提供了构建版本。在其他平台上，请使用容器。
 
-首次在新的数据目录中运行二进制文件时，可能需要先下载查询扩展。请查看启动日志，不要依赖固定的等待时间。
+二进制文件是自包含的：不需要其他库，启动时也不会下载任何内容，因此可以离线运行。在 Linux 上，它可以在任何发行版上运行。
 
 </Tab>
 
@@ -43,8 +43,9 @@ sigiro serve
 
 ```bash
 docker run -d --name sigiro --restart unless-stopped \
+  -e SIGIRO_BIND=0.0.0.0 \
   -p 127.0.0.1:4317:4317 -p 127.0.0.1:4318:4318 -p 127.0.0.1:9999:9999 \
-  -v sigiro-data:/var/lib/sigiro ghcr.io/sigiroai/sigiro
+  -v sigiro-data:/var/lib/sigiro ghcr.io/akshatagarwl/sigiro
 ```
 
 命名卷会在容器重启后保留数据；重启策略会在主机重启后启动服务。Docker 发布的端口只能从本机访问。如果 Jaeger 等服务占用了 `4317` 和 `4318`，请在运行命令前将前两个 `-p` 参数替换为 `-p 127.0.0.1:14317:4317 -p 127.0.0.1:14318:4318`。随后把 OTLP HTTP 导出目标改为 `http://localhost:14318`（gRPC 使用 `localhost:14317`）。主机的 `9999` 端口也必须空闲；如果重映射它，下面的 API 请求也要使用新的主机端口。

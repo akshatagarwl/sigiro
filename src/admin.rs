@@ -1,7 +1,8 @@
 use crate::declared_schema::{DeclaredTable, PostgresSchema, SqliteSchema, reconcile};
 use anyhow::{Context, Result};
-use postgres_native_tls::MakeTlsConnector;
+use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::str::FromStr;
+use std::sync::Arc;
 
 pub enum AdminConnection {
     Local(rusqlite::Connection),
@@ -295,16 +296,30 @@ pub fn connect_postgres(catalog_url: &str) -> Result<postgres::Client> {
     let root_cert = root_cert.context("hosted PostgreSQL requires sslrootcert")?;
     let certificate = std::fs::read(&root_cert)
         .with_context(|| format!("failed to read PostgreSQL root certificate {root_cert}"))?;
-    let certificate = native_tls::Certificate::from_pem(&certificate)
-        .context("PostgreSQL root certificate is not valid PEM")?;
-    let connector = native_tls::TlsConnector::builder()
-        .add_root_certificate(certificate)
-        .build()
-        .context("failed to configure PostgreSQL TLS")?;
+    let mut roots = rustls::RootCertStore::empty();
+    for certificate in CertificateDer::pem_slice_iter(&certificate) {
+        let certificate = certificate.context("PostgreSQL root certificate is not valid PEM")?;
+        roots
+            .add(certificate)
+            .context("PostgreSQL root certificate is not a usable CA certificate")?;
+    }
+    anyhow::ensure!(
+        !roots.is_empty(),
+        "PostgreSQL root certificate {root_cert} contains no certificates"
+    );
+    // verify-full: rustls always verifies the chain against these roots and the
+    // host name, as native-tls did.
+    let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .context("failed to configure PostgreSQL TLS")?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
     let mut config = postgres::Config::from_str(url.as_str()).context("catalog URL is invalid")?;
     config.ssl_mode(postgres::config::SslMode::Require);
     config
-        .connect(MakeTlsConnector::new(connector))
+        .connect(tokio_postgres_rustls::MakeRustlsConnect::new(tls))
         .context("failed to connect to hosted PostgreSQL")
 }
 

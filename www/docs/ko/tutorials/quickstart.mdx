@@ -42,8 +42,8 @@ sigiro serve
 빌드는 arm64용 Linux와 macOS, 그리고 x86-64용 Linux에 대해 제공됩니다. 다른
 플랫폼에서는 컨테이너를 사용하십시오.
 
-새 데이터 디렉터리에서 바이너리를 처음 실행하면 준비되기 전에 쿼리 확장 기능을
-다운로드할 수 있습니다. 정해진 시간만 기다리지 말고 시작 로그를 확인하십시오.
+바이너리는 자체적으로 완결되어 있습니다. 다른 라이브러리가 필요 없고 시작할 때 아무것도
+내려받지 않으므로 오프라인에서도 동작합니다. Linux에서는 어떤 배포판에서든 동작합니다.
 
 </Tab>
 
@@ -51,8 +51,9 @@ sigiro serve
 
 ```bash
 docker run -d --name sigiro --restart unless-stopped \
+  -e SIGIRO_BIND=0.0.0.0 \
   -p 127.0.0.1:4317:4317 -p 127.0.0.1:4318:4318 -p 127.0.0.1:9999:9999 \
-  -v sigiro-data:/var/lib/sigiro ghcr.io/sigiroai/sigiro
+  -v sigiro-data:/var/lib/sigiro ghcr.io/akshatagarwl/sigiro
 ```
 
 이름이 지정된 볼륨에 데이터가 저장되므로 컨테이너를 재시작해도 유지됩니다. 재시작

@@ -11,6 +11,14 @@ const nextConfig: NextConfig = {
   basePath: "/dashboard",
   trailingSlash: true,
   images: { unoptimized: true },
+  /**
+   * Next picks a random build ID per build, which alone made two builds of one
+   * commit differ. `SIGIRO_DASHBOARD_BUILD_ID` pins it: the Nix build passes
+   * the hash of the dashboard source (nix/dashboard.nix). It must change when
+   * the content does, because `_next/static/<id>/` is served immutable
+   * (src/dashboard.rs). Unset, Next keeps its random ID (`null`).
+   */
+  generateBuildId: async () => process.env.SIGIRO_DASHBOARD_BUILD_ID ?? null,
 };
 
 export default function config(phase: string): NextConfig {

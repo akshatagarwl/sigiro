@@ -1,4 +1,4 @@
-# Manual (workflow_dispatch) Rust gate and image build; release.yml runs on tags.
+# Manual Rust gate and image build; release.yml runs on tags.
 name: CI
 on:
   workflow_dispatch:
@@ -7,126 +7,29 @@ permissions:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-env:
-  CARGO_TERM_COLOR: always
-  RUSTC_WRAPPER: sccache
-  # libduckdb-sys places its C++ runtime before the static archive. Repeat it at
-  # the end of rustc's linker arguments so archive references are resolved.
-  RUSTFLAGS: "-C link-arg=-lstdc++"
-  MISE_TASK_CACHE_DIR: ${{ github.workspace }}/.mise-task-cache
 jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
-          version: 2026.9.9
-          install_args: rust sccache packslip:github.com/jdx/mr-boxington
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+          extra_nix_config: |
+            extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+            extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         with:
-          node-version: 24.20.0
-      - uses: jdx/aube-action@f82ca2f6c943dbde1904945d9f0ee1a0faf8e945 # v1.0.0
-        with:
-          version: 2.8.4
-      - name: Build dashboard for the embedded server
-        run: |
-          aube -C dashboard install --frozen-lockfile
-          aube -C dashboard run build
-      - name: Restore mbx build cache
-        uses: jdx/mr-boxington-action@867fc530102eec5b756075d70d850dc8330d2272 # v1.4.0
-        with:
-          save-on-workflow-dispatch: "true"
-      - name: Restore successful gate receipts
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ env.MISE_TASK_CACHE_DIR }}
-          key: mise-task-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
-          restore-keys: |
-            mise-task-v2-${{ runner.os }}-${{ runner.arch }}-
-
-      # Linux deliberately uses DuckDB's prebuilt static archive rather than the
-      # bundled feature (Cargo.toml). The gate needs it before its first Rust command.
-      - name: DuckDB static libs
-        env:
-          DUCKDB_STATIC_CACHE: ${{ runner.temp }}/duckdb-static
+          name: akshat-sigiro-builds
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          installCommand: nix profile add .#cache-client
+          # extra_nix_config already lists this cache. `cachix use` would write a
+          # user-level `substituters =` that drops the duckdb-static cache.
+          skipAddingSubstituter: true
+      - run: nix flake check -L
+      - name: Deployment contract
+        run: nix develop --command python3 -m unittest tests.deployment.test_sync_postgres_boundary
+      - name: Verify the container image
         run: |
           set -euo pipefail
-          eval "$(scripts/prepare-duckdb-static.sh x86_64-unknown-linux-gnu)"
-          {
-            echo "DUCKDB_LIB_DIR=$DUCKDB_LIB_DIR"
-            echo "DUCKDB_INCLUDE_DIR=$DUCKDB_INCLUDE_DIR"
-            echo "DUCKDB_STATIC=1"
-          } >> "$GITHUB_ENV"
-      - run: mise run --skip-tools full
-      - name: Real backend dashboard browser checks
-        env:
-          UI_ORIGIN: http://127.0.0.1:19995
-          CHROMIUM_PATH: /usr/bin/google-chrome
-          SIGIRO_UI_EVIDENCE: ${{ runner.temp }}/dashboard-evidence
-          SIGIRO_DATA_DIR: ${{ runner.temp }}/dashboard-data
-          SIGIRO_HTTP_PORT: "19995"
-          SIGIRO_OTLP_HTTP_PORT: "19996"
-          SIGIRO_GRPC_PORT: "19997"
-          SIGIRO_FLUSH_INTERVAL_SECS: "1"
-          SIGIRO_SELF_PROFILING: "true"
-          SIGIRO_E2E_HTTP_PORT: "19995"
-          SIGIRO_E2E_OTLP_PORT: "19996"
-          TRACE_FIXTURE: ${{ runner.temp }}/dashboard-evidence/trace-workload.json
-        run: |
-          set -euo pipefail
-          npm install --global agent-browser@0.27.3
-          mbx build --locked --bin sigiro
-          mkdir -p "$SIGIRO_UI_EVIDENCE"
-          MALLOC_CONF=prof:true,prof_active:true,lg_prof_sample:19 \
-            target/debug/sigiro serve > "$SIGIRO_UI_EVIDENCE/server.log" 2>&1 &
-          server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
-          curl --fail --retry 30 --retry-connrefused --retry-delay 1 "$UI_ORIGIN/health"
-          python3 dashboard/scripts/trace-workspace-workload.py
-          sleep 12
-          node dashboard/tests/auth-mode-real-browser.mjs
-      - name: Upload real browser evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dashboard-browser-evidence
-          path: ${{ runner.temp }}/dashboard-evidence
-          if-no-files-found: ignore
-          retention-days: 7
-
-  auth:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: auth
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.20.0
-      - uses: jdx/aube-action@f82ca2f6c943dbde1904945d9f0ee1a0faf8e945 # v1.0.0
-        with:
-          version: 2.8.4
-      - run: aube install --frozen-lockfile
-      # Auth runs on Workers/D1, so there is no PostgreSQL to start. Keep CI to
-      # static checks and generate the D1 schema from the Drizzle artifact.
-      - run: aube run check
-      - run: aube run schema:sql
-      - run: aube run test:agent-e2e
-      - run: aube audit --prod
-
-  image:
-    needs: [gate, auth]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Verify Docker image
-        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
-        with:
-          targets: sigiro
-          set: |
-            sigiro.tags=ghcr.io/sigiroai/sigiro:${{ github.sha }}
-            sigiro.cache-from=type=gha
-            sigiro.cache-to=type=gha,mode=max
+          nix build .#image
+          docker load < result

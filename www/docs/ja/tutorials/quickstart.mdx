@@ -42,8 +42,8 @@ sigiro serve
 ビルドは arm64 向けの Linux および macOS と、x86-64 向けの Linux に存在します。
 それ以外のプラットフォームでは、コンテナをご利用ください。
 
-新しいデータディレクトリでバイナリを初めて起動すると、準備が整う前にクエリ拡張機能を
-ダウンロードする場合があります。固定の待ち時間ではなく、起動ログを確認してください。
+バイナリは自己完結しています。ほかのライブラリは不要で、起動時に何もダウンロードしないため、
+オフラインでも動作します。Linux ではどのディストリビューションでも動作します。
 
 </Tab>
 
@@ -51,8 +51,9 @@ sigiro serve
 
 ```bash
 docker run -d --name sigiro --restart unless-stopped \
+  -e SIGIRO_BIND=0.0.0.0 \
   -p 127.0.0.1:4317:4317 -p 127.0.0.1:4318:4318 -p 127.0.0.1:9999:9999 \
-  -v sigiro-data:/var/lib/sigiro ghcr.io/sigiroai/sigiro
+  -v sigiro-data:/var/lib/sigiro ghcr.io/akshatagarwl/sigiro
 ```
 
 名前付きボリュームにより、コンテナを再起動してもデータが残ります。再起動ポリシーに

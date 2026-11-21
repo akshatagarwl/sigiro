@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Opens the release PR: `aube run release:pr`.
+// Opens the release PR: `pnpm run release:pr`.
 //
-// From origin/main it runs `aube run release:version` (changeset version, then
+// From origin/main it runs `pnpm run release:version` (changeset version, then
 // Cargo.toml/Cargo.lock sync), commits the result on release/v<version>, pushes
 // it and opens a PR with `gh`. A person or agent opens that PR, so CI runs on
 // it like any other. Merging it lets tag-on-main.yml tag and release.
@@ -35,7 +35,7 @@ const startRef = start === "HEAD" ? git("rev-parse", "HEAD") : start;
 let branch;
 try {
   git("switch", "--quiet", "--detach", "origin/main");
-  run("aube", ["run", "release:version"], { stdio: "inherit" });
+  run("pnpm", ["run", "release:version"], { stdio: "inherit" });
   const { version } = JSON.parse(readFileSync("package.json", "utf8"));
   const tag = `v${version}`;
   branch = `release/${tag}`;

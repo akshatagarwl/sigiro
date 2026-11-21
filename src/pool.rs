@@ -165,65 +165,34 @@ impl Drop for ProjectInitialization<'_> {
     }
 }
 
-/// Opaque `duckdb_extension_descriptor` from `duckdb_static_extension.h`.
-#[repr(C)]
-struct ExtensionDescriptor {
-    _opaque: [u8; 0],
-}
-
-type DescribeExtension = unsafe extern "C" fn(*mut ExtensionDescriptor) -> i32;
-
 unsafe extern "C" {
-    fn duckdb_register_static_extension(describe: DescribeExtension) -> i32;
-    fn duckdb_extension_loadable_extensions_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-    fn duckdb_extension_httplib_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-    fn duckdb_extension_core_functions_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-    fn duckdb_extension_parquet_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-    fn duckdb_extension_json_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-    fn duckdb_extension_icu_describe(descriptor: *mut ExtensionDescriptor) -> i32;
-    // DuckDB serves no android_arm64 extensions; the Android bundle links ducklake.
-    #[cfg(target_os = "android")]
-    fn duckdb_extension_ducklake_describe(descriptor: *mut ExtensionDescriptor) -> i32;
+    /// Generated into the DuckDB archive by duckdb-static (DuckDB's own
+    /// static-extension loader template): registers every extension the
+    /// archive links, and fails if any of them does not register.
+    fn duckdb_register_static_extensions() -> i32;
 }
 
 /// Open an in-memory DuckDB. The only way to open one: clippy bans
 /// `Connection::open_in_memory` everywhere else.
 ///
-/// DuckDB 2.0's static bundle registers nothing by itself. Every statically
-/// linked extension, `httplib` (extension downloads) and `loadable_extensions`
-/// (any `INSTALL`/`LOAD` at all) must be registered before the first database
-/// opens, or `INSTALL ducklake` fails with "this build does not link the
-/// loadable_extensions library".
+/// DuckDB 2.0's static bundle registers nothing by itself. Every extension
+/// sigiro uses is compiled into the binary (the duckdb-static flake input) and
+/// registered here, before the first database opens. Nothing is ever
+/// downloaded or loaded from a file: the bundle does not even link DuckDB's
+/// `loadable_extensions` or `httplib` capabilities.
 pub fn open_duckdb() -> Result<Connection> {
     static REGISTERED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
     REGISTERED
         .get_or_init(|| {
-            #[allow(unused_mut)]
-            let mut extensions: Vec<(&str, DescribeExtension)> = vec![
-                (
-                    "loadable_extensions",
-                    duckdb_extension_loadable_extensions_describe,
-                ),
-                ("httplib", duckdb_extension_httplib_describe),
-                ("core_functions", duckdb_extension_core_functions_describe),
-                ("parquet", duckdb_extension_parquet_describe),
-                ("json", duckdb_extension_json_describe),
-                ("icu", duckdb_extension_icu_describe),
-            ];
-            #[cfg(target_os = "android")]
-            extensions.push(("ducklake", duckdb_extension_ducklake_describe));
-            for (name, describe) in extensions {
-                // SAFETY: each describe function is DuckDB's own, linked from
-                // the static bundle, with the signature duckdb_static_extension.h
-                // declares; registration copies what it describes.
-                let status = unsafe { duckdb_register_static_extension(describe) };
-                if status != 0 {
-                    return Err(format!(
-                        "failed to register DuckDB static extension {name}: status {status}"
-                    ));
-                }
+            // SAFETY: DuckDB's own C function, linked from the static bundle,
+            // taking no arguments; it must run before a database opens, which
+            // the OnceLock guarantees for every database this module opens.
+            match unsafe { duckdb_register_static_extensions() } {
+                0 => Ok(()),
+                status => Err(format!(
+                    "failed to register DuckDB's static extensions: status {status}"
+                )),
             }
-            Ok(())
         })
         .clone()
         .map_err(anyhow::Error::msg)?;
@@ -535,18 +504,12 @@ impl ProjectPool {
         project_id: &str,
         project_dir: &camino::Utf8Path,
     ) -> Result<()> {
-        let ext_dir = crate::storage::resolve_extension_dir(&self.data_dir);
-        std::fs::create_dir_all(&ext_dir)
-            .with_context(|| format!("failed to create DuckDB extension directory: {ext_dir}"))?;
         let temp_dir = project_dir.join(".tmp");
         std::fs::create_dir_all(&temp_dir)
             .with_context(|| format!("failed to create DuckDB temp directory: {temp_dir}"))?;
         let temp_dir_sql = temp_dir.as_str().replace('\'', "''");
-        conn.execute_batch(&format!(
-            "SET extension_directory = '{}'; SET temp_directory = '{temp_dir_sql}';",
-            ext_dir.as_str(),
-        ))
-        .context("failed to set DuckDB extension and temp directories")?;
+        conn.execute_batch(&format!("SET temp_directory = '{temp_dir_sql}';"))
+            .context("failed to set the DuckDB temp directory")?;
         tracing::info!(%temp_dir, "DuckDB temp directory configured");
         let memory_limit = crate::config::duckdb_memory_limit()?;
         let memory_limit = memory_limit.replace('\'', "''");
@@ -650,11 +613,11 @@ impl ProjectPool {
                         // directly via duckdb_logs(): "Failed to load
                         // extension 'httpfs'" on every request once access is
                         // locked down, even though `quack_serve` itself
-                        // "succeeds") — local/default mode never installs
+                        // "succeeds") — local/default mode never loads
                         // httpfs otherwise (only the S3-backed distributed
                         // path does), so it must be preloaded here too.
                         if crate::config::query_surface()? == crate::config::QuerySurface::Quack {
-                            conn.execute_batch("INSTALL httpfs; LOAD httpfs;").context(
+                            conn.execute_batch("LOAD httpfs;").context(
                                 "failed to preload httpfs (required internally by quack) before \
                                  locking down filesystem access",
                             )?;
@@ -663,18 +626,7 @@ impl ProjectPool {
                                  filesystem access",
                             )?;
                         }
-                        let missing = crate::storage::extensions_needing_install(
-                            conn,
-                            crate::storage::LOCKDOWN_PRELOADED_EXTENSIONS,
-                        )?;
-                        if !missing.is_empty() {
-                            let refs: Vec<&str> = missing.iter().map(String::as_str).collect();
-                            crate::storage::install_extensions_with_progress(conn, &refs).context(
-                                "failed to install lockdown-preloaded DuckDB extensions \
-                                     before locking filesystem access",
-                            )?;
-                        }
-                        self.lock_filesystem(conn, &ext_dir)?;
+                        self.lock_filesystem(conn)?;
                     }
                     return Ok(());
                 }
@@ -742,14 +694,13 @@ impl ProjectPool {
     /// extension with no filesystem or network access at query time, so pre-loading
     /// it does not widen the lockdown surface.
     ///
-    /// Install missing extensions into the writable persistent data-dir cache,
-    /// then LOAD them. This all happens before the irreversible lockdown.
+    /// All of them are compiled into the binary, so loading reads nothing from
+    /// disk; it only has to happen before the irreversible lockdown.
     ///
     /// The names live in `storage::LOCKDOWN_PRELOADED_EXTENSIONS` so the
     /// production initialization and this batch cannot drift apart.
-    fn lock_filesystem(&self, conn: &Connection, ext_dir: &camino::Utf8Path) -> Result<()> {
+    fn lock_filesystem(&self, conn: &Connection) -> Result<()> {
         let data_dir = self.data_dir.as_str().replace('\'', "''");
-        let ext = ext_dir.as_str().replace('\'', "''");
         let preload: String = crate::storage::LOCKDOWN_PRELOADED_EXTENSIONS
             .iter()
             .map(|name| format!("LOAD {name};"))
@@ -757,10 +708,10 @@ impl ProjectPool {
         conn.execute_batch(&preload)
             .context("failed to preload DuckDB extensions before locking filesystem access")?;
         conn.execute_batch(&format!(
-            "SET allowed_directories = ['{data_dir}', '{ext}']; SET enable_external_access = false;"
+            "SET allowed_directories = ['{data_dir}']; SET enable_external_access = false;"
         ))
         .context("failed to lock DuckDB filesystem access")?;
-        tracing::info!(data_dir = %self.data_dir, "DuckDB filesystem access locked to data + extension dirs");
+        tracing::info!(data_dir = %self.data_dir, "DuckDB filesystem access locked to the data dir");
         Ok(())
     }
 

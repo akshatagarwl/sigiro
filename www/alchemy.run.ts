@@ -184,7 +184,7 @@ export default Alchemy.Stack(
     const dashboard = yield* productionResource(
       Cloudflare.Website.StaticSite("Dashboard", {
         name: "sigiro-dashboard",
-        command: "aube run build",
+        command: "pnpm run build",
         cwd: "../dashboard",
         outdir: "dist",
         compatibility: { date: "2026-07-24" },

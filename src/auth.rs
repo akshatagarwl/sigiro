@@ -225,7 +225,7 @@ impl JwtVerifier {
             resource_metadata_path,
             jwks_url,
             agent_session_url,
-            client: reqwest::Client::builder()
+            client: crate::tls::http_client()
                 .timeout(JWKS_FETCH_TIMEOUT)
                 .build()
                 .context("failed to build JWKS HTTP client")?,
@@ -950,7 +950,7 @@ pub(crate) mod test_support {
             resource_metadata_path: "/.well-known/oauth-protected-resource".to_owned(),
             jwks_url: "http://127.0.0.1:9/jwks".to_owned(),
             agent_session_url: "http://127.0.0.1:9/session".to_owned(),
-            client: reqwest::Client::new(),
+            client: crate::tls::http_client().build().unwrap(),
             cache: RwLock::new(Some(CachedJwks {
                 keys,
                 expires_at: Instant::now() + Duration::from_secs(3600),

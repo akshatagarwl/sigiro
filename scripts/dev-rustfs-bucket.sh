@@ -26,7 +26,7 @@ image="${SIGIRO_DEV_RC_IMAGE:-rustfs/rc:v0.1.30@sha256:1296510ec27800668d26a8bdc
 # of the stack that never created the network. Fail on it immediately.
 if ! docker network inspect "$network" >/dev/null 2>&1; then
   echo "dev-rustfs-bucket: docker network '$network' does not exist." >&2
-  echo "  The dev stack creates it; start it first with: mise run dev" >&2
+  echo "  The dev stack creates it; start it first with: pnpm -C www run alchemy:dev:deploy" >&2
   exit 1
 fi
 

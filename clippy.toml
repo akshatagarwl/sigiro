@@ -104,4 +104,10 @@ disallowed-methods = [
     # DuckDB 2.0's static bundle needs its extensions registered before the
     # first database opens; `sigiro::pool::open_duckdb` does that.
     { path = "duckdb::Connection::open_in_memory", reason = "use sigiro::pool::open_duckdb" },
+    # Without a system trust store reqwest refuses to build a client; sigiro's
+    # also trust the bundled Mozilla roots, so the binary works anywhere.
+    { path = "reqwest::Client::new", reason = "use sigiro::tls::http_client" },
+    { path = "reqwest::Client::builder", reason = "use sigiro::tls::http_client" },
+    { path = "reqwest::blocking::Client::new", reason = "use sigiro::tls::blocking_http_client" },
+    { path = "reqwest::blocking::Client::builder", reason = "use sigiro::tls::blocking_http_client" },
 ]

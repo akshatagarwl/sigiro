@@ -190,7 +190,7 @@ export default Alchemy.Stack(
       network: network.name,
       postgres: {
         container: postgres.name,
-        // What the E2Es and `mise run run` connect to. `sslmode=verify-full`
+        // What the E2Es and `nix run . -- serve` connect to. `sslmode=verify-full`
         // with `sslrootcert` is the production contract, not decoration.
         catalogUrl:
           "postgresql://sigiro:***@127.0.0.1:5432/ducklake" +

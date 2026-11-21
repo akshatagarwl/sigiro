@@ -1,7 +1,8 @@
 name: Release
 
-# A v* tag builds the four CLI archives and publishes them, with SHA256SUMS, as
-# a GitHub Release. A manual run builds and uploads workflow artifacts only.
+# A v* tag builds the three CLI archives in the build matrix and publishes them,
+# with SHA256SUMS, as a GitHub Release. A manual run builds and uploads workflow
+# artifacts only.
 #
 # tag-on-main.yml also calls this workflow (workflow_call) right after it pushes
 # the tag, because a tag pushed with GITHUB_TOKEN starts no workflow run. In a
@@ -20,10 +21,6 @@ on:
 
 permissions:
   contents: read
-
-env:
-  CARGO_TERM_COLOR: always
-  RUSTC_WRAPPER: sccache
 
 jobs:
   # Fails in seconds if the tag does not name the version in Cargo.toml, before
@@ -82,88 +79,48 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Each built natively by Nix (flake.nix). The Linux binaries are fully
+        # static (musl) and run on any distribution; the macOS one links only
+        # the system's libraries. nixpkgs no longer supports x86_64-darwin, so
+        # Intel Macs are not a release target.
         include:
-          # ubuntu-22.04, not -latest. A gnu binary will not start against a
-          # glibc older than the one it linked against, so the runner's glibc is
-          # the oldest distro we support: 22.04 is 2.35, and -latest (24.04) is
-          # 2.39, which would silently drop Debian 12 and Ubuntu 22.04 users.
-          # Lower the floor further with musl, not with a newer runner.
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04
-            cross: true
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            system: x86_64-linux
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            system: aarch64-linux
           - target: aarch64-apple-darwin
             os: macos-15
-          - target: x86_64-apple-darwin
-            os: macos-15
+            system: aarch64-darwin
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.tag || github.sha }}
-
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
-          version: 2026.9.9
-          install_args: rust sccache packslip:github.com/jdx/mr-boxington packslip:github.com/aubepkg/aube
-      # `mise run build` builds the dashboard and the docs the binary embeds.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+          # DuckDB comes prebuilt from duckdb-static's cache (flake.nix).
+          extra_nix_config: |
+            extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+            extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         with:
-          node-version: 24.20.0
-      - name: Restore mbx build cache
-        uses: jdx/mr-boxington-action@867fc530102eec5b756075d70d850dc8330d2272 # v1.4.0
-        with:
-          cache-generation: v1-${{ matrix.target }}
-      # mise.toml's rust pin already lists every release target; this only
-      # asserts it. MISE_DISABLE_TOOLS keeps `mise exec` from installing the
-      # DuckDB CLI, which the build does not use and which has no asset for
-      # these runners at the pinned version.
-      - name: Rust target installed
-        env:
-          MISE_DISABLE_TOOLS: duckdb
-        run: mise exec -- rustup target add "${{ matrix.target }}"
+          name: akshat-sigiro-builds
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          installCommand: nix profile add .#cache-client
+          # extra_nix_config already lists this cache. `cachix use` would write a
+          # user-level `substituters =` that drops the duckdb-static cache.
+          skipAddingSubstituter: true
 
-      - name: Cross-compilation toolchain
-        if: matrix.cross
-        uses: eclipse-score/apt-install@bd30e2e74a4850389719cb8c3e312bb26aada4e0 # v1.0.0
-        with:
-          packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-          apt_update: true
-
-      - name: DuckDB static libs
-        env:
-          DUCKDB_STATIC_CACHE: ${{ runner.temp }}/duckdb-static
-        run: |
-          set -euo pipefail
-          eval "$(scripts/prepare-duckdb-static.sh '${{ matrix.target }}')"
-          {
-            echo "DUCKDB_LIB_DIR=$DUCKDB_LIB_DIR"
-            echo "DUCKDB_INCLUDE_DIR=$DUCKDB_INCLUDE_DIR"
-            echo "DUCKDB_STATIC=1"
-            echo "DUCKDB_STATIC_CACHE=$DUCKDB_STATIC_CACHE"
-          } >> "$GITHUB_ENV"
-
-      # ci.yml's reason applies here too: libduckdb-sys puts the C++ runtime
-      # before the static archive, so repeat it at the end of the link line.
-      - name: Linux link flags
-        if: contains(matrix.target, 'linux')
-        run: echo 'RUSTFLAGS=-C link-arg=-lstdc++' >> "$GITHUB_ENV"
-
+      # `sigiro --version` names the commit (flake.nix passes it in).
       - name: Build
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          # `sigiro --version` names the commit as well as the version.
-          SIGIRO_BUILD_COMMIT="$(git rev-parse --short=9 HEAD)"
-          export SIGIRO_BUILD_COMMIT
-          mise run --skip-tools build
+        run: nix build -L .#sigiro
 
-      # No UPX here, unlike the image. Compression buys nothing on a download
-      # the reader does once, costs a decompression stub on every start, and is
-      # a standing false-positive trigger for endpoint scanners — a bad trade
-      # for a binary a human puts on their laptop.
+      - name: Portable
+        run: nix build -L '.#checks.${{ matrix.system }}.portable'
+
       - name: Package
         id: package
         env:
@@ -182,7 +139,7 @@ jobs:
           # -C so the archive holds a bare `sigiro`, not a path. The installer
           # looks for exactly that. COPYFILE_DISABLE keeps macOS tar from
           # adding AppleDouble entries.
-          COPYFILE_DISABLE=1 tar -czf "$name" -C "target/${TARGET}/release" sigiro
+          COPYFILE_DISABLE=1 tar -czf "$name" -C result/bin sigiro
           [ "$(tar -tzf "$name")" = sigiro ] || { echo "::error::$name must hold exactly one file, sigiro"; exit 1; }
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -215,7 +172,7 @@ jobs:
           set -euo pipefail
           cd dist
           count="$(find . -maxdepth 1 -name "*.tar.gz" | wc -l)"
-          [ "$count" -eq 4 ] || { echo "::error::expected 4 archives, found $count"; exit 1; }
+          [ "$count" -eq 3 ] || { echo "::error::expected 3 archives, found $count"; exit 1; }
           sha256sum ./*.tar.gz | sed 's| \./| |' > SHA256SUMS
           cat SHA256SUMS
 

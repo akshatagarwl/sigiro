@@ -70,7 +70,9 @@ pub struct SigiroClient {
 impl SigiroClient {
     pub fn new(base_url: &str, auth: ClientAuth) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: crate::tls::http_client()
+                .build()
+                .expect("the HTTP client has a fixed, valid configuration"),
             base_url: base_url.trim_end_matches('/').to_string(),
             auth,
         }

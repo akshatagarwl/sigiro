@@ -5,7 +5,9 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@auth/agent@0.6.2': f53ec6ba0f776c79591189b3ab2d5e8e215c1fa593d55232c5ad63a8949e8b3e
+  '@auth/agent@0.6.2':
+    hash: f53ec6ba0f776c79591189b3ab2d5e8e215c1fa593d55232c5ad63a8949e8b3e
+    path: patches/@auth%2Fagent@0.6.2.patch
 
 importers:
 

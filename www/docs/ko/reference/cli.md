@@ -58,8 +58,8 @@ OTLP gRPC 서버, OTLP HTTP 서버, 쿼리 API를 시작합니다.
 | `--otlp-http-port <PORT>` | `SIGIRO_OTLP_HTTP_PORT` | `4318`                  |
 | `--otlp-grpc-port <PORT>` | `SIGIRO_GRPC_PORT`      | `4317`                  |
 
-처음 시작할 때 쿼리 확장을 데이터 디렉터리로 내려받습니다. 이 다운로드는 30–90초가 걸리며,
-그동안 시작이 멈춥니다.
+서버에 필요한 모든 것이 바이너리에 내장되어 있습니다. 시작할 때 아무것도 내려받지 않으며
+오프라인에서도 동작합니다.
 
 인증이 없는 서버(셀프 호스팅 기본값)는 웹 대시보드도
 `http://localhost:9999/dashboard/`에서 제공합니다. 대시보드는 바이너리에 내장되어

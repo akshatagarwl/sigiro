@@ -52,7 +52,7 @@
  * plain `text()`. Other columns that genuinely are `{ mode: "json" }` (the
  * oauth* scope/resource arrays) are correct as generated.
  *
- * `mise run auth-test` fails at "capability granted" if they are
+ * `pnpm -C auth run test:agent-e2e` fails at "capability granted" if they are
  * double-encoded, and the startup schema check in src/schema/check.ts turns a
  * missing table or column into a boot-time error.
  *
