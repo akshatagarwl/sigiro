@@ -176,6 +176,10 @@ mcp_servers:
     args: [mcp]
 ```
 
+For Cursor, select
+[Add sigiro MCP to Cursor](cursor://anysphere.cursor-deeplink/mcp/install?name=sigiro&config=eyJjb21tYW5kIjoic2lnaXJvIiwiYXJncyI6WyJtY3AiXX0=).
+Cursor opens the MCP configuration for confirmation.
+
 Other MCP-capable agents can register the same `sigiro mcp` command using their
 own MCP configuration. Use an absolute path to `sigiro` if the agent service has
 a narrower `PATH` than your interactive shell.
