@@ -1,7 +1,8 @@
 name: Release
 
-# A v* tag builds the four CLI archives and publishes them, with SHA256SUMS, as
-# a GitHub Release. A manual run builds and uploads workflow artifacts only.
+# A v* tag builds the three CLI archives in the build matrix and publishes them,
+# with SHA256SUMS, as a GitHub Release. A manual run builds and uploads workflow
+# artifacts only.
 #
 # tag-on-main.yml also calls this workflow (workflow_call) right after it pushes
 # the tag, because a tag pushed with GITHUB_TOKEN starts no workflow run. In a

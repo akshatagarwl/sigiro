@@ -78,6 +78,8 @@ from `Cargo.toml`.
 * The docs' API reference is rendered from `sigiro openapi`, the spec of the
   binary being built, rather than from the live sigiro.com spec.
 * `image.nix`: the container image, which holds just the static binary.
+  `nix build .#image` builds it for the host's Linux system only. Nothing here
+  publishes the multi-arch `ghcr.io/sigiroai/sigiro` manifest yet.
 
 After changing `dashboard/pnpm-lock.yaml` or `www/pnpm-lock.yaml`, update the
 matching `hash` in `nix/dashboard.nix` or `nix/docs.nix`: set it to `""`,
