@@ -165,8 +165,9 @@ storage: three platforms and multiple revisions may exceed the free 5 GB tier.
 3. Run the checks for what you touched:
    * Rust: `nix flake check` (rustfmt, clippy, tests, the binary and its
      portability), plus `nix develop --command python3 -m unittest tests.deployment.test_sync_postgres_boundary`
-     for the deployment contract. In `nix develop`, `cargo fmt`, `cargo clippy` and `cargo test`
-     work directly.
+     for the deployment contract. Run single checks with
+     `nix build .#checks.<system>.<name>` rather than plain `cargo`, so their
+     outputs are cached and reused by CI.
    * TypeScript: `pnpm run fmt:check && pnpm run lint`, plus the package's own
      `check` script (for example `pnpm -C auth run check`)
 4. Use [Conventional Commits](https://www.conventionalcommits.org/) for commit
