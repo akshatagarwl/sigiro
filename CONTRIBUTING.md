@@ -163,7 +163,7 @@ storage: three platforms and multiple revisions may exceed the free 5 GB tier.
 | `dashboard/` | Web dashboard (Next.js static export), embedded in the binary |
 | `www/` | Website and documentation (sigiro.com/docs) |
 | `tests/` | Rust integration tests, end-to-end and deployment contract tests |
-| `experiments/` | Rejected build experiments kept for reproduction, each a separate flake (not built by CI) |
+| `experiments/` | Experiments kept for reproduction, not built or run by CI (`dyndrv`: rejected build experiment, separate flake; `contrast`: trace contrast ranking with injected faults) |
 
 ## Make a change
 
