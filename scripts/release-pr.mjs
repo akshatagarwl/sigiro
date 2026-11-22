@@ -4,7 +4,7 @@
 // From origin/main it runs `pnpm run release:version` (changeset version, then
 // Cargo.toml/Cargo.lock sync), commits the result on release/v<version>, pushes
 // it and opens a PR with `gh`. A person or agent opens that PR, so CI runs on
-// it like any other. Merging it lets tag-on-main.yml tag and release.
+// it like any other. Merging it lets the ci.yml release job tag and release.
 //
 // `--dry-run` makes the commit, prints it, then deletes the branch: nothing is
 // pushed. Either way the checkout returns to the branch it started on.
@@ -83,7 +83,7 @@ try {
     console.log(`release:pr: dry run, ${branch} not pushed`);
   } else {
     git("push", "--quiet", "-u", "origin", branch);
-    const body = `${notes}\n\nMerging this PR tags \`${tag}\` on main and publishes the release (tag-on-main.yml → release.yml).`;
+    const body = `${notes}\n\nMerging this PR tags \`${tag}\` on main and publishes the release (the release job in ci.yml).`;
     const url = run("gh", [
       "pr",
       "create",

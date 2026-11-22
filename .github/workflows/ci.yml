@@ -1,22 +1,114 @@
-# Manual Rust gate and image build; release.yml runs on tags.
-name: CI
+name: ci
+
+# All of sigiro's CI. A job runs on one runner, so `build` runs once per native
+# system: the x86_64-linux job does everything, and the aarch64-linux and
+# aarch64-darwin jobs only build, check and smoke-test their own binary (no
+# cross-compilation, no QEMU). Every build lands in the Cachix cache, so `nix
+# build` at any main commit downloads instead of compiling.
+#
+# On main and v* tags, `release` then:
+# * publishes the commit's image as ghcr.io/akshatagarwl/sigiro:sha-<12 chars>,
+#   from the binaries `build` just cached;
+# * when package.json carries a version with no v<version> tag yet (a release
+#   PR just merged), tags the commit and publishes the GitHub Release (three
+#   archives and SHA256SUMS) plus the <version> and `latest` images. Pushing a
+#   v* tag by hand, or running this workflow on one, does the same for it.
 on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
+
 permissions:
   contents: read
+
+# Pull requests cancel superseded runs. Every main commit and tag gets its own
+# run, so no commit goes unbuilt and a run that has pushed a tag always finishes.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}-${{ github.event_name != 'pull_request' && github.sha || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  gate:
-    runs-on: ubuntu-latest
+  build:
+    name: ${{ matrix.system }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        # nixpkgs no longer supports x86_64-darwin, so Intel Macs are not a
+        # target. The Linux binaries are static (musl); the macOS one links only
+        # system libraries.
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - system: aarch64-darwin
+            runner: macos-15
+            target: aarch64-apple-darwin
+    env:
+      MAIN: ${{ matrix.system == 'x86_64-linux' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history for the secret scan and changeset check.
+          fetch-depth: ${{ matrix.system == 'x86_64-linux' && 0 || 1 }}
+
+      # Download the pinned release and verify its checksum instead of using
+      # gitleaks-action, which needs a license key for organization accounts.
+      - name: secret scan
+        if: env.MAIN == 'true'
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" dir --config .gitleaks.toml --redact --no-banner .
+          range=HEAD~1..HEAD
+          if [ -n "${BASE:-}" ] && [ "$BASE" != 0000000000000000000000000000000000000000 ] \
+            && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            range="$BASE..HEAD"
+          fi
+          "$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --redact --no-banner \
+            --log-opts="$range" .
+
+      # Warns, never fails, when a pull request changes what ships in the
+      # binary without adding a .changeset/*.md file. Changes that need no
+      # changelog line can add one with `pnpm run changeset --empty`.
+      - name: changeset
+        if: env.MAIN == 'true' && github.event_name == 'pull_request' && !startsWith(github.head_ref, 'release/')
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "$BASE_SHA"...HEAD)"
+          shipped="$(printf '%s\n' "$changed" | grep -E '^(src/|crates/|dashboard/|build\.rs$|Cargo\.toml$)' || true)"
+          added="$(git diff --name-only --diff-filter=A "$BASE_SHA"...HEAD -- '.changeset/*.md' | grep -v '^\.changeset/README\.md$' || true)"
+          if [ -n "$shipped" ] && [ -z "$added" ]; then
+            echo "::warning::This PR changes the sigiro binary but adds no changeset. Run \`pnpm run changeset\` (or \`pnpm run changeset --empty\` if it needs no changelog line)."
+          else
+            echo "ok"
+          fi
+
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
+          # DuckDB comes prebuilt from duckdb-static's cache (flake.nix).
           extra_nix_config: |
             extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
             extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+            max-jobs = 2
+            cores = 3
+      # Without a token (forks) this only reads the cache.
       - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         with:
           name: akshat-sigiro-builds
@@ -25,10 +117,187 @@ jobs:
           # extra_nix_config already lists this cache. `cachix use` would write a
           # user-level `substituters =` that drops the duckdb-static cache.
           skipAddingSubstituter: true
-      - run: nix flake check -L
-      - name: Deployment contract
+
+      - name: javascript and typescript
+        if: env.MAIN == 'true'
+        run: |
+          nix develop .#javascript --command bash -euo pipefail -c '
+            pnpm install --frozen-lockfile
+            pnpm -C auth install --frozen-lockfile
+            pnpm -C www install --frozen-lockfile
+            pnpm -C dashboard install --frozen-lockfile
+            pnpm -C dashboard run typecheck
+            pnpm run fmt:check
+            pnpm run lint
+          '
+
+      - name: native system
+        env:
+          EXPECTED_SYSTEM: ${{ matrix.system }}
+        run: |
+          set -euo pipefail
+          uname -sm
+          test "$(nix eval --impure --raw --expr builtins.currentSystem)" = "$EXPECTED_SYSTEM"
+          df -h
+
+      # `sigiro --version` names the commit (flake.nix passes it in).
+      - name: build
+        run: nix build .#sigiro -L
+      - name: tests, lint, formatting and portability
+        run: nix flake check --keep-going -L
+
+      - name: smoke test
+        run: |
+          set -euo pipefail
+          ./result/bin/sigiro --version
+          ./result/bin/sigiro --help
+          ./result/bin/sigiro openapi > "$RUNNER_TEMP/openapi.json"
+          nix develop --command python3 -c 'import json, os; spec=json.load(open(os.environ["RUNNER_TEMP"] + "/openapi.json")); assert spec["paths"]; assert spec["openapi"]'
+      - name: deployment contract
+        if: env.MAIN == 'true'
         run: nix develop --command python3 -m unittest tests.deployment.test_sync_postgres_boundary
-      - name: Verify the container image
+
+      - name: development linkers
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/linker-smoke.sh" <<'SCRIPT'
+          set -euo pipefail
+          printf 'fn main() { println!("linker smoke passed"); }\n' > "$RUNNER_TEMP/main.rs"
+          linker_var="CARGO_TARGET_$(printf '%s' "$CARGO_BUILD_TARGET" | tr '[:lower:]-' '[:upper:]_')_LINKER"
+          "${!linker_var}" -Wl,--version
+          rustc --edition 2024 --target "$CARGO_BUILD_TARGET" -C relocation-model=static -C "linker=${!linker_var}" "$RUNNER_TEMP/main.rs" -o "$RUNNER_TEMP/linker-smoke"
+          "$RUNNER_TEMP/linker-smoke"
+          SCRIPT
+          for linker in default mold wild; do
+            nix develop ".#$linker" --command bash "$RUNNER_TEMP/linker-smoke.sh"
+          done
+
+      # This system's image starts and reports ready on its own architecture.
+      # `nix flake check` already checked its config and contents.
+      - name: image health
+        if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           nix run .#image.copyToDockerDaemon
+          image="$(nix eval --raw .#image.imageRefUnsafe)"
+          docker run -d --name sigiro "$image"
+          status=starting
+          for _ in $(seq 90); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' sigiro)"
+            [ "$status" = healthy ] && break
+            sleep 2
+          done
+          docker logs sigiro
+          [ "$status" = healthy ] || { echo "::error::image did not become healthy ($status)"; exit 1; }
+          docker inspect -f '{{.Os}}/{{.Architecture}}' "$image"
+
+      # Named for the release it may become. -C so the archive holds a bare
+      # `sigiro`, which the installer looks for. COPYFILE_DISABLE keeps macOS
+      # tar from adding AppleDouble entries.
+      - name: package
+        id: package
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          name="sigiro-${version}-${TARGET}.tar.gz"
+          COPYFILE_DISABLE=1 tar -czf "$name" -C result/bin sigiro
+          [ "$(tar -tzf "$name")" = sigiro ] || { echo "::error::$name must hold exactly one file, sigiro"; exit 1; }
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.name }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # Publishing only copies what `build` cached: no rebuild, no QEMU, no Docker
+  # build. GITHUB_TOKEN can write the package because it is linked to this
+  # repository. GitHub Releases are the source of truth for a version;
+  # sigiro-infra's nightly driver copies each new one to sigiro.com/dl.
+  release:
+    needs: build
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          extra_nix_config: |
+            extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+            extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+
+      # Empty unless this run releases: a v* tag run, or a main push whose
+      # package.json version has no tag yet (scripts/tag-release.mjs pushes it).
+      - name: release tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            case "$GITHUB_REF_NAME" in v*) ;; *) echo "::error::release tag '$GITHUB_REF_NAME' must start with v"; exit 1 ;; esac
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+            nix develop .#javascript --command node scripts/tag-release.mjs
+          fi
+
+      # A published version is never rebuilt or replaced: archives already on
+      # sigiro.com/dl and in users' SHA256SUMS would stop matching.
+      - name: release checks
+        if: steps.tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cargo_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          [ "$cargo_version" = "${TAG#v}" ] || { echo "::error::tag $TAG does not match Cargo.toml version $cargo_version"; exit 1; }
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::$TAG is already released; a version is never re-released"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.tag.outputs.tag != ''
+        with:
+          path: dist
+          merge-multiple: true
+      - name: github release
+        if: steps.tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cd dist
+          count="$(find . -maxdepth 1 -name "*.tar.gz" | wc -l)"
+          [ "$count" -eq 3 ] || { echo "::error::expected 3 archives, found $count"; exit 1; }
+          sha256sum ./*.tar.gz | sed 's| \./| |' > SHA256SUMS
+          cat SHA256SUMS
+          gh release create "$TAG" ./*.tar.gz SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "sigiro ${TAG#v}" --generate-notes
+
+      # Substitute-only: the binaries `build` cached, never a rebuild here.
+      - name: fetch image binaries
+        run: nix build -L --max-jobs 0 .#packages.x86_64-linux.sigiro .#packages.aarch64-linux.sigiro
+      - name: publish image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          repo=ghcr.io/akshatagarwl/sigiro
+          refs=("$repo:sha-${GITHUB_SHA::12}")
+          if [ -n "$TAG" ]; then refs+=("$repo:${TAG#v}" "$repo:latest"); fi
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          nix run .#publish-image -- "${refs[@]}"

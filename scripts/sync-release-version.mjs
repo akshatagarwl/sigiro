@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Copies the root package.json version (the one Changesets bumps) into the
 // `sigiro` crate: Cargo.toml's [package] version and its Cargo.lock entry.
-// release.yml refuses a tag that does not match Cargo.toml, so the two must
+// The ci.yml release job refuses a tag that does not match Cargo.toml, so the two must
 // never drift. `--check` only reports drift and exits non-zero.
 //
 // Edits the files as text instead of running cargo, so the release step

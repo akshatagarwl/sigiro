@@ -47,7 +47,7 @@
     let
       inherit (nixpkgs) lib;
 
-      # Native release hosts supported by the pinned nixpkgs (release.yml).
+      # Native release hosts supported by the pinned nixpkgs (.github/workflows/ci.yml).
       systems = [
         "x86_64-linux"
         "aarch64-linux"

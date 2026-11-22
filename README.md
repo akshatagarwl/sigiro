@@ -17,7 +17,7 @@ is right there.
 [Website](https://sigiro.com) · [Quickstart](https://sigiro.com/docs/tutorials/quickstart) · [Documentation](https://sigiro.com/docs) · [Releases](https://github.com/akshatagarwl/sigiro/releases) · [Contributing](CONTRIBUTING.md)
 
 [![Latest release](https://img.shields.io/github/v/release/akshatagarwl/sigiro)](https://github.com/akshatagarwl/sigiro/releases/latest)
-[![CI (manually triggered)](https://github.com/akshatagarwl/sigiro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/akshatagarwl/sigiro/actions/workflows/ci.yml)
+[![ci](https://github.com/akshatagarwl/sigiro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/akshatagarwl/sigiro/actions/workflows/ci.yml)
 [![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue)](LICENSE.md)
 
 ![Dashboard overview: requests, errors, latency and log volume for two small demo services](docs/assets/dashboard-overview.png)

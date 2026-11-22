@@ -6,7 +6,7 @@ use std::env;
 // is unreadable from the built binary.
 #[allow(clippy::disallowed_methods)]
 fn main() {
-    // `sigiro --version`: release.yml and the nightly driver set
+    // `sigiro --version`: the Nix build (flake.nix) and the nightly driver set
     // SIGIRO_BUILD_COMMIT to the short source SHA so a downloaded binary names
     // the commit it came from. Nightlies all carry the version of the next
     // release, so the package version alone cannot tell two of them apart.

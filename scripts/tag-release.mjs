@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Run on every push to main by .github/workflows/tag-on-main.yml. When origin
+// Run on every push to main by the release job in .github/workflows/ci.yml. When origin
 // has no `v<version>` tag for the version in package.json, creates an
 // annotated tag at HEAD, pushes it, and writes `tag=v<version>` to
-// $GITHUB_OUTPUT so the same run calls release.yml. When the tag exists it
+// $GITHUB_OUTPUT so the same job publishes the release. When the tag exists it
 // writes `tag=` and does nothing, so a version is tagged and released once.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -13,7 +13,7 @@ const output = (value) => {
     appendFileSync(process.env.GITHUB_OUTPUT, `tag=${value}\n`);
 };
 
-// Never tag a version Cargo.toml does not carry: release.yml would reject it.
+// Never tag a version Cargo.toml does not carry: the release job would reject it.
 execFileSync("node", ["scripts/sync-release-version.mjs", "--check"], {
   stdio: "inherit",
 });

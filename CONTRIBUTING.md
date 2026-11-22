@@ -89,11 +89,17 @@ from `Cargo.toml`.
   `<tag>-arm64`, then makes `<tag>` an index over both, skipping blobs the
   registry already has (log in with `docker login` first). Each binary is
   compiled natively on its own system and fetched from the cache; publishing
-  needs both cached binaries but no QEMU. Platform verification builds and
-  health-checks images on native runners on every push to main, then publishes
-  that commit's image as `sha-<12-character commit>`. The Release workflow
-  publishes version and `latest` image tags on version-tag releases; manual
-  runs remain artifact-only. There is no separate image workflow.
+  needs both cached binaries but no QEMU. CI (`.github/workflows/ci.yml`)
+  builds and health-checks images on native runners on every push to main, then
+  publishes that commit's image as `sha-<12-character commit>`; releases also
+  publish the version and `latest` tags.
+
+All CI is the one `build` job in `.github/workflows/ci.yml`, run once per
+native system because a job runs on one machine: x86_64-linux runs everything
+(secret scan, changeset warning, JavaScript/TypeScript checks, `nix flake
+check`, smoke tests, linkers, image health); aarch64-linux and aarch64-darwin
+build, check and smoke-test their own binary. On main and `v*` tags the
+`release` job then publishes the image and, for a new version, the release.
 
 After changing `dashboard/pnpm-lock.yaml` or `www/pnpm-lock.yaml`, update the
 matching `hash` in `nix/dashboard.nix` or `nix/docs.nix`: set it to `""`,
@@ -201,9 +207,9 @@ never a failure. For changes that need no changelog line, ignore it or run
    with `gh`. `pnpm run release:pr --dry-run` shows the commit without pushing.
 2. CI runs on that PR like any other. Review the bump and the changelog, then
    merge it.
-3. On the push to `main`, `tag-on-main.yml` sees a version with no tag, pushes
-   `v<version>` and, in the same run, calls `release.yml`: three archives and
-   `SHA256SUMS` on a GitHub Release. sigiro-infra then copies the release to
+3. On the push to `main`, the `release` job in `ci.yml` sees a version with no
+   tag, pushes `v<version>` and, in the same run, publishes three archives and
+   `SHA256SUMS` on a GitHub Release, plus the version and `latest` images. sigiro-infra then copies the release to
    sigiro.com/dl.
 
 Release notes should lead with user-visible changes, then list supported
@@ -214,18 +220,18 @@ unreleased `main` features are included in an existing version, and do not repla
 published archives or checksums just to improve the presentation.
 
 Every other push to `main` finds the tag already there and does nothing.
-`release.yml` refuses a tag that does not match `Cargo.toml` and a version that
-already has a GitHub Release. If a release fails after the tag is pushed,
-re-run the failed jobs of that run, or run `release.yml` manually on the tag
-(`gh workflow run release.yml --ref v<version>`). Pushing a `v*` tag by hand
-still starts `release.yml` too. No GitHub App, PAT or repository setting is
+The `release` job refuses a tag that does not match `Cargo.toml` and a version
+that already has a GitHub Release. If a release fails after the tag is pushed,
+re-run the failed jobs of that run, or run CI manually on the tag
+(`gh workflow run ci.yml --ref v<version>`). Pushing a `v*` tag by hand
+releases it too. No GitHub App, PAT or repository setting is
 involved.
 
 ## What CI runs on forks
 
-Pull requests from forks run only jobs that need no repository secrets
-(JavaScript format/lint/typecheck and secret scanning). Release and deployment
-jobs run only for maintainers.
+Pull requests from forks run the same `build` job without repository secrets:
+they read the binary cache but never write to it. The `release` job runs only
+for main and `v*` tags.
 
 ## Repository presentation
 
