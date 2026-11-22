@@ -57,6 +57,54 @@ listener **inside the container**. Keep host-side publishing on loopback
 (for example, `-p 127.0.0.1:9999:9999`); the container listener setting does
 not provide authentication.
 
+### On NixOS
+
+The flake ships a NixOS module that runs `sigiro serve` as a hardened systemd
+service under its own `sigiro` user, with data in `/var/lib/sigiro`:
+
+```nix
+{
+  inputs.sigiro.url = "github:akshatagarwl/sigiro";
+
+  outputs = { nixpkgs, sigiro, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [
+        sigiro.nixosModules.default
+        {
+          services.sigiro.enable = true;
+          # Optional, all shown with their defaults except settings:
+          # services.sigiro.bind = "127.0.0.1";
+          # services.sigiro.port = 9999;          # dashboard, API, /health
+          # services.sigiro.otlpGrpcPort = 4317;
+          # services.sigiro.otlpHttpPort = 4318;
+          # services.sigiro.openFirewall = false;
+          # services.sigiro.settings.SIGIRO_RETENTION_DAYS = 30;
+          # services.sigiro.environmentFile = "/run/secrets/sigiro.env";
+        }
+      ];
+    };
+  };
+}
+```
+
+`settings` sets any `SIGIRO_*` variable; put tokens in `environmentFile`, not
+`settings`, which ends up in the world-readable Nix store. So the machine
+downloads the prebuilt static binary instead of compiling it, trust the signed
+caches the flake builds from:
+
+```nix
+nix.settings = {
+  extra-substituters = [
+    "https://akshat-sigiro-builds.cachix.org"
+    "https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache"
+  ];
+  extra-trusted-public-keys = [
+    "akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8="
+    "duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ="
+  ];
+};
+```
+
 ## Send it telemetry
 
 Point any OpenTelemetry SDK or Collector at it:

@@ -215,6 +215,12 @@
                 architecture = hostArchitecture;
                 inherit sigiro;
               };
+            }
+            # NixOS VM tests need KVM, which GitHub offers only on x86_64 runners.
+            // lib.optionalAttrs (system == "x86_64-linux") {
+              nixos-module = pkgs.callPackage ./nix/nixos-test.nix {
+                module = self.nixosModules.default;
+              };
             };
 
           devShells = {
@@ -242,5 +248,11 @@
       checks = lib.mapAttrs (_: s: s.checks) bySystem;
       devShells = lib.mapAttrs (_: s: s.devShells) bySystem;
       formatter = lib.mapAttrs (_: s: s.formatter) bySystem;
+
+      # `services.sigiro` (nix/nixos-module.nix).
+      nixosModules = {
+        default = self.nixosModules.sigiro;
+        sigiro = import ./nix/nixos-module.nix { inherit self; };
+      };
     };
 }
