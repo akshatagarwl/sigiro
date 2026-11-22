@@ -53,7 +53,8 @@ jobs:
     env:
       MAIN: ${{ matrix.system == 'x86_64-linux' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history for the secret scan and changeset check.
           fetch-depth: ${{ matrix.system == 'x86_64-linux' && 0 || 1 }}
@@ -100,7 +101,8 @@ jobs:
             echo "ok"
           fi
 
-      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - name: install nix
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
           # DuckDB comes prebuilt from duckdb-static's cache (flake.nix).
           extra_nix_config: |
@@ -109,7 +111,8 @@ jobs:
             max-jobs = 2
             cores = 3
       # Without a token (forks) this only reads the cache.
-      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+      - name: binary cache
+        uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         with:
           name: akshat-sigiro-builds
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -206,7 +209,8 @@ jobs:
           COPYFILE_DISABLE=1 tar -czf "$name" -C result/bin sigiro
           [ "$(tar -tzf "$name")" = sigiro ] || { echo "::error::$name must hold exactly one file, sigiro"; exit 1; }
           echo "name=$name" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: upload archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.package.outputs.name }}
           path: ${{ steps.package.outputs.name }}
@@ -226,10 +230,12 @@ jobs:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - name: install nix
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
           extra_nix_config: |
             extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
@@ -266,7 +272,8 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: download archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         if: steps.tag.outputs.tag != ''
         with:
           path: dist
