@@ -90,9 +90,10 @@ from `Cargo.toml`.
   registry already has (log in with `docker login` first). Each binary is
   compiled natively on its own system and fetched from the cache; publishing
   needs both cached binaries but no QEMU. Platform verification builds and
-  health-checks images on native runners. The Release workflow publishes
-  version and `latest` image tags on version-tag releases; manual runs remain
-  artifact-only. There is no separate image workflow.
+  health-checks images on native runners on every push to main, then publishes
+  that commit's image as `sha-<12-character commit>`. The Release workflow
+  publishes version and `latest` image tags on version-tag releases; manual
+  runs remain artifact-only. There is no separate image workflow.
 
 After changing `dashboard/pnpm-lock.yaml` or `www/pnpm-lock.yaml`, update the
 matching `hash` in `nix/dashboard.nix` or `nix/docs.nix`: set it to `""`,

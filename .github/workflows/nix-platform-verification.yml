@@ -1,18 +1,14 @@
 name: Nix platform verification
 
 # Builds and checks sigiro natively on every release system, including each
-# Linux container image. Pushes to main that change the build run it; the
-# binaries it pushes to the cache are what the release's image job fetches.
+# Linux container image, on every push to main. The binary embeds the commit, so
+# every commit is a new build; caching each one means `nix build` (and the NixOS
+# module) at any main commit downloads instead of compiling. Once all systems
+# pass, the commit's image is published as ghcr.io/akshatagarwl/sigiro:sha-<sha>.
+# Version tags and `latest` stay with the Release workflow.
 on:
   push:
     branches: [main]
-    paths:
-      - flake.nix
-      - flake.lock
-      - nix/**
-      - Cargo.lock
-      - rust-toolchain.toml
-      - .github/workflows/nix-platform-verification.yml
   workflow_dispatch:
 
 permissions:
@@ -117,3 +113,32 @@ jobs:
           path: sigiro-${{ matrix.system }}.tar.gz
           if-no-files-found: error
           retention-days: 7
+
+  # Assembling the image only copies the binaries the matrix just cached: no
+  # QEMU, no Docker build. GITHUB_TOKEN can write the package because it is
+  # linked to this repository.
+  publish-image:
+    needs: native
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086
+        with:
+          extra_nix_config: |
+            extra-substituters = https://akshat-sigiro-builds.cachix.org https://github.com/akshatagarwl/duckdb-static/releases/download/nix-cache
+            extra-trusted-public-keys = akshat-sigiro-builds.cachix.org-1:YjaKP3P+EoMjSjDAN1yI5U5dbZr5l9yNI5qeFphJvA8= duckdb-static.github.akshatagarwl-1:1yQ0flJ3vpCoIicGqSTO8gHezxiCOj2M0VLyJXXqQVQ=
+      # Substitute-only: never a rebuild (or emulation) on this runner.
+      - name: Fetch binaries
+        run: nix build -L --max-jobs 0 .#packages.x86_64-linux.sigiro .#packages.aarch64-linux.sigiro
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          nix run .#publish-image -- "ghcr.io/akshatagarwl/sigiro:sha-${GITHUB_SHA::12}"
