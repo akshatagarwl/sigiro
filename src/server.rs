@@ -1918,6 +1918,11 @@ async fn trace_detail_handler(
                 &format!("invalid span_id: {e}"),
             )
         })?;
+        // Exporters retry, so a span can arrive more than once. A span ID is
+        // unique within a trace; keep its first copy.
+        if span_map.contains_key(&span_id) {
+            continue;
+        }
         let parent_span_id = obj
             .get("parent_span_id")
             .and_then(|v| v.as_str())
@@ -2088,6 +2093,10 @@ async fn trace_detail_handler(
 }
 
 /// Compute the critical path: longest duration-sum path from root to any leaf.
+///
+/// Each span's longest path is computed once, so the cost is linear in the
+/// number of spans. A span already on the current path is skipped, so parent
+/// cycles in bad data end the path instead of recursing forever.
 fn compute_critical_path(
     root_id: &sigiro_segments::SpanId,
     parent_to_children: &std::collections::HashMap<
@@ -2096,61 +2105,51 @@ fn compute_critical_path(
     >,
     span_map: &std::collections::HashMap<sigiro_segments::SpanId, SpanDetail>,
 ) -> Vec<sigiro_segments::SpanId> {
-    #[allow(clippy::too_many_arguments)]
-    fn dfs(
-        span_id: &sigiro_segments::SpanId,
-        parent_to_children: &std::collections::HashMap<
-            sigiro_segments::SpanId,
-            Vec<sigiro_segments::SpanId>,
-        >,
-        span_map: &std::collections::HashMap<sigiro_segments::SpanId, SpanDetail>,
-        current_path: &[sigiro_segments::SpanId],
-        current_duration: i64,
-        best_path: &mut Vec<sigiro_segments::SpanId>,
-        best_duration: &mut i64,
-    ) {
-        let span = match span_map.get(span_id) {
-            Some(s) => s,
-            None => return,
-        };
-        let mut path = current_path.to_vec();
-        path.push(span_id.clone());
-        let new_duration = current_duration.saturating_add(span.duration_us);
-
-        // Leaf node: check if this path is the critical path
-        if let Some(children) = parent_to_children.get(span_id) {
-            for child_id in children {
-                dfs(
-                    child_id,
-                    parent_to_children,
-                    span_map,
-                    &path,
-                    new_duration,
-                    best_path,
-                    best_duration,
-                );
-            }
-        } else {
-            // Leaf node
-            if new_duration > *best_duration {
-                *best_duration = new_duration;
-                *best_path = path;
+    type Id = sigiro_segments::SpanId;
+    /// The duration of the longest path down from `span_id`, and its next span.
+    fn longest<'a>(
+        span_id: &'a Id,
+        parent_to_children: &'a std::collections::HashMap<Id, Vec<Id>>,
+        span_map: &std::collections::HashMap<Id, SpanDetail>,
+        on_path: &mut std::collections::HashSet<&'a Id>,
+        best: &mut std::collections::HashMap<&'a Id, (i64, Option<&'a Id>)>,
+    ) -> Option<i64> {
+        if let Some((duration, _)) = best.get(span_id) {
+            return Some(*duration);
+        }
+        let span = span_map.get(span_id)?;
+        if !on_path.insert(span_id) {
+            return None;
+        }
+        let mut next: Option<(i64, &Id)> = None;
+        for child in parent_to_children.get(span_id).into_iter().flatten() {
+            if let Some(d) = longest(child, parent_to_children, span_map, on_path, best)
+                && next.is_none_or(|(best_d, _)| d > best_d)
+            {
+                next = Some((d, child));
             }
         }
+        on_path.remove(span_id);
+        let duration = span.duration_us.saturating_add(next.map_or(0, |(d, _)| d));
+        best.insert(span_id, (duration, next.map(|(_, child)| child)));
+        Some(duration)
     }
 
-    let mut best_path = Vec::new();
-    let mut best_duration = i64::MIN;
-    dfs(
+    let mut best = std::collections::HashMap::new();
+    longest(
         root_id,
         parent_to_children,
         span_map,
-        &[],
-        0,
-        &mut best_path,
-        &mut best_duration,
+        &mut std::collections::HashSet::new(),
+        &mut best,
     );
-    best_path
+    let mut path = Vec::new();
+    let mut at = best.contains_key(root_id).then_some(root_id);
+    while let Some(id) = at {
+        path.push(id.clone());
+        at = best.get(id).and_then(|(_, next)| *next);
+    }
+    path
 }
 
 /// Compute service duration breakdown with percentages.
@@ -2296,6 +2295,87 @@ mod admission_response_tests {
         assert_eq!(
             query_api_error("query rejected", &error).status(),
             StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+}
+
+#[cfg(test)]
+mod critical_path_tests {
+    use super::*;
+    use sigiro_segments::{SpanId, TraceId};
+    use std::collections::HashMap;
+
+    fn id(n: usize) -> SpanId {
+        SpanId::try_new(format!("{:016x}", n + 1)).unwrap()
+    }
+
+    fn trace(
+        edges: &[(usize, usize)],
+        durations: &[i64],
+    ) -> (HashMap<SpanId, Vec<SpanId>>, HashMap<SpanId, SpanDetail>) {
+        let mut children: HashMap<SpanId, Vec<SpanId>> = HashMap::new();
+        for &(parent, child) in edges {
+            children.entry(id(parent)).or_default().push(id(child));
+        }
+        let spans = durations
+            .iter()
+            .enumerate()
+            .map(|(n, &duration_us)| {
+                let span = SpanDetail {
+                    trace_id: TraceId::try_new("1".repeat(32)).unwrap(),
+                    span_id: id(n),
+                    parent_span_id: None,
+                    span_name: String::new(),
+                    duration_us,
+                    status_code: 0,
+                    service_name: String::new(),
+                    timestamp: String::new(),
+                    span_kind: None,
+                    span_attributes: None,
+                    resource_attributes: None,
+                    events_json: None,
+                    links_json: None,
+                    scope_name: None,
+                    scope_version: None,
+                    trace_state: None,
+                };
+                (id(n), span)
+            })
+            .collect();
+        (children, spans)
+    }
+
+    #[test]
+    fn follows_the_longest_duration_sum() {
+        // 0 -> 1 (5) -> 3 (1), 0 -> 2 (2) -> 4 (10)
+        let (children, spans) = trace(&[(0, 1), (0, 2), (1, 3), (2, 4)], &[1, 5, 2, 1, 10]);
+        assert_eq!(
+            compute_critical_path(&id(0), &children, &spans),
+            [id(0), id(2), id(4)]
+        );
+    }
+
+    #[test]
+    fn repeated_children_do_not_multiply_the_work() {
+        // A 40-deep chain where every child is listed 34 times, as when an
+        // exporter retried every request: 34^40 paths if walked one by one.
+        let depth = 40;
+        let edges: Vec<_> = (0..depth)
+            .flat_map(|n| std::iter::repeat_n((n, n + 1), 34))
+            .collect();
+        let (children, spans) = trace(&edges, &vec![1; depth + 1]);
+        assert_eq!(
+            compute_critical_path(&id(0), &children, &spans).len(),
+            depth + 1
+        );
+    }
+
+    #[test]
+    fn a_parent_cycle_ends_the_path() {
+        let (children, spans) = trace(&[(0, 1), (1, 2), (2, 1)], &[1, 1, 1]);
+        assert_eq!(
+            compute_critical_path(&id(0), &children, &spans),
+            [id(0), id(1), id(2)]
         );
     }
 }
