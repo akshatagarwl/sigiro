@@ -17,12 +17,13 @@ pub mod profile_export;
 mod profiles;
 pub use profiles::transform_otlp_profiles;
 pub mod read_only_sql;
+pub mod span_values;
 pub use read_only_sql::{ALLOWED_TABLES, validate_read_only, validate_read_only_with};
 mod proto;
 
 pub use otlp::{
-    DecodeError, InputFormat, MetricBatches, SkippedMetrics, transform_logs, transform_metrics,
-    transform_traces,
+    DecodeError, InputFormat, MetricBatches, SkippedMetrics, SplitTraces, transform_logs,
+    transform_metrics, transform_traces, transform_traces_split,
 };
 
 const ROW_GROUP_SIZE: usize = 100_000;

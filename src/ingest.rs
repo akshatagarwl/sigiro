@@ -28,7 +28,7 @@ use opentelemetry_proto::tonic::collector::{
     },
 };
 use prost::Message;
-use sigiro_segments::{InputFormat, MetricBatches};
+use sigiro_segments::{InputFormat, MetricBatches, SplitTraces};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
@@ -198,9 +198,9 @@ async fn transform_traces(
     workloads: crate::workload::WorkloadBudget,
     bytes: Bytes,
     fmt: InputFormat,
-) -> Result<RecordBatch, Status> {
+) -> Result<SplitTraces, Status> {
     spawn_transform(workloads, "transform traces", move || {
-        sigiro_segments::transform_traces(&bytes, fmt)
+        sigiro_segments::transform_traces_split(&bytes, fmt)
             .map_err(|error| Status::invalid_argument(error.to_string()))
     })
     .await
@@ -242,7 +242,10 @@ impl TraceService for OtlpGrpcService {
         let project_id = extract_project_id_grpc(&self.auth_mode, request.metadata()).await?;
         // Transform on tokio blocking pool — no double decode.
         let bytes = Bytes::from(request.into_inner().encode_to_vec());
-        let batch = transform_traces(self.router.workloads(), bytes, InputFormat::Protobuf).await?;
+        let SplitTraces {
+            spans: batch,
+            values,
+        } = transform_traces(self.router.workloads(), bytes, InputFormat::Protobuf).await?;
         if batch.num_rows() == 0 {
             tracing::warn!(project_id, "export traces: empty batch after transform");
             return Ok(Response::new(ExportTraceServiceResponse {
@@ -252,8 +255,12 @@ impl TraceService for OtlpGrpcService {
                 }),
             }));
         }
-        self.route_batch(IngestMsg::Traces { project_id, batch })
-            .await?;
+        self.route_batch(IngestMsg::Traces {
+            project_id,
+            batch,
+            values,
+        })
+        .await?;
         Ok(Response::new(ExportTraceServiceResponse {
             partial_success: None,
         }))
@@ -613,7 +620,10 @@ async fn ingest_traces(
     body: Bytes,
 ) -> StatusCode {
     let fmt = detect_format(headers);
-    let batch = match transform_traces(state.router.workloads(), body, fmt).await {
+    let SplitTraces {
+        spans: batch,
+        values,
+    } = match transform_traces(state.router.workloads(), body, fmt).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!("failed to transform traces: {e}");
@@ -626,7 +636,15 @@ async fn ingest_traces(
     if batch.num_rows() == 0 {
         return StatusCode::OK;
     }
-    route_ingest_msg(state, IngestMsg::Traces { project_id, batch }).await
+    route_ingest_msg(
+        state,
+        IngestMsg::Traces {
+            project_id,
+            batch,
+            values,
+        },
+    )
+    .await
 }
 
 #[instrument(skip_all, fields(endpoint = "/v1/logs"))]

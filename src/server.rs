@@ -1773,6 +1773,67 @@ async fn alerts_replay_handler(
     Ok(Json(AlertsReplayResponse { replayed }))
 }
 
+/// Put the attribute values stored in `sigiro_span_values` back into each
+/// row's `span_attributes`.
+async fn restore_span_values(
+    state: &AppState,
+    auth: &TenantId,
+    rows: &mut [serde_json::Value],
+) -> anyhow::Result<()> {
+    let mut days = std::collections::BTreeSet::new();
+    let mut hashes = std::collections::BTreeSet::new();
+    for row in rows.iter() {
+        let Some(refs) = row.get("span_attribute_refs").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let start_us = row.get("start_us").and_then(serde_json::Value::as_i64);
+        days.insert(sigiro_segments::span_values::day_end_us(
+            start_us.unwrap_or_default(),
+        ));
+        let refs: serde_json::Map<String, serde_json::Value> = serde_json::from_str(refs)?;
+        hashes.extend(
+            refs.values()
+                .filter_map(|h| h.as_str().map(escape_sql_string)),
+        );
+    }
+    if hashes.is_empty() {
+        return Ok(());
+    }
+    let days = days
+        .iter()
+        .map(|day| format!("make_timestamp({day})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let hashes = hashes
+        .iter()
+        .map(|hash| format!("'{hash}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT hash, any_value(value) AS value FROM {}sigiro_span_values \
+         WHERE timestamp IN ({days}) AND hash IN ({hashes}) GROUP BY hash",
+        ProjectPool::prefix()
+    );
+    let (values, _) = execute_sql(state, auth, &sql).await?;
+    let values: std::collections::HashMap<&str, &str> = values
+        .iter()
+        .filter_map(|row| Some((row.get("hash")?.as_str()?, row.get("value")?.as_str()?)))
+        .collect();
+    for row in rows.iter_mut() {
+        let (Some(attrs), Some(refs)) = (
+            row.get("span_attributes").and_then(|v| v.as_str()),
+            row.get("span_attribute_refs").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        let merged = sigiro_segments::span_values::merge_span_values(attrs, refs, |hash| {
+            values.get(hash).copied()
+        })?;
+        row["span_attributes"] = serde_json::Value::String(merged);
+    }
+    Ok(())
+}
+
 /// GET /v1/traces/{trace_id} -- return a single trace with full detail including critical path and service breakdown.
 #[utoipa::path(
      get,
@@ -1803,7 +1864,7 @@ async fn trace_detail_handler(
         "SELECT
             trace_id, span_id, parent_span_id, span_name, duration,
             status_code, service_name, span_kind,
-            span_attributes, resource_attributes,
+            span_attributes, span_attribute_refs, resource_attributes,
             timestamp::VARCHAR AS start_timestamp,
             epoch_us(timestamp) AS start_us,
             end_timestamp,
@@ -1815,7 +1876,10 @@ async fn trace_detail_handler(
          ORDER BY timestamp",
         prefix, safe_trace_id
     );
-    let (results, _truncated) = execute_sql(&state, &auth, &sql)
+    let (mut results, _truncated) = execute_sql(&state, &auth, &sql)
+        .await
+        .map_err(|e| query_api_error("trace detail query failed", &e))?;
+    restore_span_values(&state, &auth, &mut results)
         .await
         .map_err(|e| query_api_error("trace detail query failed", &e))?;
 

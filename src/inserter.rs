@@ -669,6 +669,7 @@ struct ProjectFlusher {
     byte_threshold: usize,
     flush_interval: Duration,
     drain: DrainTree,
+    stored_values: StoredValues,
     phase: FlusherPhase,
     /// Failed append attempts for the batches still buffered per table.
     failed_appends: BTreeMap<SignalTable, u8>,
@@ -779,6 +780,7 @@ impl ProjectFlusher {
             byte_threshold: cfg.byte_threshold,
             flush_interval: cfg.interval,
             drain: DrainTree::new(),
+            stored_values: StoredValues::default(),
             phase: FlusherPhase::Cold,
             failed_appends: BTreeMap::new(),
         }
@@ -866,6 +868,23 @@ impl ProjectFlusher {
         RecordBatch::try_new(schema, columns).context("failed to add template columns")
     }
 
+    /// Buffer spans and the values they refer to that this writer has not
+    /// stored for that day yet.
+    fn buffer_traces(&mut self, spans: RecordBatch, values: &RecordBatch) {
+        match self.stored_values.keep_new(values) {
+            Ok(values) if values.num_rows() > 0 => self.buffer(SignalTable::SpanValues, values),
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(
+                    rows = spans.num_rows(),
+                    "span values unreadable, skipping batch: {error:#}"
+                );
+                return;
+            }
+        }
+        self.buffer(SignalTable::Spans, spans);
+    }
+
     fn buffer_metrics(&mut self, batches: MetricBatches) {
         if let Some(b) = batches.gauge {
             self.buffer(SignalTable::MetricsGauge, b);
@@ -919,6 +938,9 @@ impl ProjectFlusher {
         tracing::info!(project_id, rows = self.total_rows, phase = ?self.phase, tables = ?self.buffers.keys().collect::<Vec<_>>(), "flushing batches");
         let conn = &self.conn;
         let (mut retained_rows, mut retained_bytes) = (0, 0);
+        // `SpanValues` sorts first. Spans must not be written while the values
+        // they refer to are unwritten, and are dropped with them.
+        let mut values_outcome = TableOutcome::Written;
         for (signal, buf) in &mut self.buffers {
             if buf.is_empty() {
                 continue;
@@ -926,11 +948,32 @@ impl ProjectFlusher {
             let table = &self.table_names[signal];
             let batches = std::mem::take(buf);
             let failed_before = self.failed_appends.remove(signal).unwrap_or(0);
-            let (written, error) = match append_batches(conn, table, &batches) {
-                Ok(()) => (batches.len(), None),
-                Err((written, error)) => (written, Some(error)),
+            let waits_for_values =
+                *signal == SignalTable::Spans && values_outcome != TableOutcome::Written;
+            let (written, error) = if waits_for_values {
+                (
+                    0,
+                    Some(anyhow::anyhow!(
+                        "the span values these spans refer to were not written"
+                    )),
+                )
+            } else {
+                match append_batches(conn, table, &batches) {
+                    Ok(()) => (batches.len(), None),
+                    Err((written, error)) => (written, Some(error)),
+                }
             };
-            match table_outcome(failed_before, error.is_none(), last_chance) {
+            let mut outcome = table_outcome(failed_before, error.is_none(), last_chance);
+            if waits_for_values && values_outcome == TableOutcome::Dropped {
+                outcome = TableOutcome::Dropped;
+            }
+            if *signal == SignalTable::SpanValues {
+                values_outcome = outcome;
+                if outcome == TableOutcome::Dropped {
+                    self.stored_values.forget(&batches[written..]);
+                }
+            }
+            match outcome {
                 TableOutcome::Written => {}
                 TableOutcome::Retry => {
                     let kept = batches[written..].to_vec();
@@ -1020,6 +1063,55 @@ impl ProjectFlusher {
 
     fn into_connection(self) -> Connection {
         self.conn
+    }
+}
+
+/// The `(day, hash)` of span values this writer has buffered or stored, so
+/// each distinct value is written once per day. Forgotten on restart and when
+/// full; either only costs a repeated row, which readers deduplicate.
+#[derive(Default)]
+struct StoredValues(std::collections::HashSet<(i64, u128)>);
+
+impl StoredValues {
+    const MAX_ENTRIES: usize = 1_000_000;
+
+    fn keys(values: &RecordBatch) -> Result<impl Iterator<Item = (i64, u128)> + '_> {
+        let days = values
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
+            .context("span values timestamp is not a microsecond timestamp")?;
+        let hashes = values
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context("span values hash is not a string")?;
+        Ok((0..values.num_rows()).map(|i| {
+            let hash = u128::from_str_radix(hashes.value(i), 16).unwrap_or_default();
+            (days.value(i), hash)
+        }))
+    }
+
+    /// The rows of `values` not seen before, each once.
+    fn keep_new(&mut self, values: &RecordBatch) -> Result<RecordBatch> {
+        if self.0.len() + values.num_rows() > Self::MAX_ENTRIES {
+            self.0.clear();
+        }
+        let keep: arrow::array::BooleanArray = Self::keys(values)?
+            .map(|key| Some(self.0.insert(key)))
+            .collect();
+        Ok(arrow::compute::filter_record_batch(values, &keep)?)
+    }
+
+    /// Values that were dropped unwritten must be written again next time.
+    fn forget(&mut self, dropped: &[RecordBatch]) {
+        for batch in dropped {
+            if let Ok(keys) = Self::keys(batch) {
+                for key in keys {
+                    self.0.remove(&key);
+                }
+            }
+        }
     }
 }
 
@@ -1328,7 +1420,7 @@ fn record_flush(
 /// Route an IngestMsg into the flusher's signal-keyed buffers.
 fn buffer_msg(flusher: &mut ProjectFlusher, msg: IngestMsg) {
     match msg {
-        IngestMsg::Traces { batch, .. } => flusher.buffer(SignalTable::Spans, batch),
+        IngestMsg::Traces { batch, values, .. } => flusher.buffer_traces(batch, &values),
         IngestMsg::Logs { batch, .. } => flusher.buffer(SignalTable::Logs, batch),
         IngestMsg::Metrics { batches, .. } => flusher.buffer_metrics(batches),
         IngestMsg::Profiles { batch, .. } => flusher.buffer(SignalTable::Profiles, batch),

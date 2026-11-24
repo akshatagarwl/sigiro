@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatValue } from "@/lib/sigiro/profiles";
 import { num, query, sqlString, type Row } from "@/lib/sigiro/query";
+import { restoreSpanValues } from "@/lib/sigiro/trace";
 
 export function TraceView({ traceId }: { traceId: string }) {
   const valid = /^[0-9a-f]{32}$/i.test(traceId);
@@ -15,9 +16,12 @@ export function TraceView({ traceId }: { traceId: string }) {
     queryKey: ["trace", traceId],
     enabled: valid,
     retry: false,
-    queryFn: ({ signal }) =>
-      query(
-        `SELECT epoch_us(timestamp) AS start_us, duration, service_name, span_name, span_id, parent_span_id, status_code, status_message, span_attributes, resource_attributes, events_json, links_json FROM sigiro_spans WHERE trace_id = ${sqlString(traceId.toLowerCase())} ORDER BY timestamp, span_id LIMIT 2001`,
+    queryFn: async ({ signal }) =>
+      restoreSpanValues(
+        await query(
+          `SELECT epoch_us(timestamp) AS start_us, duration, service_name, span_name, span_id, parent_span_id, status_code, status_message, span_attributes, span_attribute_refs, resource_attributes, events_json, links_json FROM sigiro_spans WHERE trace_id = ${sqlString(traceId.toLowerCase())} ORDER BY timestamp, span_id LIMIT 2001`,
+          signal
+        ),
         signal
       ),
   });

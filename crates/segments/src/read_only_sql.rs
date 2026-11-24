@@ -91,6 +91,7 @@ pub const ALLOWED_TABLES: &[&str] = &[
     "SIGIRO_METRICS_HISTOGRAM",
     "SIGIRO_METRICS_EXP_HISTOGRAM",
     "SIGIRO_PROFILES",
+    "SIGIRO_SPAN_VALUES",
 ];
 
 /// Table-valued / pragma functions reachable through this same `/v1/query`

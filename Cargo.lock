@@ -5113,6 +5113,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "sqlparser",
  "tempfile",
  "thiserror 2.0.21",

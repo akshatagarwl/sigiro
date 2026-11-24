@@ -33,10 +33,27 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
             dropped_attributes_count INTEGER,
             dropped_events_count  INTEGER,
             dropped_links_count   INTEGER,
-            flags                 INTEGER
+            flags                 INTEGER,
+            span_attribute_refs   VARCHAR
         )"
     ))
     .context("failed to create sigiro_spans")?;
+    conn.execute_batch(&format!(
+        "ALTER TABLE {prefix}sigiro_spans ADD COLUMN IF NOT EXISTS span_attribute_refs VARCHAR"
+    ))
+    .context("failed to add sigiro_spans.span_attribute_refs")?;
+
+    // Span attribute values of 1 KiB or more, once per value per day. The
+    // timestamp is the last microsecond of the day of the spans that refer to
+    // the value, so retention keeps it as long as any of them.
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {prefix}sigiro_span_values (
+            timestamp             TIMESTAMP NOT NULL,
+            hash                  VARCHAR NOT NULL,
+            value                 VARCHAR NOT NULL
+        )"
+    ))
+    .context("failed to create sigiro_span_values")?;
 
     // Logs — OTLP fields plus DRAIN classification stored on the same row.
     conn.execute_batch(&format!(
@@ -224,6 +241,7 @@ mod tests {
             .map(|row| row.unwrap())
             .collect();
         assert!(tables.iter().any(|name| name == "sigiro_spans"));
+        assert!(tables.iter().any(|name| name == "sigiro_span_values"));
         assert!(tables.iter().any(|name| name == "sigiro_logs"));
         assert!(tables.iter().any(|name| name == "sigiro_profiles"));
         assert!(!tables.iter().any(|name| name == "sigiro_anomalies"));

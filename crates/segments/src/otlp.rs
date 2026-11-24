@@ -8,6 +8,7 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use serde_json::Value as JsonValue;
 
+use crate::span_values::SpanValueBuilders;
 use crate::{SpanId, TraceId};
 
 #[inline]
@@ -109,11 +110,17 @@ pub struct TraceBuilders {
     dropped_events_count: Int32Builder,
     dropped_links_count: Int32Builder,
     flags: Int32Builder,
+    /// Set when large attribute values are split out (the native server);
+    /// adds the `span_attribute_refs` column.
+    values: Option<SpanValueBuilders>,
+    span_attribute_refs: StringBuilder,
 }
 
 impl TraceBuilders {
     pub(crate) fn new() -> Self {
         Self {
+            values: None,
+            span_attribute_refs: StringBuilder::new(),
             timestamp: TimestampMicrosecondBuilder::new(),
             end_timestamp: Int64Builder::new(),
             duration: Int64Builder::new(),
@@ -243,8 +250,18 @@ impl TraceBuilders {
         self.scope_attributes.append_value(attrs_to_json(
             scope.map(|s| &s.attributes[..]).unwrap_or(&[]),
         ));
-        self.span_attributes
-            .append_value(attrs_to_json(&span.attributes));
+        match &mut self.values {
+            None => self
+                .span_attributes
+                .append_value(attrs_to_json(&span.attributes)),
+            Some(values) => {
+                let (inline, refs) = values
+                    .split(&span.attributes, nanos_to_micros(start))
+                    .map_err(DecodeError::Json)?;
+                self.span_attributes.append_value(inline);
+                self.span_attribute_refs.append_option(refs);
+            }
+        }
 
         self.events_json.append_value(events_to_json(&span.events));
         self.links_json.append_value(links_to_json(&span.links));
@@ -260,9 +277,13 @@ impl TraceBuilders {
         Ok(())
     }
 
-    pub(crate) fn finish(mut self) -> Result<RecordBatch, ArrowError> {
-        let schema = traces_schema();
-        let arrays: Vec<arrow::array::ArrayRef> = vec![
+    pub(crate) fn finish(self) -> Result<RecordBatch, ArrowError> {
+        self.finish_with_values().map(|(spans, _)| spans)
+    }
+
+    fn finish_with_values(mut self) -> Result<(RecordBatch, Option<RecordBatch>), ArrowError> {
+        let mut schema = traces_schema();
+        let mut arrays: Vec<arrow::array::ArrayRef> = vec![
             Arc::new(self.timestamp.finish()),
             Arc::new(self.end_timestamp.finish()),
             Arc::new(self.duration.finish()),
@@ -289,8 +310,22 @@ impl TraceBuilders {
             Arc::new(self.dropped_links_count.finish()),
             Arc::new(self.flags.finish()),
         ];
-        RecordBatch::try_new(Arc::new(schema), arrays)
+        let values = match self.values {
+            None => None,
+            Some(values) => {
+                schema = with_refs_column(schema);
+                arrays.push(Arc::new(self.span_attribute_refs.finish()));
+                Some(values.finish()?)
+            }
+        };
+        Ok((RecordBatch::try_new(Arc::new(schema), arrays)?, values))
     }
+}
+
+fn with_refs_column(schema: Schema) -> Schema {
+    let mut fields: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+    fields.push(Field::new("span_attribute_refs", DataType::Utf8, true));
+    Schema::new(fields)
 }
 
 impl Default for TraceBuilders {
@@ -338,11 +373,48 @@ fn decode_traces_json(bytes: &[u8]) -> Result<RecordBatch, DecodeError> {
     decode_traces_request(request)
 }
 
+/// Spans with large attribute values moved to `values`; see [`crate::span_values`].
+#[derive(Debug)]
+pub struct SplitTraces {
+    pub spans: RecordBatch,
+    pub values: RecordBatch,
+}
+
+/// Like [`transform_traces`], but attribute values of at least
+/// [`crate::span_values::LARGE_VALUE_BYTES`] go to `sigiro_span_values` rows and
+/// the spans gain a `span_attribute_refs` column pointing at them.
+pub fn transform_traces_split(
+    bytes: &[u8],
+    format: InputFormat,
+) -> Result<SplitTraces, DecodeError> {
+    use crate::otel_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+    use prost::Message;
+
+    let request = match format {
+        InputFormat::Protobuf => ExportTraceServiceRequest::decode(bytes)?,
+        InputFormat::Json => serde_json::from_slice(bytes)?,
+    };
+    let mut builders = TraceBuilders::new();
+    builders.values = Some(SpanValueBuilders::default());
+    let (spans, values) = append_request(builders, request)?.finish_with_values()?;
+    Ok(SplitTraces {
+        spans,
+        values: values.expect("split builders produce values"),
+    })
+}
+
 fn decode_traces_request(
     request: crate::otel_proto::tonic::collector::trace::v1::ExportTraceServiceRequest,
 ) -> Result<RecordBatch, DecodeError> {
-    let mut builders = TraceBuilders::new();
+    append_request(TraceBuilders::new(), request)?
+        .finish()
+        .map_err(|e| DecodeError::Parse(e.to_string()))
+}
 
+fn append_request(
+    mut builders: TraceBuilders,
+    request: crate::otel_proto::tonic::collector::trace::v1::ExportTraceServiceRequest,
+) -> Result<TraceBuilders, DecodeError> {
     for resource_spans in request.resource_spans {
         let resource = resource_spans.resource.as_ref();
         for scope_spans in resource_spans.scope_spans {
@@ -352,10 +424,7 @@ fn decode_traces_request(
             }
         }
     }
-
-    builders
-        .finish()
-        .map_err(|e| DecodeError::Parse(e.to_string()))
+    Ok(builders)
 }
 
 fn decode_logs_protobuf(bytes: &[u8]) -> Result<(RecordBatch, u64), DecodeError> {

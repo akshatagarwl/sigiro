@@ -15,6 +15,8 @@ pub enum IngestMsg {
     Traces {
         project_id: String,
         batch: RecordBatch,
+        /// `sigiro_span_values` rows for the large attribute values in `batch`.
+        values: RecordBatch,
     },
     Logs {
         project_id: String,
@@ -50,6 +52,9 @@ impl IngestMsg {
 /// in the IngestMsg match — the flush path iterates the map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SignalTable {
+    /// Before `Spans`: the flush writes values before the spans that refer
+    /// to them.
+    SpanValues,
     Spans,
     Logs,
     MetricsGauge,
@@ -62,6 +67,7 @@ pub enum SignalTable {
 impl SignalTable {
     /// All signal table variants.
     pub const ALL: &'static [SignalTable] = &[
+        SignalTable::SpanValues,
         SignalTable::Spans,
         SignalTable::Logs,
         SignalTable::MetricsGauge,
@@ -74,6 +80,7 @@ impl SignalTable {
     /// DuckDB table name without prefix (e.g. "sigiro_spans").
     pub fn table_suffix(self) -> &'static str {
         match self {
+            Self::SpanValues => "sigiro_span_values",
             Self::Spans => "sigiro_spans",
             Self::Logs => "sigiro_logs",
             Self::MetricsGauge => "sigiro_metrics_gauge",

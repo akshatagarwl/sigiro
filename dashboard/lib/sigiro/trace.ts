@@ -1,4 +1,4 @@
-import { num, type Row } from "@/lib/sigiro/query";
+import { num, query, sqlString, type Row } from "@/lib/sigiro/query";
 
 export type Span = {
   id: string;
@@ -51,6 +51,49 @@ export function traceModel(rows: Row[]) {
   const start = Math.min(...spans.map((span) => span.start));
   const end = Math.max(...spans.map((span) => span.start + span.duration));
   return { spans, ordered, byId, start, duration: Math.max(1, end - start) };
+}
+
+const DAY_US = 86_400_000_000;
+
+/**
+ * Put attribute values of 1 KiB or more, stored once per day in
+ * `sigiro_span_values`, back into each row's `span_attributes`. Rows need
+ * `start_us`, `span_attributes` and `span_attribute_refs`.
+ */
+export async function restoreSpanValues(
+  rows: Row[],
+  signal?: AbortSignal
+): Promise<Row[]> {
+  const refsOf = (row: Row) =>
+    typeof row.span_attribute_refs === "string"
+      ? (JSON.parse(row.span_attribute_refs) as Record<string, string>)
+      : {};
+  const days = new Set<number>();
+  const hashes = new Set<string>();
+  for (const row of rows) {
+    const refs = Object.values(refsOf(row));
+    if (refs.length === 0) continue;
+    days.add((Math.floor(num(row.start_us) / DAY_US) + 1) * DAY_US - 1);
+    for (const hash of refs) hashes.add(hash);
+  }
+  if (hashes.size === 0) return rows;
+  const values = new Map<string, unknown>();
+  for (const row of await query(
+    `SELECT hash, any_value(value) AS value FROM sigiro_span_values WHERE timestamp IN (${[...days].map((day) => `make_timestamp(${day})`).join(", ")}) AND hash IN (${[...hashes].map(sqlString).join(", ")}) GROUP BY hash`,
+    signal
+  ))
+    values.set(String(row.hash), JSON.parse(String(row.value)));
+  return rows.map((row) => {
+    const refs = Object.entries(refsOf(row));
+    if (refs.length === 0) return row;
+    const attributes = parsePayload(row.span_attributes) as Record<
+      string,
+      unknown
+    >;
+    for (const [key, hash] of refs)
+      if (values.has(hash)) attributes[key] = values.get(hash);
+    return { ...row, span_attributes: JSON.stringify(attributes) };
+  });
 }
 
 export function parsePayload(value: unknown): unknown {
