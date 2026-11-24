@@ -1,9 +1,41 @@
 use anyhow::{Context, Result};
 use duckdb::Connection;
 
-/// Create all sigiro tables and views.
+/// Create all sigiro tables. The statements below are the whole schema: there
+/// are no migrations, and a data directory written by an older schema is
+/// rejected when opened rather than upgraded.
 /// `prefix` is always "lake." (DuckLake catalog-qualified tables).
 pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
+    declare_tables(conn, prefix)?;
+    let catalog = prefix.trim_end_matches('.');
+    if catalog.is_empty() {
+        return Ok(());
+    }
+    let declared = crate::pool::open_duckdb()?;
+    declare_tables(&declared, "")?;
+    let expected = columns(&declared, "memory")?;
+    let actual = columns(conn, catalog)?;
+    anyhow::ensure!(
+        actual == expected,
+        "the data directory was written by a different sigiro schema; \
+         delete it to start over (sigiro does not migrate data)"
+    );
+    Ok(())
+}
+
+/// (table, column, type) for every sigiro table in `catalog`, in column order.
+fn columns(conn: &Connection, catalog: &str) -> Result<Vec<(String, String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT table_name, column_name, data_type FROM information_schema.columns
+         WHERE table_catalog = ? AND table_name LIKE 'sigiro\\_%' ESCAPE '\\'
+         ORDER BY table_name, ordinal_position",
+    )?;
+    let rows = stmt.query_map([catalog], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+    rows.collect::<Result<_, _>>()
+        .context("failed to read the stored schema")
+}
+
+fn declare_tables(conn: &Connection, prefix: &str) -> Result<()> {
     // Traces: 25 columns matching sigiro-segments.
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_spans (
@@ -38,10 +70,6 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
         )"
     ))
     .context("failed to create sigiro_spans")?;
-    conn.execute_batch(&format!(
-        "ALTER TABLE {prefix}sigiro_spans ADD COLUMN IF NOT EXISTS span_attribute_refs VARCHAR"
-    ))
-    .context("failed to add sigiro_spans.span_attribute_refs")?;
 
     // Span attribute values of 1 KiB or more, once per value per day. The
     // timestamp is the last microsecond of the day of the spans that refer to
@@ -210,12 +238,6 @@ pub fn create_tables(conn: &Connection, prefix: &str) -> Result<()> {
         )"
     ))
     .context("failed to create sigiro_profiles")?;
-    // Tables created before per-sample labels existed gain the column at the
-    // end, where the positional appender writes it.
-    conn.execute_batch(&format!(
-        "ALTER TABLE {prefix}sigiro_profiles ADD COLUMN IF NOT EXISTS labels VARCHAR"
-    ))
-    .context("failed to add sigiro_profiles.labels")?;
 
     // NOTE: DuckLake (Parquet-backed catalog) does not support CREATE INDEX.
     // Query performance relies on Parquet row group pruning and column statistics.
@@ -245,5 +267,18 @@ mod tests {
         assert!(tables.iter().any(|name| name == "sigiro_logs"));
         assert!(tables.iter().any(|name| name == "sigiro_profiles"));
         assert!(!tables.iter().any(|name| name == "sigiro_anomalies"));
+    }
+
+    #[test]
+    fn a_data_directory_from_another_schema_is_rejected() {
+        let conn = crate::pool::open_duckdb().unwrap();
+        conn.execute_batch("ATTACH ':memory:' AS lake").unwrap();
+        create_tables(&conn, "lake.").unwrap();
+        create_tables(&conn, "lake.").unwrap();
+
+        conn.execute_batch("ALTER TABLE lake.sigiro_spans DROP COLUMN span_attribute_refs")
+            .unwrap();
+        let error = create_tables(&conn, "lake.").unwrap_err();
+        assert!(error.to_string().contains("different sigiro schema"));
     }
 }
