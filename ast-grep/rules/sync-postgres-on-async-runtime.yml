@@ -1,0 +1,28 @@
+id: sync-postgres-on-async-runtime
+language: rust
+severity: error
+message: sync postgres client reached from async code without spawn_blocking; this aborts the process at runtime
+note: |
+  Wrap the call in `tokio::task::spawn_blocking` (or `admin::with_admin_blocking`,
+  `alerts::spawn_blocking_store`):
+  only a thread without a runtime context can run `postgres::Client`'s `block_on`.
+  `block_in_place` keeps the context and does not help.
+files: [src/**/*.rs]
+rule:
+  matches: sync-postgres-entry-point
+  # The nearest enclosing fn is async (closures are not function items).
+  inside:
+    kind: function_item
+    has:
+      kind: function_modifiers
+      regex: async
+    stopBy:
+      kind: function_item
+  not:
+    inside:
+      kind: call_expression
+      has:
+        field: function
+        regex: (^|::)(spawn_blocking|spawn_blocking_store|with_admin_blocking)$
+      stopBy:
+        kind: function_item

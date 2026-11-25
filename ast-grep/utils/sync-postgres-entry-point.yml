@@ -1,0 +1,19 @@
+# Calls into the sync `postgres` client. `postgres::Client` drives its own
+# runtime with `block_on`; reached from a thread that already has a Tokio
+# runtime context, it does not error but panics without unwinding and aborts
+# the process. Three cutover attempts died this way, each at a different call
+# site.
+id: sync-postgres-entry-point
+language: rust
+rule:
+  kind: call_expression
+  has:
+    field: function
+    any:
+      - regex: ^AlertStore::new$
+      - regex: ^(crate::)?admin::(read_all_status|write_instance_status|write_instance_status_batch)$
+      - regex: ^(crate::)?alerts::create_postgres_tables$
+      - kind: field_expression
+        has:
+          field: field
+          regex: ^(process_events|next_due|mark_sent|mark_failed|replay_dead|delivery_summary)$

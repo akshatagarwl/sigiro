@@ -1,0 +1,16 @@
+id: no-block-in-place-for-sync-postgres
+language: rust
+severity: error
+message: block_in_place does not make a sync postgres call safe; use spawn_blocking
+note: |
+  `block_in_place` keeps the runtime context on the thread, so the client's
+  inner `block_on` still aborts the process. It would silently look like a fix.
+files: [src/**/*.rs]
+rule:
+  matches: sync-postgres-entry-point
+  inside:
+    kind: call_expression
+    has:
+      field: function
+      regex: (^|::)block_in_place$
+    stopBy: end

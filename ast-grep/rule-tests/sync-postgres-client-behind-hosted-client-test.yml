@@ -1,0 +1,23 @@
+id: sync-postgres-client-behind-hosted-client
+valid:
+  - |
+    pub struct HostedClient(Option<Box<postgres::Client>>);
+  - |
+    impl HostedClient { fn new(client: postgres::Client) -> Self { Self(Some(Box::new(client))) } }
+  - |
+    fn reconcile(client: &mut postgres::Client) {}
+  - |
+    pub fn connect(url: &str) -> Result<postgres::Client> { todo!() }
+  - |
+    impl std::ops::Deref for HostedClient { type Target = postgres::Client; }
+invalid:
+  - |
+    struct State { client: postgres::Client }
+  - |
+    struct Bare(postgres::Client);
+  - |
+    struct Boxed { client: Box<postgres::Client> }
+  - |
+    fn keep() { let client: postgres::Client = connect(); }
+  - |
+    fn take(client: postgres::Client) {}

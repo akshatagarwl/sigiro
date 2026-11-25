@@ -1,0 +1,7 @@
+# ast-grep: structural lint rules for sigiro's Rust (ast-grep/rules), checked
+# by the `ast-grep` flake check (nix/ast-grep-check.nix), which runs
+# `ast-grep test` against ast-grep/rule-tests and `ast-grep scan`.
+ruleDirs: [ast-grep/rules]
+utilDirs: [ast-grep/utils]
+testConfigs:
+  - testDir: ast-grep/rule-tests

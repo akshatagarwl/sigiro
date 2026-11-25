@@ -125,8 +125,10 @@
             devToolchain
             # Must equal the locked wasm-bindgen crate; build-segments-wasm.sh checks it.
             pkgs.wasm-bindgen-cli
-            # Deployment-contract tests.
+            # scripts/package-native-artifact.py, which sigiro-infra's release runs.
             pkgs.python3
+            # Structural Rust lint (sgconfig.yml).
+            pkgs.ast-grep
           ];
           devEnv = rust.targetEnv // {
             CARGO_PROFILE_DEV_INCREMENTAL = "true";
@@ -216,6 +218,7 @@
             rust.checks
             // {
               inherit sigiro pre-commit;
+              ast-grep = pkgs.callPackage ./nix/ast-grep-check.nix { };
               javascript = pkgs.callPackage ./nix/javascript-check.nix {
                 inherit version;
                 dashboardDeps = dashboard.pnpmDeps;

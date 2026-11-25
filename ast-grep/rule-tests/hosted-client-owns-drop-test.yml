@@ -1,0 +1,11 @@
+id: hosted-client-owns-drop
+valid:
+  - |
+    enum AdminConnection { Hosted(HostedClient) }
+    impl Drop for HostedClient { fn drop(&mut self) {} }
+invalid:
+  - |
+    enum AdminConnection { Hosted(HostedClient) }
+  - |
+    enum AdminConnection { Hosted(postgres::Client) }
+    impl Drop for HostedClient { fn drop(&mut self) {} }

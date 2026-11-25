@@ -195,7 +195,8 @@ storage: three platforms and multiple revisions may exceed the free 5 GB tier.
 | `auth/` | Hosted auth: Better Auth on Workers + D1 (OAuth, device flow, organizations) |
 | `dashboard/` | Web dashboard (Next.js static export), embedded in the binary |
 | `www/` | Website and documentation (sigiro.com/docs) |
-| `tests/` | Rust integration tests, end-to-end and deployment contract tests |
+| `tests/` | Rust integration tests and end-to-end tests |
+| `sgconfig.yml`, `ast-grep/` | Structural Rust lint rules with their own valid/invalid examples |
 | `experiments/` | Experiments kept for reproduction, not built or run by CI (`dyndrv`: rejected build experiment, separate flake; `contrast`: trace contrast ranking with injected faults) |
 
 ## Make a change
@@ -204,8 +205,8 @@ storage: three platforms and multiple revisions may exceed the free 5 GB tier.
 2. Keep the change to one concern and include tests for behaviour changes.
 3. Run the checks for what you touched:
    * Rust: `nix flake check` (rustfmt, clippy, tests, the binary and its
-     portability), plus `nix develop --command python3 -m unittest tests.deployment.test_sync_postgres_boundary`
-     for the deployment contract. Run single checks with
+     portability, and the ast-grep rules in `ast-grep/rules`, which keep the
+     sync PostgreSQL client off the async runtime). Run single checks with
      `nix build .#checks.<system>.<name>` rather than plain `cargo`, so their
      outputs are cached and reused by CI.
    * TypeScript: `nix build .#checks.<system>.javascript` (formatting, lint,

@@ -140,9 +140,6 @@ jobs:
           ./result/bin/sigiro --help
           ./result/bin/sigiro openapi > "$RUNNER_TEMP/openapi.json"
           nix develop --command python3 -c 'import json, os; spec=json.load(open(os.environ["RUNNER_TEMP"] + "/openapi.json")); assert spec["paths"]; assert spec["openapi"]'
-      - name: deployment contract
-        if: env.MAIN == 'true'
-        run: nix develop --command python3 -m unittest tests.deployment.test_sync_postgres_boundary
 
       - name: development linkers
         if: runner.os == 'Linux'

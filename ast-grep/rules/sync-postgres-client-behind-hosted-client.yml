@@ -1,0 +1,53 @@
+id: sync-postgres-client-behind-hosted-client
+language: rust
+severity: error
+message: sync postgres client stored outside HostedClient; its drop calls block_on and aborts the process on a runtime thread
+note: |
+  Call-site discipline cannot reach `drop`: `postgres::Client::drop` closes the
+  connection through `block_on`. `admin::HostedClient` owns that drop and moves
+  it off the runtime, so hold the client only behind it. Borrows (`&mut
+  postgres::Client`) and returning a fresh client are fine.
+files: [src/**/*.rs]
+rule:
+  kind: scoped_type_identifier
+  regex: ^postgres::Client$
+  any:
+    - inside: { kind: field_declaration }
+    - inside: { kind: ordered_field_declaration_list }
+    - inside: { kind: let_declaration }
+    - inside: { kind: static_item }
+    - inside: { kind: parameter }
+    - inside:
+        kind: type_arguments
+        inside:
+          kind: generic_type
+          regex: ^Box\s*<
+  not:
+    inside:
+      stopBy: end
+      any:
+        - kind: struct_item
+          has: { field: name, regex: ^HostedClient$ }
+        - kind: impl_item
+          has: { field: type, regex: ^HostedClient$ }
+---
+id: hosted-client-owns-drop
+language: rust
+severity: error
+message: HostedClient must implement Drop and AdminConnection::Hosted must wrap it, so dropping the sync client off the runtime is structural
+files: [src/admin.rs]
+rule:
+  kind: source_file
+  any:
+    - not:
+        has:
+          stopBy: end
+          kind: impl_item
+          all:
+            - has: { field: trait, regex: ^Drop$ }
+            - has: { field: type, regex: ^HostedClient$ }
+    - not:
+        has:
+          stopBy: end
+          kind: enum_variant
+          regex: ^Hosted\s*\(\s*HostedClient\s*\)$

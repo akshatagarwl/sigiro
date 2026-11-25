@@ -1,0 +1,11 @@
+id: no-block-in-place-for-sync-postgres
+valid:
+  - |
+    async fn ok(store: AlertStore) { tokio::task::spawn_blocking(move || store.next_due(0)).await; }
+  - |
+    fn other() { tokio::task::block_in_place(|| compute()); }
+invalid:
+  - |
+    async fn bad(store: &AlertStore) { tokio::task::block_in_place(|| store.next_due(0)); }
+  - |
+    async fn bad(url: &str) { block_in_place(|| AlertStore::new(url)); }

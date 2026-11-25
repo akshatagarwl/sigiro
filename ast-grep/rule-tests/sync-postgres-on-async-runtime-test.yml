@@ -1,0 +1,37 @@
+id: sync-postgres-on-async-runtime
+valid:
+  - |
+    fn sync_caller(store: &AlertStore) { store.next_due(0); }
+  - |
+    async fn wrapped(store: AlertStore) {
+        tokio::task::spawn_blocking(move || store.mark_sent(1, 2)).await;
+    }
+  - |
+    async fn wrapped(store: AlertStore) {
+        spawn_blocking_store(&store, move |store| store.mark_failed(1, 2, outcome)).await;
+    }
+  - |
+    async fn boot(url: &str) {
+        admin::with_admin_blocking(url, |client| admin::read_all_status(client)).await;
+    }
+  - |
+    async fn outer() {
+        fn inner(store: &AlertStore) { store.replay_dead(); }
+    }
+invalid:
+  - |
+    async fn direct(store: &AlertStore) { store.next_due(0); }
+  - |
+    pub async fn boot(url: &str) { let store = AlertStore::new(url); }
+  - |
+    async fn status(client: &mut C) { crate::admin::read_all_status(client); }
+  - |
+    async fn closure_not_blocking(store: AlertStore) {
+        let f = move || store.delivery_summary(None);
+        f();
+    }
+  - |
+    async fn wrong_place(store: AlertStore) {
+        tokio::task::spawn_blocking(|| ()).await;
+        store.mark_sent(1, 2);
+    }
