@@ -117,14 +117,16 @@
             pkgs.git
             pkgs.gh
           ];
+          # `dev-services` and `test-postgres` (nix/dev-services.nix).
+          services = pkgs.callPackage ./nix/dev-services.nix { };
           devPackages = javascriptPackages ++ [
+            services.dev-services
+            services.test-postgres
             devToolchain
             # Must equal the locked wasm-bindgen crate; build-segments-wasm.sh checks it.
             pkgs.wasm-bindgen-cli
             # Deployment-contract tests.
             pkgs.python3
-            # Local TLS certificates (scripts/dev-certs.sh).
-            pkgs.mkcert
           ];
           devEnv = rust.targetEnv // {
             CARGO_PROFILE_DEV_INCREMENTAL = "true";
@@ -195,6 +197,7 @@
             # CI's secret scan; the pre-commit hook uses the same build.
             inherit (pkgs) gitleaks;
             inherit pre-commit;
+            inherit (services) dev-services test-postgres;
             rust-deps = rust.binArtifacts;
             rust-workspace-deps = rust.workspaceArtifacts;
             rust-wasm-deps = rust.wasmArtifacts;

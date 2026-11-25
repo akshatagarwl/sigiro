@@ -64,7 +64,7 @@ async fn an_older_hosted_admin_schema_is_reshaped_and_keeps_its_rows() {
     )]
     let Ok(url) = std::env::var("SIGIRO_TEST_POSTGRES_URL") else {
         eprintln!(
-            "skipped: set SIGIRO_TEST_POSTGRES_URL (scripts/test-admin-postgres.sh) to run against PostgreSQL"
+            "skipped: set SIGIRO_TEST_POSTGRES_URL (nix develop -c test-postgres) to run against PostgreSQL"
         );
         return;
     };

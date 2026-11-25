@@ -6,9 +6,6 @@
   "scripts": {
     "alchemy:deploy": "ALCHEMY_STAGE=prod alchemy deploy ./alchemy.run.ts --yes",
     "alchemy:plan": "ALCHEMY_STAGE=prod alchemy plan ./alchemy.run.ts --no-input",
-    "alchemy:dev:deploy": "ALCHEMY_STAGE=local alchemy deploy ./alchemy.dev.run.ts --yes --no-input",
-    "alchemy:dev:destroy": "ALCHEMY_STAGE=local alchemy destroy ./alchemy.dev.run.ts --yes --no-input",
-    "alchemy:dev:plan": "ALCHEMY_STAGE=local alchemy plan ./alchemy.dev.run.ts --no-input",
     "dev": "blume dev",
     "build": "blume build",
     "preview": "wrangler dev --config wrangler.preview.jsonc",

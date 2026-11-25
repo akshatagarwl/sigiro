@@ -13,7 +13,8 @@ For a larger change, open an issue first so we can agree on the approach.
 
 Follow [Build from source](README.md#build-from-source): the binary is built
 with Nix, the only tool you install. `nix develop` supplies Rust,
-wasm-bindgen, Python, Node, pnpm and mkcert; `nix develop .#javascript` is the
+wasm-bindgen, Python, Node, pnpm and the local service stacks below;
+`nix develop .#javascript` is the
 smaller shell for website, auth and release work. All tool versions come from
 the locked Nix inputs and `rust-toolchain.toml`; do not install them with
 Homebrew, mise, rustup or global npm packages. No cloud accounts or secrets
@@ -39,12 +40,29 @@ so run `pnpm -C cloud run build:wasm` once before `pnpm -C cloud run check`.
 
 For a complete binary with embedded dashboard and docs, use `nix run . -- serve`.
 For frontend editing, use `pnpm -C dashboard run dev` or `pnpm -C www run dev`.
-If local PostgreSQL and RustFS are needed, run `scripts/dev-certs.sh` followed
-by `pnpm -C www run alchemy:dev:deploy` (Docker required). Preview that stack
-with `pnpm -C www run alchemy:dev:plan`. Its explicit
-`pnpm -C www run alchemy:dev:destroy` command also deletes its local volumes;
-there is no automatic teardown. Production planning/deployment remain explicit
+Production planning/deployment remain explicit
 `pnpm -C www run alchemy:plan` / `pnpm -C www run alchemy:deploy` commands.
+
+### Local PostgreSQL and RustFS
+
+The service stacks run natively under
+[process-compose](https://github.com/F1bonacc1/process-compose), with every
+server from nixpkgs; Docker is not needed (`nix/dev-services.nix`).
+
+* `nix run .#dev-services` starts PostgreSQL 17 on `127.0.0.1:5432` (user and
+  password `sigiro`, database `ducklake`) with TLS, and RustFS on
+  `127.0.0.1:9000` (console on 9001, keys `rustfsadmin`) with the `sigiro`
+  bucket. Run it from the repository root; it prints the catalog URL
+  (`sslmode=verify-full`, `sslrootcert=.dev/certs/ca.crt`). Ctrl-C stops
+  everything. State lives in `.dev/`; delete it to start over. Pass `--tui`
+  for process-compose's terminal UI.
+* `nix develop -c test-postgres` starts a throwaway TLS PostgreSQL on a free
+  port, runs the PostgreSQL-backed tests (`admin_schema_test` and
+  `alerts::tests::postgres`) against it, and exits with their status.
+
+The server certificate comes from mkcert with its CA kept in `.dev/certs/ca`;
+nothing is added to the system trust store. Clients pass that CA as
+`sslrootcert`, so `verify-full` genuinely verifies, as production requires.
 
 ### Fast local Rust development
 

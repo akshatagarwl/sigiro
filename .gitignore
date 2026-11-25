@@ -31,8 +31,8 @@ www/.source/
 # Letta worktree admin state
 .letta/
 
-# Locally issued dev-stack TLS material (scripts/dev-certs.sh). Machine-local
-# by construction — mkcert's root only exists in this machine's trust store.
+# Local service state from `nix run .#dev-services`: PostgreSQL and RustFS data
+# and the locally issued TLS certificates and CA (nix/dev-services.nix).
 .dev/
 
 # Local Worker secrets and env overrides (wrangler/celld convention). These

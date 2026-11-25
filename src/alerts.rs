@@ -1541,7 +1541,7 @@ mod tests {
     }
 
     /// A store on the PostgreSQL named by `SIGIRO_TEST_POSTGRES_URL`
-    /// (`scripts/test-admin-postgres.sh` starts one), with a fresh admin schema.
+    /// (`nix develop -c test-postgres` starts one), with a fresh admin schema.
     pub(super) fn postgres_store() -> Option<AlertStore> {
         #[expect(
             clippy::disallowed_methods,
@@ -1782,7 +1782,7 @@ mod tests {
     fn postgres_backend_runs_every_scenario() {
         for (name, scenario) in SCENARIOS {
             let Some(store) = postgres_store() else {
-                eprintln!("skipped: set SIGIRO_TEST_POSTGRES_URL (scripts/test-admin-postgres.sh)");
+                eprintln!("skipped: set SIGIRO_TEST_POSTGRES_URL (nix develop -c test-postgres)");
                 return;
             };
             scenario(&store, name);
