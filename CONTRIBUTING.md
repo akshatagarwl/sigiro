@@ -108,14 +108,17 @@ from `Cargo.toml`.
 
 All CI is the one `build` job in `.github/workflows/ci.yml`, run once per
 native system because a job runs on one machine: x86_64-linux runs everything
-(secret scan, changeset warning, JavaScript/TypeScript checks, `nix flake
-check`, smoke tests, linkers, image health); aarch64-linux and aarch64-darwin
-build, check and smoke-test their own binary. On main and `v*` tags the
+(secret scan, changeset warning, `nix flake check`, smoke tests, linkers,
+image health); aarch64-linux and aarch64-darwin build, check and smoke-test
+their own binary. `nix flake check` includes the `javascript` check
+(`nix/javascript-check.nix`): oxfmt, oxlint and the dashboard typecheck, run
+offline from the pnpm lockfiles. On main and `v*` tags the
 `release` job then publishes the image and, for a new version, the release.
 
-After changing `dashboard/pnpm-lock.yaml` or `www/pnpm-lock.yaml`, update the
-matching `hash` in `nix/dashboard.nix` or `nix/docs.nix`: set it to `""`,
-run `nix build .#dashboard` (or `.#docs`), and copy the `got:` hash from the
+After changing a `pnpm-lock.yaml`, update the matching `hash`: dashboard in
+`nix/dashboard.nix`, www in `nix/docs.nix`, the root and auth in
+`nix/javascript-check.nix`. Set it to `""`, run `nix build .#dashboard`,
+`.#docs` or `.#checks.<system>.javascript`, and copy the `got:` hash from the
 error.
 
 Without the duckdb-static cache, the first build compiles DuckDB (most of an
@@ -187,7 +190,8 @@ storage: three platforms and multiple revisions may exceed the free 5 GB tier.
      for the deployment contract. Run single checks with
      `nix build .#checks.<system>.<name>` rather than plain `cargo`, so their
      outputs are cached and reused by CI.
-   * TypeScript: `pnpm run fmt:check && pnpm run lint`, plus the package's own
+   * TypeScript: `nix build .#checks.<system>.javascript` (formatting, lint,
+     dashboard typecheck), plus the package's own
      `check` script (for example `pnpm -C auth run check`)
 4. Use [Conventional Commits](https://www.conventionalcommits.org/) for commit
    messages and the PR title, for example `fix(ingest): reject empty batches`.

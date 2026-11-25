@@ -116,19 +116,6 @@ jobs:
           gitleaks git --config .gitleaks.toml --redact --no-banner \
             --log-opts="$range" .
 
-      - name: javascript and typescript
-        if: env.MAIN == 'true'
-        run: |
-          nix develop .#javascript --command bash -euo pipefail -c '
-            pnpm install --frozen-lockfile
-            pnpm -C auth install --frozen-lockfile
-            pnpm -C www install --frozen-lockfile
-            pnpm -C dashboard install --frozen-lockfile
-            pnpm -C dashboard run typecheck
-            pnpm run fmt:check
-            pnpm run lint
-          '
-
       - name: native system
         env:
           EXPECTED_SYSTEM: ${{ matrix.system }}
@@ -141,6 +128,8 @@ jobs:
       # `sigiro --version` names the commit (flake.nix passes it in).
       - name: build
         run: nix build .#sigiro -L
+      # Includes the JavaScript/TypeScript formatting, lint and typecheck
+      # (nix/javascript-check.nix), offline from the pnpm lockfiles.
       - name: tests, lint, formatting and portability
         run: nix flake check --keep-going -L
 

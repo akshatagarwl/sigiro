@@ -213,6 +213,11 @@
             rust.checks
             // {
               inherit sigiro pre-commit;
+              javascript = pkgs.callPackage ./nix/javascript-check.nix {
+                inherit version;
+                dashboardDeps = dashboard.pnpmDeps;
+                wwwDeps = docs.pnpmDeps;
+              };
               portable = rust.portable sigiro;
               home-manager-module = pkgs.callPackage ./nix/home-manager-check.nix {
                 module = self.homeManagerModules.default;
