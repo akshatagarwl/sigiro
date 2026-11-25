@@ -12,11 +12,23 @@ For a larger change, open an issue first so we can agree on the approach.
 ## Set up
 
 Follow [Build from source](README.md#build-from-source): the binary is built
-with Nix. `nix develop` supplies Rust, wasm-bindgen, Python, Node and pnpm;
-`nix develop .#javascript` is the smaller shell for website, auth and release
-work. All tool versions come
-from the locked Nix inputs and `rust-toolchain.toml`. No cloud accounts or
-secrets are needed to build or test. There is no task runner or Git-hook installer.
+with Nix, the only tool you install. `nix develop` supplies Rust,
+wasm-bindgen, Python, Node, pnpm and mkcert; `nix develop .#javascript` is the
+smaller shell for website, auth and release work. All tool versions come from
+the locked Nix inputs and `rust-toolchain.toml`; do not install them with
+Homebrew, mise, rustup or global npm packages. No cloud accounts or secrets
+are needed to build or test. There is no task runner.
+
+Enable the pre-commit hook once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+`.githooks/pre-commit` runs `nix run .#pre-commit` (`nix/pre-commit.nix`):
+rustfmt on staged Rust files, nixfmt on staged Nix files and gitleaks on the
+staged changes, all from the flake. It checks the files as they are in the
+working tree and does not rewrite them; fix with `cargo fmt` or `nix fmt`.
 
 Install JavaScript dependencies from the repository root with
 `pnpm install --frozen-lockfile`, and in each package directory (`auth/`,
