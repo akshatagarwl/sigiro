@@ -171,6 +171,8 @@
             }
           ) imageSystems;
           hostArchitecture = pkgs.stdenv.hostPlatform.go.GOARCH;
+          # `.githooks/pre-commit` runs this with `nix run .#pre-commit`.
+          pre-commit = pkgs.callPackage ./nix/pre-commit.nix { toolchain = buildToolchain; };
           sigiro = rust.bundle {
             inherit dashboard docs;
             # `sigiro --version` names the commit.
@@ -188,6 +190,7 @@
               ;
             inherit (rust) openapi unbundled;
             cache-client = pkgs.cachix;
+            inherit pre-commit;
             rust-deps = rust.binArtifacts;
             rust-workspace-deps = rust.workspaceArtifacts;
             rust-wasm-deps = rust.wasmArtifacts;
@@ -205,7 +208,7 @@
           checks =
             rust.checks
             // {
-              inherit sigiro;
+              inherit sigiro pre-commit;
               portable = rust.portable sigiro;
               home-manager-module = pkgs.callPackage ./nix/home-manager-check.nix {
                 module = self.homeManagerModules.default;

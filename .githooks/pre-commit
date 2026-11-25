@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs sigiro's pre-commit checks from the flake (nix/pre-commit.nix), so the
+# hook needs only Nix. Enable once per clone: git config core.hooksPath .githooks
+exec nix run --quiet --no-warn-dirty "$(git rev-parse --show-toplevel)#pre-commit"
