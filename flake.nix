@@ -123,6 +123,8 @@
             pkgs.wasm-bindgen-cli
             # Deployment-contract tests.
             pkgs.python3
+            # Local TLS certificates (scripts/dev-certs.sh).
+            pkgs.mkcert
           ];
           devEnv = rust.targetEnv // {
             CARGO_PROFILE_DEV_INCREMENTAL = "true";

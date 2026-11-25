@@ -20,7 +20,7 @@ if [[ -s "$cert_dir/ca.crt" && -s "$cert_dir/server.crt" && -s "$cert_dir/server
 fi
 
 if ! command -v mkcert >/dev/null 2>&1; then
-  echo "dev-certs: mkcert is required (brew install mkcert)" >&2
+  echo "dev-certs: mkcert is required; run this inside nix develop" >&2
   exit 1
 fi
 
