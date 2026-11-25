@@ -192,6 +192,8 @@
               ;
             inherit (rust) openapi unbundled;
             cache-client = pkgs.cachix;
+            # CI's secret scan; the pre-commit hook uses the same build.
+            inherit (pkgs) gitleaks;
             inherit pre-commit;
             rust-deps = rust.binArtifacts;
             rust-workspace-deps = rust.workspaceArtifacts;

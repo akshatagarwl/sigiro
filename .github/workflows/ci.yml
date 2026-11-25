@@ -59,30 +59,6 @@ jobs:
           # Full history for the secret scan and changeset check.
           fetch-depth: ${{ matrix.system == 'x86_64-linux' && 0 || 1 }}
 
-      # Download the pinned release and verify its checksum instead of using
-      # gitleaks-action, which needs a license key for organization accounts.
-      - name: secret scan
-        if: env.MAIN == 'true'
-        env:
-          GITLEAKS_VERSION: 8.30.1
-          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          set -euo pipefail
-          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -fsSLo "$RUNNER_TEMP/$tarball" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
-          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" gitleaks
-          "$RUNNER_TEMP/gitleaks" dir --config .gitleaks.toml --redact --no-banner .
-          range=HEAD~1..HEAD
-          if [ -n "${BASE:-}" ] && [ "$BASE" != 0000000000000000000000000000000000000000 ] \
-            && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-            range="$BASE..HEAD"
-          fi
-          "$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --redact --no-banner \
-            --log-opts="$range" .
-
       # Warns, never fails, when a pull request changes what ships in the
       # binary without adding a .changeset/*.md file. Changes that need no
       # changelog line can add one with `pnpm run changeset --empty`.
@@ -120,6 +96,25 @@ jobs:
           # extra_nix_config already lists this cache. `cachix use` would write a
           # user-level `substituters =` that drops the duckdb-static cache.
           skipAddingSubstituter: true
+
+      # gitleaks from the flake's locked nixpkgs, the same build the
+      # pre-commit hook runs (gitleaks-action needs a license key for
+      # organization accounts).
+      - name: secret scan
+        if: env.MAIN == 'true'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          gitleaks() { nix run .#gitleaks -- "$@"; }
+          gitleaks dir --config .gitleaks.toml --redact --no-banner .
+          range=HEAD~1..HEAD
+          if [ -n "${BASE:-}" ] && [ "$BASE" != 0000000000000000000000000000000000000000 ] \
+            && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            range="$BASE..HEAD"
+          fi
+          gitleaks git --config .gitleaks.toml --redact --no-banner \
+            --log-opts="$range" .
 
       - name: javascript and typescript
         if: env.MAIN == 'true'
