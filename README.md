@@ -88,7 +88,39 @@ service under its own `sigiro` user, with data in `/var/lib/sigiro`:
 ```
 
 `settings` sets any `SIGIRO_*` variable; put tokens in `environmentFile`, not
-`settings`, which ends up in the world-readable Nix store. So the machine
+`settings`, which ends up in the world-readable Nix store.
+
+### With home-manager (macOS or Linux)
+
+To run sigiro as your own user, import the home-manager module. On macOS it
+runs as a launchd agent (`org.nix-community.home.sigiro`) with logs in
+`~/Library/Logs/sigiro`; on Linux as a systemd user service, logging to the
+journal:
+
+```nix
+{
+  imports = [ sigiro.homeManagerModules.default ];
+
+  services.sigiro = {
+    enable = true;
+    # Optional, all shown with their defaults:
+    # bind = "127.0.0.1";
+    # port = 9999;                # dashboard, API, /health
+    # otlpGrpcPort = 4317;
+    # otlpHttpPort = 4318;
+    # dataDir = "~/Library/Application Support/sigiro";  # $XDG_DATA_HOME/sigiro on Linux
+    # logDir = "~/Library/Logs/sigiro";                  # macOS only
+    # duckdbMemoryLimit = null;   # e.g. "2GB"
+    # retentionDays = null;       # sigiro's default is 7
+    # settings = { };             # any other SIGIRO_* variable
+  };
+}
+```
+
+It also puts `sigiro` on your `PATH`. Do not put tokens in `settings`: they
+end up in the world-readable Nix store.
+
+So the machine
 downloads the prebuilt static binary instead of compiling it, trust the signed
 caches the flake builds from:
 

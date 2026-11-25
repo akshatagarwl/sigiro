@@ -207,6 +207,9 @@
             // {
               inherit sigiro;
               portable = rust.portable sigiro;
+              home-manager-module = pkgs.callPackage ./nix/home-manager-check.nix {
+                module = self.homeManagerModules.default;
+              };
             }
             // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
               image = pkgs.callPackage ./nix/image-check.nix {
@@ -253,6 +256,12 @@
       nixosModules = {
         default = self.nixosModules.sigiro;
         sigiro = import ./nix/nixos-module.nix { inherit self; };
+      };
+
+      # `services.sigiro` as a per-user service (nix/home-manager-module.nix).
+      homeManagerModules = {
+        default = self.homeManagerModules.sigiro;
+        sigiro = import ./nix/home-manager-module.nix { inherit self; };
       };
     };
 }
