@@ -139,7 +139,7 @@ jobs:
           ./result/bin/sigiro --version
           ./result/bin/sigiro --help
           ./result/bin/sigiro openapi > "$RUNNER_TEMP/openapi.json"
-          nix develop --command python3 -c 'import json, os; spec=json.load(open(os.environ["RUNNER_TEMP"] + "/openapi.json")); assert spec["paths"]; assert spec["openapi"]'
+          nix run nixpkgs#jq --inputs-from . -- -e '(.paths | length > 0) and (.openapi | length > 0)' "$RUNNER_TEMP/openapi.json" > /dev/null
 
       - name: development linkers
         if: runner.os == 'Linux'
