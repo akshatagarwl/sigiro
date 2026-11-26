@@ -9,7 +9,7 @@ These are the seven queryable `sigiro_*` tables created by `src/schema.rs`. Type
 
 **Pre-1.0 compatibility:** column names, types, and JSON shapes may change before 1.0. This page does not promise stable on-disk DuckLake/Parquet formats, automatic in-place upgrades, or downgrade support. Storage-format validation and upgrade policy are not defined yet, and runtime schema discovery is not available yet.
 
-`TIMESTAMP` columns are DuckDB timestamps at microsecond precision. Numeric epoch timestamps (`end_timestamp`, `observed_timestamp`, and metric `start_timestamp`) and span `duration` use **microseconds**, converted from OTLP nanoseconds. `events_json` and `exemplars_json` contain nested `time_unix_nano` fields that remain **nanoseconds**. Metric values and histogram bounds use the producer's `metric_unit`, not a fixed Sigiro unit; profile values use `unit`. A blank/zero epoch from a producer is not a guarantee that its start time is meaningful.
+Every point in time (`timestamp`, `end_timestamp`, `observed_timestamp`, and metric `start_timestamp`) is a `TIMESTAMP` at microsecond precision, in UTC, so any two compare and subtract without a cast. Bound them with `TIMESTAMP '2026-01-01 00:00:00'` or `make_timestamp(<microseconds>)`, not a bare integer. Lengths of time (span `duration`, and an interval such as `end_timestamp - timestamp`) are **microseconds**, converted from OTLP nanoseconds; `/v1/query` returns timestamps as microseconds since the Unix epoch and intervals as microseconds. `events_json` and `exemplars_json` contain nested `time_unix_nano` fields that remain **nanoseconds**. Metric values and histogram bounds use the producer's `metric_unit`, not a fixed Sigiro unit; profile values use `unit`. A producer that sends no start time gets `1970-01-01 00:00:00`.
 
 Attributes and JSON arrays are stored as **`VARCHAR` containing JSON**, not native JSON columns; use `json_extract_string(column, 'key')` for attribute keys. Keys depend on the sender and are not enumerated here. A nullable DDL declaration does not mean every current ingest path writes null.
 
@@ -18,7 +18,7 @@ Attributes and JSON arrays are stored as **`VARCHAR` containing JSON**, not nati
 | Column                     | Type                 | Unit         | Meaning                            |
 | -------------------------- | -------------------- | ------------ | ---------------------------------- |
 | `timestamp`                | `TIMESTAMP NOT NULL` | µs precision | Event or data-point time.          |
-| `end_timestamp`            | `BIGINT NOT NULL`    | epoch µs     | Span end time (epoch).             |
+| `end_timestamp`            | `TIMESTAMP NOT NULL` | µs precision | Span end time.                     |
 | `duration`                 | `BIGINT NOT NULL`    | µs           | Span elapsed time.                 |
 | `trace_id`                 | `VARCHAR`            | —            | Trace ID (hex text).               |
 | `span_id`                  | `VARCHAR`            | —            | Span ID (hex text).                |
@@ -48,7 +48,7 @@ Attributes and JSON arrays are stored as **`VARCHAR` containing JSON**, not nati
 | Column                | Type                 | Unit         | Meaning                                      |
 | --------------------- | -------------------- | ------------ | -------------------------------------------- |
 | `timestamp`           | `TIMESTAMP NOT NULL` | µs precision | Event or data-point time.                    |
-| `observed_timestamp`  | `BIGINT NOT NULL`    | epoch µs     | Log observation time (epoch).                |
+| `observed_timestamp`  | `TIMESTAMP NOT NULL` | µs precision | Log observation time.                        |
 | `trace_id`            | `VARCHAR`            | —            | Trace ID (hex text).                         |
 | `span_id`             | `VARCHAR`            | —            | Span ID (hex text).                          |
 | `event_name`          | `VARCHAR`            | —            | Log event name.                              |
@@ -72,7 +72,7 @@ Attributes and JSON arrays are stored as **`VARCHAR` containing JSON**, not nati
 | Column                | Type                 | Unit         | Meaning                               |
 | --------------------- | -------------------- | ------------ | ------------------------------------- |
 | `timestamp`           | `TIMESTAMP NOT NULL` | µs precision | Event or data-point time.             |
-| `start_timestamp`     | `BIGINT`             | epoch µs     | Metric data-point start time (epoch). |
+| `start_timestamp`     | `TIMESTAMP`          | µs precision | Metric data-point start time.         |
 | `metric_name`         | `VARCHAR NOT NULL`   | —            | Metric name.                          |
 | `metric_description`  | `VARCHAR`            | —            | Metric description.                   |
 | `metric_unit`         | `VARCHAR`            | —            | Unit supplied by the metric producer. |
@@ -93,7 +93,7 @@ Attributes and JSON arrays are stored as **`VARCHAR` containing JSON**, not nati
 | Column                    | Type                 | Unit         | Meaning                               |
 | ------------------------- | -------------------- | ------------ | ------------------------------------- |
 | `timestamp`               | `TIMESTAMP NOT NULL` | µs precision | Event or data-point time.             |
-| `start_timestamp`         | `BIGINT`             | epoch µs     | Metric data-point start time (epoch). |
+| `start_timestamp`         | `TIMESTAMP`          | µs precision | Metric data-point start time.         |
 | `metric_name`             | `VARCHAR NOT NULL`   | —            | Metric name.                          |
 | `metric_description`      | `VARCHAR`            | —            | Metric description.                   |
 | `metric_unit`             | `VARCHAR`            | —            | Unit supplied by the metric producer. |
@@ -116,7 +116,7 @@ Attributes and JSON arrays are stored as **`VARCHAR` containing JSON**, not nati
 | Column                    | Type                 | Unit         | Meaning                                                  |
 | ------------------------- | -------------------- | ------------ | -------------------------------------------------------- |
 | `timestamp`               | `TIMESTAMP NOT NULL` | µs precision | Event or data-point time.                                |
-| `start_timestamp`         | `BIGINT`             | epoch µs     | Metric data-point start time (epoch).                    |
+| `start_timestamp`         | `TIMESTAMP`          | µs precision | Metric data-point start time.                            |
 | `metric_name`             | `VARCHAR NOT NULL`   | —            | Metric name.                                             |
 | `metric_description`      | `VARCHAR`            | —            | Metric description.                                      |
 | `metric_unit`             | `VARCHAR`            | —            | Unit supplied by the metric producer.                    |
@@ -143,7 +143,7 @@ Attributes and JSON arrays are stored as **`VARCHAR` containing JSON**, not nati
 | Column                    | Type                 | Unit         | Meaning                                    |
 | ------------------------- | -------------------- | ------------ | ------------------------------------------ |
 | `timestamp`               | `TIMESTAMP NOT NULL` | µs precision | Event or data-point time.                  |
-| `start_timestamp`         | `BIGINT`             | epoch µs     | Metric data-point start time (epoch).      |
+| `start_timestamp`         | `TIMESTAMP`          | µs precision | Metric data-point start time.              |
 | `metric_name`             | `VARCHAR NOT NULL`   | —            | Metric name.                               |
 | `metric_description`      | `VARCHAR`            | —            | Metric description.                        |
 | `metric_unit`             | `VARCHAR`            | —            | Unit supplied by the metric producer.      |

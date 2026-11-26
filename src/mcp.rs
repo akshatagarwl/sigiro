@@ -257,9 +257,10 @@ if service count exceeds SIGIRO_MAX_RESULT_ROWS."
 
     #[tool(
         description = "Execute read-only SQL against allowlisted telemetry tables. \
-`timestamp` is a TIMESTAMP column (UTC): bound it with `timestamp > now() - INTERVAL '1 hour'` \
-or `TIMESTAMP '2026-01-01 00:00:00'`, never an integer. Result rows render timestamps as \
-microseconds since the Unix epoch, and `duration` is in microseconds."
+Every `*timestamp` column is a TIMESTAMP (UTC): bound it with `TIMESTAMP '2026-01-01 00:00:00'`, \
+`make_timestamp(<microseconds>)` or `now() - INTERVAL '1 hour'`, never a bare integer. Result \
+rows render timestamps as microseconds since the Unix epoch, and `duration` and intervals \
+(such as `end_timestamp - timestamp`) in microseconds."
     )]
     async fn run_query(
         &self,
@@ -283,8 +284,9 @@ impl ServerHandler for SigiroMcp {
         info.instructions = Some(
             "Observability tools over a sigiro server. Use `list_services` to find a \
 service, then `run_query` to inspect its raw telemetry. Bound every query by \
-`timestamp` with TIMESTAMP values (`now() - INTERVAL '1 hour'`); comparing it to an \
-integer fails. Query results render timestamps, and `duration`, in MICROSECONDS."
+`timestamp` with TIMESTAMP values (`now() - INTERVAL '1 hour'`, or `make_timestamp(<µs>)`); \
+comparing it to a bare integer fails. Query results render timestamps, `duration` and \
+intervals in MICROSECONDS."
                 .to_string(),
         );
         info.capabilities = ServerCapabilities::builder().enable_tools().build();

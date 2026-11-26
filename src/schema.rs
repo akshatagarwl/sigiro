@@ -40,9 +40,10 @@ fn declare_tables(conn: &Connection, prefix: &str) -> Result<()> {
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_spans (
             timestamp             TIMESTAMP NOT NULL,
-            -- end_timestamp and duration are microseconds, matching `timestamp`.
-            -- Ingest stores OTLP nanoseconds as microseconds.
-            end_timestamp         BIGINT NOT NULL,
+            -- Every point in time is a TIMESTAMP (microseconds, UTC); every
+            -- length of time, like duration, is a BIGINT count of microseconds.
+            -- Ingest truncates OTLP nanoseconds to microseconds.
+            end_timestamp         TIMESTAMP NOT NULL,
             duration              BIGINT NOT NULL,
             trace_id              VARCHAR,
             span_id               VARCHAR,
@@ -87,7 +88,7 @@ fn declare_tables(conn: &Connection, prefix: &str) -> Result<()> {
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_logs (
             timestamp             TIMESTAMP NOT NULL,
-            observed_timestamp    BIGINT NOT NULL,
+            observed_timestamp    TIMESTAMP NOT NULL,
             trace_id              VARCHAR,
             span_id               VARCHAR,
             event_name            VARCHAR,
@@ -113,7 +114,7 @@ fn declare_tables(conn: &Connection, prefix: &str) -> Result<()> {
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_gauge (
             timestamp             TIMESTAMP NOT NULL,
-            start_timestamp       BIGINT,
+            start_timestamp       TIMESTAMP,
             metric_name           VARCHAR NOT NULL,
             metric_description    VARCHAR,
             metric_unit           VARCHAR,
@@ -136,7 +137,7 @@ fn declare_tables(conn: &Connection, prefix: &str) -> Result<()> {
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_sum (
             timestamp                  TIMESTAMP NOT NULL,
-            start_timestamp            BIGINT,
+            start_timestamp            TIMESTAMP,
             metric_name                VARCHAR NOT NULL,
             metric_description         VARCHAR,
             metric_unit                VARCHAR,
@@ -161,7 +162,7 @@ fn declare_tables(conn: &Connection, prefix: &str) -> Result<()> {
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_histogram (
             timestamp                  TIMESTAMP NOT NULL,
-            start_timestamp            BIGINT,
+            start_timestamp            TIMESTAMP,
             metric_name                VARCHAR NOT NULL,
             metric_description         VARCHAR,
             metric_unit                VARCHAR,
@@ -190,7 +191,7 @@ fn declare_tables(conn: &Connection, prefix: &str) -> Result<()> {
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {prefix}sigiro_metrics_exp_histogram (
             timestamp                  TIMESTAMP NOT NULL,
-            start_timestamp            BIGINT,
+            start_timestamp            TIMESTAMP,
             metric_name                VARCHAR NOT NULL,
             metric_description         VARCHAR,
             metric_unit                VARCHAR,
@@ -267,6 +268,59 @@ mod tests {
         assert!(tables.iter().any(|name| name == "sigiro_logs"));
         assert!(tables.iter().any(|name| name == "sigiro_profiles"));
         assert!(!tables.iter().any(|name| name == "sigiro_anomalies"));
+    }
+
+    /// One time type everywhere (#236): a point in time is a `TIMESTAMP` and
+    /// is named `*timestamp`, so `/v1/query` compares and subtracts any two of
+    /// them without a cast.
+    #[test]
+    fn every_point_in_time_is_a_timestamp() {
+        let conn = crate::pool::open_duckdb().unwrap();
+        create_tables(&conn, "").unwrap();
+        let columns = columns(&conn, "memory").unwrap();
+        let mismatched: Vec<_> = columns
+            .iter()
+            .filter(|(_, column, data_type)| {
+                column.ends_with("timestamp") != (data_type == "TIMESTAMP")
+            })
+            .collect();
+        assert!(mismatched.is_empty(), "{mismatched:?}");
+        assert!(
+            columns
+                .iter()
+                .any(|(table, column, _)| { table == "sigiro_spans" && column == "end_timestamp" })
+        );
+    }
+
+    /// The queries from #236: a µs window over `timestamp`, and span length
+    /// as `end_timestamp - timestamp`, pass the `/v1/query` firewall and run.
+    #[test]
+    fn a_span_window_and_length_need_no_cast() {
+        let conn = crate::pool::open_duckdb().unwrap();
+        create_tables(&conn, "").unwrap();
+        conn.execute_batch(
+            "INSERT INTO sigiro_spans (timestamp, end_timestamp, duration, span_name, service_name, span_kind, status_code) \
+             VALUES (make_timestamp(1795604408000000), make_timestamp(1795604408250000), 250000, 'GET /', 'web', 2, 0)",
+        )
+        .unwrap();
+        let sql = "SELECT end_timestamp - timestamp AS length, end_timestamp > timestamp AS ordered \
+                   FROM sigiro_spans \
+                   WHERE timestamp >= make_timestamp(1795604408000000) \
+                   AND timestamp < make_timestamp(1795608008000000)";
+        sigiro_segments::validate_read_only(sql).unwrap();
+        let mut stmt = conn.prepare(sql).unwrap();
+        let mut rows = stmt.query([]).unwrap();
+        let row = rows.next().unwrap().unwrap();
+        let stmt = row.as_ref();
+        let values: Vec<_> = (0..2)
+            .map(|i| {
+                crate::duckdb_json::duckdb_row_value_to_json(row, i, &stmt.column_type(i)).unwrap()
+            })
+            .collect();
+        assert_eq!(
+            values,
+            [serde_json::json!(250_000), serde_json::json!(true)]
+        );
     }
 
     #[test]

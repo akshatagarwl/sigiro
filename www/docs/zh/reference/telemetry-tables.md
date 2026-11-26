@@ -9,7 +9,7 @@ sidebar:
 
 **1.0 前的兼容性：**字段名、类型及 JSON 结构在 1.0 前可能变化。本文不承诺 DuckLake/Parquet 磁盘格式稳定、自动原地升级或支持降级。存储格式校验和升级策略尚未确定，运行时字段发现也尚未提供。
 
-`TIMESTAMP` 是微秒精度的 DuckDB 时间戳。数值纪元时间（`end_timestamp`、`observed_timestamp`、指标的 `start_timestamp`）和跨度的 `duration` 使用由 OTLP 纳秒转换的**微秒**。但 `events_json` 和 `exemplars_json` 内部的 `time_unix_nano` 仍是**纳秒**。指标值与直方图边界的单位由发送方的 `metric_unit` 决定；剖析值使用 `unit`。
+表示时间点的列（`timestamp`、`end_timestamp`、`observed_timestamp` 以及指标的 `start_timestamp`）都是微秒精度、UTC 的 `TIMESTAMP`，因此任意两列都可以直接比较和相减，无需转换。请用 `TIMESTAMP '2026-01-01 00:00:00'` 或 `make_timestamp(<微秒>)` 限定范围，而不是裸整数。时间长度（跨度的 `duration`，以及 `end_timestamp - timestamp` 这样的间隔）使用由 OTLP 纳秒转换的**微秒**。`/v1/query` 将时间点返回为自 Unix 纪元起的微秒数，将间隔返回为微秒。但 `events_json` 和 `exemplars_json` 内部的 `time_unix_nano` 仍是**纳秒**。指标值与直方图边界的单位由发送方的 `metric_unit` 决定；剖析值使用 `unit`。
 
 属性和 JSON 数组并非原生 JSON 列，而是**包含 JSON 的 `VARCHAR`**。用 `json_extract_string(column, 'key')` 查询属性键。键由发送方决定，不在此逐一列出。DDL 允许为空不代表当前写入路径必定写入 null。
 
@@ -18,7 +18,7 @@ sidebar:
 | 字段                       | 类型                 | 单位         | 含义                              |
 | -------------------------- | -------------------- | ------------ | --------------------------------- |
 | `timestamp`                | `TIMESTAMP NOT NULL` | µs precision | 事件或数据点时间。                |
-| `end_timestamp`            | `BIGINT NOT NULL`    | epoch µs     | 跨度结束时间。                    |
+| `end_timestamp`            | `TIMESTAMP NOT NULL` | µs precision | 跨度结束时间。                    |
 | `duration`                 | `BIGINT NOT NULL`    | µs           | 跨度持续时间。                    |
 | `trace_id`                 | `VARCHAR`            | —            | 追踪 ID（十六进制文本）。         |
 | `span_id`                  | `VARCHAR`            | —            | 跨度 ID（十六进制文本）。         |
@@ -48,7 +48,7 @@ sidebar:
 | 字段                  | 类型                 | 单位         | 含义                              |
 | --------------------- | -------------------- | ------------ | --------------------------------- |
 | `timestamp`           | `TIMESTAMP NOT NULL` | µs precision | 事件或数据点时间。                |
-| `observed_timestamp`  | `BIGINT NOT NULL`    | epoch µs     | 日志观测时间。                    |
+| `observed_timestamp`  | `TIMESTAMP NOT NULL` | µs precision | 日志观测时间。                    |
 | `trace_id`            | `VARCHAR`            | —            | 追踪 ID（十六进制文本）。         |
 | `span_id`             | `VARCHAR`            | —            | 跨度 ID（十六进制文本）。         |
 | `event_name`          | `VARCHAR`            | —            | 日志事件名称。                    |
@@ -72,7 +72,7 @@ sidebar:
 | 字段                  | 类型                 | 单位         | 含义                              |
 | --------------------- | -------------------- | ------------ | --------------------------------- |
 | `timestamp`           | `TIMESTAMP NOT NULL` | µs precision | 事件或数据点时间。                |
-| `start_timestamp`     | `BIGINT`             | epoch µs     | 指标数据点的开始时间。            |
+| `start_timestamp`     | `TIMESTAMP`          | µs precision | 指标数据点的开始时间。            |
 | `metric_name`         | `VARCHAR NOT NULL`   | —            | 指标名称。                        |
 | `metric_description`  | `VARCHAR`            | —            | 指标描述。                        |
 | `metric_unit`         | `VARCHAR`            | —            | 发送方提供的单位。                |
@@ -93,7 +93,7 @@ sidebar:
 | 字段                      | 类型                 | 单位         | 含义                              |
 | ------------------------- | -------------------- | ------------ | --------------------------------- |
 | `timestamp`               | `TIMESTAMP NOT NULL` | µs precision | 事件或数据点时间。                |
-| `start_timestamp`         | `BIGINT`             | epoch µs     | 指标数据点的开始时间。            |
+| `start_timestamp`         | `TIMESTAMP`          | µs precision | 指标数据点的开始时间。            |
 | `metric_name`             | `VARCHAR NOT NULL`   | —            | 指标名称。                        |
 | `metric_description`      | `VARCHAR`            | —            | 指标描述。                        |
 | `metric_unit`             | `VARCHAR`            | —            | 发送方提供的单位。                |
@@ -116,7 +116,7 @@ sidebar:
 | 字段                      | 类型                 | 单位         | 含义                               |
 | ------------------------- | -------------------- | ------------ | ---------------------------------- |
 | `timestamp`               | `TIMESTAMP NOT NULL` | µs precision | 事件或数据点时间。                 |
-| `start_timestamp`         | `BIGINT`             | epoch µs     | 指标数据点的开始时间。             |
+| `start_timestamp`         | `TIMESTAMP`          | µs precision | 指标数据点的开始时间。             |
 | `metric_name`             | `VARCHAR NOT NULL`   | —            | 指标名称。                         |
 | `metric_description`      | `VARCHAR`            | —            | 指标描述。                         |
 | `metric_unit`             | `VARCHAR`            | —            | 发送方提供的单位。                 |
@@ -143,7 +143,7 @@ sidebar:
 | 字段                      | 类型                 | 单位         | 含义                              |
 | ------------------------- | -------------------- | ------------ | --------------------------------- |
 | `timestamp`               | `TIMESTAMP NOT NULL` | µs precision | 事件或数据点时间。                |
-| `start_timestamp`         | `BIGINT`             | epoch µs     | 指标数据点的开始时间。            |
+| `start_timestamp`         | `TIMESTAMP`          | µs precision | 指标数据点的开始时间。            |
 | `metric_name`             | `VARCHAR NOT NULL`   | —            | 指标名称。                        |
 | `metric_description`      | `VARCHAR`            | —            | 指标描述。                        |
 | `metric_unit`             | `VARCHAR`            | —            | 发送方提供的单位。                |

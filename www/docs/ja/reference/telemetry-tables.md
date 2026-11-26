@@ -9,7 +9,7 @@ sidebar:
 
 **1.0 前の互換性:** 列名・型・JSON の形は 1.0 までに変更される可能性があります。このページは DuckLake/Parquet のディスク形式の安定性、自動インプレース更新、ダウングレード対応を保証しません。ストレージ形式の検証と更新方針はまだ決まっておらず、実行時のスキーマ検出もまだ提供していません。
 
-`TIMESTAMP` はマイクロ秒精度の DuckDB 時刻です。数値エポック時刻（`end_timestamp`、`observed_timestamp`、メトリクスの `start_timestamp`）とスパンの `duration` は OTLP のナノ秒から変換した**マイクロ秒**です。一方、`events_json` と `exemplars_json` 内の `time_unix_nano` は**ナノ秒**のままです。メトリクス値とヒストグラム境界の単位は送信元の `metric_unit`、プロファイル値は `unit` に従います。
+時刻を表す列（`timestamp`、`end_timestamp`、`observed_timestamp`、メトリクスの `start_timestamp`）はすべてマイクロ秒精度・UTC の `TIMESTAMP` なので、キャストなしで比較や減算ができます。範囲は整数ではなく `TIMESTAMP '2026-01-01 00:00:00'` または `make_timestamp(<マイクロ秒>)` で指定します。時間の長さ（スパンの `duration`、および `end_timestamp - timestamp` のような間隔）は OTLP のナノ秒から変換した**マイクロ秒**です。`/v1/query` は時刻を Unix エポックからのマイクロ秒、間隔をマイクロ秒で返します。一方、`events_json` と `exemplars_json` 内の `time_unix_nano` は**ナノ秒**のままです。メトリクス値とヒストグラム境界の単位は送信元の `metric_unit`、プロファイル値は `unit` に従います。
 
 属性と JSON 配列はネイティブ JSON 型ではなく、**JSON を含む `VARCHAR`** です。属性キーは `json_extract_string(column, 'key')` で参照してください。キーの集合は送信元ごとに異なります。DDL で nullable と宣言されていても、現在の取り込み処理が常に null を書くわけではありません。
 
@@ -18,7 +18,7 @@ sidebar:
 | 列                         | 型                   | 単位         | 意味                                  |
 | -------------------------- | -------------------- | ------------ | ------------------------------------- |
 | `timestamp`                | `TIMESTAMP NOT NULL` | µs precision | イベントまたはデータ点の時刻。        |
-| `end_timestamp`            | `BIGINT NOT NULL`    | epoch µs     | スパン終了時刻。                      |
+| `end_timestamp`            | `TIMESTAMP NOT NULL` | µs precision | スパン終了時刻。                      |
 | `duration`                 | `BIGINT NOT NULL`    | µs           | スパンの経過時間。                    |
 | `trace_id`                 | `VARCHAR`            | —            | トレース ID（16 進文字列）。          |
 | `span_id`                  | `VARCHAR`            | —            | スパン ID（16 進文字列）。            |
@@ -48,7 +48,7 @@ sidebar:
 | 列                    | 型                   | 単位         | 意味                                  |
 | --------------------- | -------------------- | ------------ | ------------------------------------- |
 | `timestamp`           | `TIMESTAMP NOT NULL` | µs precision | イベントまたはデータ点の時刻。        |
-| `observed_timestamp`  | `BIGINT NOT NULL`    | epoch µs     | ログ観測時刻。                        |
+| `observed_timestamp`  | `TIMESTAMP NOT NULL` | µs precision | ログ観測時刻。                        |
 | `trace_id`            | `VARCHAR`            | —            | トレース ID（16 進文字列）。          |
 | `span_id`             | `VARCHAR`            | —            | スパン ID（16 進文字列）。            |
 | `event_name`          | `VARCHAR`            | —            | ログイベント名。                      |
@@ -72,7 +72,7 @@ sidebar:
 | 列                    | 型                   | 単位         | 意味                                  |
 | --------------------- | -------------------- | ------------ | ------------------------------------- |
 | `timestamp`           | `TIMESTAMP NOT NULL` | µs precision | イベントまたはデータ点の時刻。        |
-| `start_timestamp`     | `BIGINT`             | epoch µs     | メトリクスデータ点の開始時刻。        |
+| `start_timestamp`     | `TIMESTAMP`          | µs precision | メトリクスデータ点の開始時刻。        |
 | `metric_name`         | `VARCHAR NOT NULL`   | —            | メトリクス名。                        |
 | `metric_description`  | `VARCHAR`            | —            | メトリクスの説明。                    |
 | `metric_unit`         | `VARCHAR`            | —            | 送信元が指定した単位。                |
@@ -93,7 +93,7 @@ sidebar:
 | 列                        | 型                   | 単位         | 意味                                  |
 | ------------------------- | -------------------- | ------------ | ------------------------------------- |
 | `timestamp`               | `TIMESTAMP NOT NULL` | µs precision | イベントまたはデータ点の時刻。        |
-| `start_timestamp`         | `BIGINT`             | epoch µs     | メトリクスデータ点の開始時刻。        |
+| `start_timestamp`         | `TIMESTAMP`          | µs precision | メトリクスデータ点の開始時刻。        |
 | `metric_name`             | `VARCHAR NOT NULL`   | —            | メトリクス名。                        |
 | `metric_description`      | `VARCHAR`            | —            | メトリクスの説明。                    |
 | `metric_unit`             | `VARCHAR`            | —            | 送信元が指定した単位。                |
@@ -116,7 +116,7 @@ sidebar:
 | 列                        | 型                   | 単位         | 意味                                                  |
 | ------------------------- | -------------------- | ------------ | ----------------------------------------------------- |
 | `timestamp`               | `TIMESTAMP NOT NULL` | µs precision | イベントまたはデータ点の時刻。                        |
-| `start_timestamp`         | `BIGINT`             | epoch µs     | メトリクスデータ点の開始時刻。                        |
+| `start_timestamp`         | `TIMESTAMP`          | µs precision | メトリクスデータ点の開始時刻。                        |
 | `metric_name`             | `VARCHAR NOT NULL`   | —            | メトリクス名。                                        |
 | `metric_description`      | `VARCHAR`            | —            | メトリクスの説明。                                    |
 | `metric_unit`             | `VARCHAR`            | —            | 送信元が指定した単位。                                |
@@ -143,7 +143,7 @@ sidebar:
 | 列                        | 型                   | 単位         | 意味                                  |
 | ------------------------- | -------------------- | ------------ | ------------------------------------- |
 | `timestamp`               | `TIMESTAMP NOT NULL` | µs precision | イベントまたはデータ点の時刻。        |
-| `start_timestamp`         | `BIGINT`             | epoch µs     | メトリクスデータ点の開始時刻。        |
+| `start_timestamp`         | `TIMESTAMP`          | µs precision | メトリクスデータ点の開始時刻。        |
 | `metric_name`             | `VARCHAR NOT NULL`   | —            | メトリクス名。                        |
 | `metric_description`      | `VARCHAR`            | —            | メトリクスの説明。                    |
 | `metric_unit`             | `VARCHAR`            | —            | 送信元が指定した単位。                |

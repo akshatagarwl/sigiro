@@ -9,7 +9,7 @@ sidebar:
 
 **1.0 이전 호환성:** 열 이름, 유형, JSON 형태는 1.0 이전에 바뀔 수 있습니다. 이 문서는 DuckLake/Parquet 디스크 형식의 안정성, 자동 인플레이스 업그레이드 또는 다운그레이드 지원을 보장하지 않습니다. 저장소 형식 검증과 업그레이드 정책은 아직 정해지지 않았고, 런타임 스키마 검색도 아직 제공하지 않습니다.
 
-`TIMESTAMP`는 마이크로초 정밀도의 DuckDB 타임스탬프입니다. 숫자 에폭 시각(`end_timestamp`, `observed_timestamp`, 메트릭 `start_timestamp`)과 스팬 `duration`은 OTLP 나노초를 변환한 **마이크로초**입니다. 반면 `events_json` 및 `exemplars_json` 내부의 `time_unix_nano`는 **나노초** 그대로입니다. 메트릭 값과 히스토그램 경계의 단위는 전송자의 `metric_unit`, 프로파일 값은 `unit`에 따릅니다.
+시각을 나타내는 열(`timestamp`, `end_timestamp`, `observed_timestamp`, 메트릭 `start_timestamp`)은 모두 마이크로초 정밀도의 UTC `TIMESTAMP`이므로 캐스트 없이 비교하고 뺄 수 있습니다. 범위는 정수가 아니라 `TIMESTAMP '2026-01-01 00:00:00'` 또는 `make_timestamp(<마이크로초>)`로 지정합니다. 시간의 길이(스팬 `duration`, 그리고 `end_timestamp - timestamp` 같은 간격)는 OTLP 나노초를 변환한 **마이크로초**입니다. `/v1/query`는 시각을 Unix 에폭 기준 마이크로초로, 간격을 마이크로초로 반환합니다. 반면 `events_json` 및 `exemplars_json` 내부의 `time_unix_nano`는 **나노초** 그대로입니다. 메트릭 값과 히스토그램 경계의 단위는 전송자의 `metric_unit`, 프로파일 값은 `unit`에 따릅니다.
 
 속성과 JSON 배열은 네이티브 JSON 열이 아닌 **JSON을 담은 `VARCHAR`**입니다. 속성 키는 `json_extract_string(column, 'key')`로 읽으세요. 키는 전송자마다 달라 이 목록에 포함되지 않습니다. DDL에서 nullable이라도 현재 수집 경로가 반드시 null을 쓰는 것은 아닙니다.
 
@@ -18,7 +18,7 @@ sidebar:
 | 열                         | 유형                 | 단위         | 의미                               |
 | -------------------------- | -------------------- | ------------ | ---------------------------------- |
 | `timestamp`                | `TIMESTAMP NOT NULL` | µs precision | 이벤트 또는 데이터 포인트 시각.    |
-| `end_timestamp`            | `BIGINT NOT NULL`    | epoch µs     | 스팬 종료 시각.                    |
+| `end_timestamp`            | `TIMESTAMP NOT NULL` | µs precision | 스팬 종료 시각.                    |
 | `duration`                 | `BIGINT NOT NULL`    | µs           | 스팬 경과 시간.                    |
 | `trace_id`                 | `VARCHAR`            | —            | 추적 ID(16진 문자열).              |
 | `span_id`                  | `VARCHAR`            | —            | 스팬 ID(16진 문자열).              |
@@ -48,7 +48,7 @@ sidebar:
 | 열                    | 유형                 | 단위         | 의미                               |
 | --------------------- | -------------------- | ------------ | ---------------------------------- |
 | `timestamp`           | `TIMESTAMP NOT NULL` | µs precision | 이벤트 또는 데이터 포인트 시각.    |
-| `observed_timestamp`  | `BIGINT NOT NULL`    | epoch µs     | 로그 관측 시각.                    |
+| `observed_timestamp`  | `TIMESTAMP NOT NULL` | µs precision | 로그 관측 시각.                    |
 | `trace_id`            | `VARCHAR`            | —            | 추적 ID(16진 문자열).              |
 | `span_id`             | `VARCHAR`            | —            | 스팬 ID(16진 문자열).              |
 | `event_name`          | `VARCHAR`            | —            | 로그 이벤트 이름.                  |
@@ -72,7 +72,7 @@ sidebar:
 | 열                    | 유형                 | 단위         | 의미                               |
 | --------------------- | -------------------- | ------------ | ---------------------------------- |
 | `timestamp`           | `TIMESTAMP NOT NULL` | µs precision | 이벤트 또는 데이터 포인트 시각.    |
-| `start_timestamp`     | `BIGINT`             | epoch µs     | 메트릭 데이터 포인트 시작 시각.    |
+| `start_timestamp`     | `TIMESTAMP`          | µs precision | 메트릭 데이터 포인트 시작 시각.    |
 | `metric_name`         | `VARCHAR NOT NULL`   | —            | 메트릭 이름.                       |
 | `metric_description`  | `VARCHAR`            | —            | 메트릭 설명.                       |
 | `metric_unit`         | `VARCHAR`            | —            | 전송자가 지정한 단위.              |
@@ -93,7 +93,7 @@ sidebar:
 | 열                        | 유형                 | 단위         | 의미                               |
 | ------------------------- | -------------------- | ------------ | ---------------------------------- |
 | `timestamp`               | `TIMESTAMP NOT NULL` | µs precision | 이벤트 또는 데이터 포인트 시각.    |
-| `start_timestamp`         | `BIGINT`             | epoch µs     | 메트릭 데이터 포인트 시작 시각.    |
+| `start_timestamp`         | `TIMESTAMP`          | µs precision | 메트릭 데이터 포인트 시작 시각.    |
 | `metric_name`             | `VARCHAR NOT NULL`   | —            | 메트릭 이름.                       |
 | `metric_description`      | `VARCHAR`            | —            | 메트릭 설명.                       |
 | `metric_unit`             | `VARCHAR`            | —            | 전송자가 지정한 단위.              |
@@ -116,7 +116,7 @@ sidebar:
 | 열                        | 유형                 | 단위         | 의미                                            |
 | ------------------------- | -------------------- | ------------ | ----------------------------------------------- |
 | `timestamp`               | `TIMESTAMP NOT NULL` | µs precision | 이벤트 또는 데이터 포인트 시각.                 |
-| `start_timestamp`         | `BIGINT`             | epoch µs     | 메트릭 데이터 포인트 시작 시각.                 |
+| `start_timestamp`         | `TIMESTAMP`          | µs precision | 메트릭 데이터 포인트 시작 시각.                 |
 | `metric_name`             | `VARCHAR NOT NULL`   | —            | 메트릭 이름.                                    |
 | `metric_description`      | `VARCHAR`            | —            | 메트릭 설명.                                    |
 | `metric_unit`             | `VARCHAR`            | —            | 전송자가 지정한 단위.                           |
@@ -143,7 +143,7 @@ sidebar:
 | 열                        | 유형                 | 단위         | 의미                               |
 | ------------------------- | -------------------- | ------------ | ---------------------------------- |
 | `timestamp`               | `TIMESTAMP NOT NULL` | µs precision | 이벤트 또는 데이터 포인트 시각.    |
-| `start_timestamp`         | `BIGINT`             | epoch µs     | 메트릭 데이터 포인트 시작 시각.    |
+| `start_timestamp`         | `TIMESTAMP`          | µs precision | 메트릭 데이터 포인트 시작 시각.    |
 | `metric_name`             | `VARCHAR NOT NULL`   | —            | 메트릭 이름.                       |
 | `metric_description`      | `VARCHAR`            | —            | 메트릭 설명.                       |
 | `metric_unit`             | `VARCHAR`            | —            | 전송자가 지정한 단위.              |

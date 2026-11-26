@@ -86,7 +86,7 @@ impl SkippedMetrics {
 
 pub struct TraceBuilders {
     timestamp: TimestampMicrosecondBuilder,
-    end_timestamp: Int64Builder,
+    end_timestamp: TimestampMicrosecondBuilder,
     duration: Int64Builder,
     trace_id: StringBuilder,
     span_id: StringBuilder,
@@ -122,7 +122,7 @@ impl TraceBuilders {
             values: None,
             span_attribute_refs: StringBuilder::new(),
             timestamp: TimestampMicrosecondBuilder::new(),
-            end_timestamp: Int64Builder::new(),
+            end_timestamp: TimestampMicrosecondBuilder::new(),
             duration: Int64Builder::new(),
             trace_id: StringBuilder::new(),
             span_id: StringBuilder::new(),
@@ -595,7 +595,11 @@ fn traces_schema() -> Schema {
             DataType::Timestamp(TimeUnit::Microsecond, None),
             false,
         ),
-        Field::new("end_timestamp", DataType::Int64, false),
+        Field::new(
+            "end_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
         Field::new("duration", DataType::Int64, false),
         Field::new("trace_id", DataType::Utf8, true),
         Field::new("span_id", DataType::Utf8, true),
@@ -629,7 +633,11 @@ fn logs_schema() -> Schema {
             DataType::Timestamp(TimeUnit::Microsecond, None),
             false,
         ),
-        Field::new("observed_timestamp", DataType::Int64, false),
+        Field::new(
+            "observed_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
         Field::new("trace_id", DataType::Utf8, true),
         Field::new("span_id", DataType::Utf8, true),
         Field::new("event_name", DataType::Utf8, false),
@@ -654,7 +662,11 @@ fn gauge_schema() -> Schema {
             DataType::Timestamp(TimeUnit::Microsecond, None),
             false,
         ),
-        Field::new("start_timestamp", DataType::Int64, false),
+        Field::new(
+            "start_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
         Field::new("metric_name", DataType::Utf8, false),
         Field::new("metric_description", DataType::Utf8, false),
         Field::new("metric_unit", DataType::Utf8, false),
@@ -679,7 +691,11 @@ fn sum_schema() -> Schema {
             DataType::Timestamp(TimeUnit::Microsecond, None),
             false,
         ),
-        Field::new("start_timestamp", DataType::Int64, false),
+        Field::new(
+            "start_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
         Field::new("metric_name", DataType::Utf8, false),
         Field::new("metric_description", DataType::Utf8, false),
         Field::new("metric_unit", DataType::Utf8, false),
@@ -706,7 +722,11 @@ fn histogram_schema() -> Schema {
             DataType::Timestamp(TimeUnit::Microsecond, None),
             false,
         ),
-        Field::new("start_timestamp", DataType::Int64, false),
+        Field::new(
+            "start_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
         Field::new("metric_name", DataType::Utf8, false),
         Field::new("metric_description", DataType::Utf8, false),
         Field::new("metric_unit", DataType::Utf8, false),
@@ -737,7 +757,11 @@ fn exp_histogram_schema() -> Schema {
             DataType::Timestamp(TimeUnit::Microsecond, None),
             false,
         ),
-        Field::new("start_timestamp", DataType::Int64, false),
+        Field::new(
+            "start_timestamp",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        ),
         Field::new("metric_name", DataType::Utf8, false),
         Field::new("metric_description", DataType::Utf8, false),
         Field::new("metric_unit", DataType::Utf8, false),
@@ -919,7 +943,7 @@ fn exemplars_to_json(exemplars: &[crate::otel_proto::tonic::metrics::v1::Exempla
 
 pub struct LogBuilders {
     timestamp: TimestampMicrosecondBuilder,
-    observed_timestamp: Int64Builder,
+    observed_timestamp: TimestampMicrosecondBuilder,
     trace_id: StringBuilder,
     span_id: StringBuilder,
     event_name: StringBuilder,
@@ -940,7 +964,7 @@ impl LogBuilders {
     pub(crate) fn new() -> Self {
         Self {
             timestamp: TimestampMicrosecondBuilder::new(),
-            observed_timestamp: Int64Builder::new(),
+            observed_timestamp: TimestampMicrosecondBuilder::new(),
             trace_id: StringBuilder::new(),
             span_id: StringBuilder::new(),
             event_name: StringBuilder::new(),
@@ -1109,7 +1133,7 @@ struct MetricContext<'a> {
 
 struct GaugeBuilders {
     timestamp: TimestampMicrosecondBuilder,
-    start_timestamp: Int64Builder,
+    start_timestamp: TimestampMicrosecondBuilder,
     metric_name: StringBuilder,
     metric_description: StringBuilder,
     metric_unit: StringBuilder,
@@ -1130,7 +1154,7 @@ impl GaugeBuilders {
     fn new() -> Self {
         Self {
             timestamp: TimestampMicrosecondBuilder::new(),
-            start_timestamp: Int64Builder::new(),
+            start_timestamp: TimestampMicrosecondBuilder::new(),
             metric_name: StringBuilder::new(),
             metric_description: StringBuilder::new(),
             metric_unit: StringBuilder::new(),
@@ -1242,7 +1266,7 @@ impl GaugeBuilders {
 
 struct SumBuilders {
     timestamp: TimestampMicrosecondBuilder,
-    start_timestamp: Int64Builder,
+    start_timestamp: TimestampMicrosecondBuilder,
     metric_name: StringBuilder,
     metric_description: StringBuilder,
     metric_unit: StringBuilder,
@@ -1265,7 +1289,7 @@ impl SumBuilders {
     fn new() -> Self {
         Self {
             timestamp: TimestampMicrosecondBuilder::new(),
-            start_timestamp: Int64Builder::new(),
+            start_timestamp: TimestampMicrosecondBuilder::new(),
             metric_name: StringBuilder::new(),
             metric_description: StringBuilder::new(),
             metric_unit: StringBuilder::new(),
@@ -1385,7 +1409,7 @@ impl SumBuilders {
 
 struct HistogramBuilders {
     timestamp: TimestampMicrosecondBuilder,
-    start_timestamp: Int64Builder,
+    start_timestamp: TimestampMicrosecondBuilder,
     metric_name: StringBuilder,
     metric_description: StringBuilder,
     metric_unit: StringBuilder,
@@ -1412,7 +1436,7 @@ impl HistogramBuilders {
     fn new() -> Self {
         Self {
             timestamp: TimestampMicrosecondBuilder::new(),
-            start_timestamp: Int64Builder::new(),
+            start_timestamp: TimestampMicrosecondBuilder::new(),
             metric_name: StringBuilder::new(),
             metric_description: StringBuilder::new(),
             metric_unit: StringBuilder::new(),
@@ -1548,7 +1572,7 @@ impl HistogramBuilders {
 
 struct ExpHistogramBuilders {
     timestamp: TimestampMicrosecondBuilder,
-    start_timestamp: Int64Builder,
+    start_timestamp: TimestampMicrosecondBuilder,
     metric_name: StringBuilder,
     metric_description: StringBuilder,
     metric_unit: StringBuilder,
@@ -1580,7 +1604,7 @@ impl ExpHistogramBuilders {
     fn new() -> Self {
         Self {
             timestamp: TimestampMicrosecondBuilder::new(),
-            start_timestamp: Int64Builder::new(),
+            start_timestamp: TimestampMicrosecondBuilder::new(),
             metric_name: StringBuilder::new(),
             metric_description: StringBuilder::new(),
             metric_unit: StringBuilder::new(),
