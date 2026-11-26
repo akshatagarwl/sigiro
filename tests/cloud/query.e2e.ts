@@ -160,30 +160,40 @@ try {
   const body = JSON.parse(await expectStatus(services, 200)) as {
     services: {
       name: string;
-      totalCount: number;
+      total_count: number;
+      first_seen_ts: number;
+      first_seen_iso: string;
       signals: Record<string, number>;
     }[];
   };
+  for (const service of body.services) {
+    assert.equal(
+      service.first_seen_iso,
+      new Date(service.first_seen_ts / 1000).toISOString().replace("Z", "") +
+        String(service.first_seen_ts % 1000).padStart(3, "0") +
+        "Z"
+    );
+  }
   assert.deepEqual(
-    body.services.map(({ name, totalCount, signals }) => ({
+    body.services.map(({ name, total_count, signals }) => ({
       name,
-      totalCount,
+      total_count,
       signals,
     })),
     [
       {
         name: "checkout",
-        totalCount: 3,
+        total_count: 3,
         signals: { spans: 3, logs: 0, metrics: 0, profiles: 0 },
       },
       {
         name: "profiler",
-        totalCount: 2,
+        total_count: 2,
         signals: { spans: 0, logs: 0, metrics: 0, profiles: 2 },
       },
       {
         name: "worker",
-        totalCount: 1,
+        total_count: 1,
         signals: { spans: 0, logs: 1, metrics: 0, profiles: 0 },
       },
     ]

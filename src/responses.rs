@@ -8,10 +8,29 @@ use sigiro_segments::{SpanId, TraceId};
 use std::collections::HashMap;
 use utoipa::ToSchema;
 
+/// Time in responses (#67): every point in time is a pair, `<name>_ts` in
+/// microseconds since the Unix epoch (the unit `/v1/query` returns and
+/// `TIMESTAMP` columns store) and `<name>_iso` in RFC 3339, UTC, with six
+/// fractional digits and `Z`.
+pub(crate) fn iso_from_micros(micros: i64) -> String {
+    let Ok(at) = time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(micros) * 1_000) else {
+        return String::new();
+    };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:06}Z",
+        at.year(),
+        u8::from(at.month()),
+        at.day(),
+        at.hour(),
+        at.minute(),
+        at.second(),
+        at.microsecond()
+    )
+}
+
 /// GET /v1/services — complete result only; exceeding SIGIRO_MAX_RESULT_ROWS
 /// returns an error rather than a partial list.
 #[derive(Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct ServicesResponse {
     pub services: Vec<ServiceEntry>,
 }
@@ -32,11 +51,16 @@ pub struct AlertsReplayResponse {
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct ServiceEntry {
     pub name: String,
-    pub first_seen: Option<String>,
-    pub last_seen: Option<String>,
+    /// Earliest telemetry timestamp, microseconds since the Unix epoch.
+    pub first_seen_ts: Option<i64>,
+    /// `first_seen_ts` in RFC 3339 (UTC).
+    pub first_seen_iso: Option<String>,
+    /// Latest telemetry timestamp, microseconds since the Unix epoch.
+    pub last_seen_ts: Option<i64>,
+    /// `last_seen_ts` in RFC 3339 (UTC).
+    pub last_seen_iso: Option<String>,
     pub signals: ServiceSignals,
     pub total_count: i64,
 }
@@ -122,12 +146,24 @@ pub struct SpanDetail {
     pub(crate) duration_us: i64,
     pub(crate) status_code: i32,
     pub(crate) service_name: String,
-    pub(crate) timestamp: String,
+    /// Span start, microseconds since the Unix epoch.
+    pub(crate) start_ts: i64,
+    /// `start_ts` in RFC 3339 (UTC).
+    pub(crate) start_iso: String,
+    /// Span end, microseconds since the Unix epoch.
+    pub(crate) end_ts: i64,
+    /// `end_ts` in RFC 3339 (UTC).
+    pub(crate) end_iso: String,
     pub(crate) span_kind: Option<i32>,
-    pub(crate) span_attributes: Option<String>,
-    pub(crate) resource_attributes: Option<String>,
-    pub(crate) events_json: Option<String>,
-    pub(crate) links_json: Option<String>,
+    /// The span's attributes as a JSON object, values of 1 KiB or more included.
+    #[schema(value_type = Option<Object>)]
+    pub(crate) span_attributes: Option<serde_json::Value>,
+    #[schema(value_type = Option<Object>)]
+    pub(crate) resource_attributes: Option<serde_json::Value>,
+    #[schema(value_type = Option<Vec<Object>>)]
+    pub(crate) events_json: Option<serde_json::Value>,
+    #[schema(value_type = Option<Vec<Object>>)]
+    pub(crate) links_json: Option<serde_json::Value>,
     pub(crate) scope_name: Option<String>,
     pub(crate) scope_version: Option<String>,
     pub(crate) trace_state: Option<String>,
@@ -166,7 +202,8 @@ mod health_response_tests {
             alert_webhooks: Some(crate::alerts::DeliverySummary {
                 queued: 0,
                 dead: 2,
-                oldest_queued_at: None,
+                oldest_queued_ts: None,
+                oldest_queued_iso: None,
                 last_dead_error: Some("http_401".into()),
             }),
             disk_gate: None,

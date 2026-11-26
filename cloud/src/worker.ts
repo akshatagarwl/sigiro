@@ -117,7 +117,7 @@ const views: Record<string, { table: Table; signal: Signal }> = {
   },
   sigiro_profiles: { table: "profiles", signal: "profiles" },
 };
-const servicesSql = `SELECT service_name, min(first_seen)::VARCHAR AS first_seen, max(last_seen)::VARCHAR AS last_seen,
+const servicesSql = `SELECT service_name, epoch_us(min(first_seen)) AS first_seen, epoch_us(max(last_seen)) AS last_seen,
   sum(span_count)::BIGINT AS span_count, sum(log_count)::BIGINT AS log_count, sum(metric_count)::BIGINT AS metric_count,
   sum(profile_count)::BIGINT AS profile_count, sum(span_count + log_count + metric_count + profile_count)::BIGINT AS total_count
 FROM (
@@ -129,6 +129,15 @@ FROM (
   UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, count(*), 0 FROM sigiro_metrics_exp_histogram GROUP BY service_name
   UNION ALL SELECT service_name, min(timestamp), max(timestamp), 0, 0, 0, count(*) FROM sigiro_profiles GROUP BY service_name
 ) GROUP BY service_name ORDER BY total_count DESC, service_name ASC`;
+function isoFromMicros(micros: unknown): string | null {
+  if (typeof micros !== "number") {
+    return null;
+  }
+  const fraction = String(((micros % 1_000_000) + 1_000_000) % 1_000_000);
+  const seconds = new Date(Math.floor(micros / 1_000_000) * 1000).toISOString();
+  return `${seconds.slice(0, 19)}.${fraction.padStart(6, "0")}Z`;
+}
+
 const defaultBodyLimit = 8_388_608;
 const defaultFlushSeconds = 60;
 const defaultFlushBytes = 4_194_304;
@@ -457,15 +466,17 @@ async function servicesRoute(request: Request, env: Env): Promise<Response> {
   }
   const services = outcome.rows.map((row) => ({
     name: row.service_name,
-    firstSeen: row.first_seen ?? null,
-    lastSeen: row.last_seen ?? null,
+    first_seen_ts: row.first_seen ?? null,
+    first_seen_iso: isoFromMicros(row.first_seen),
+    last_seen_ts: row.last_seen ?? null,
+    last_seen_iso: isoFromMicros(row.last_seen),
     signals: {
       spans: row.span_count,
       logs: row.log_count,
       metrics: row.metric_count,
       profiles: row.profile_count,
     },
-    totalCount: row.total_count,
+    total_count: row.total_count,
   }));
   return Response.json({ services });
 }

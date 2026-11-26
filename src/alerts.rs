@@ -1,5 +1,6 @@
 use crate::admin::AdminConnection;
 use crate::declared_schema::DeclaredTable;
+use crate::responses::iso_from_micros;
 use anyhow::{Context, Result};
 use arrow::array::{Array, StringArray, TimestampMicrosecondArray};
 use arrow::record_batch::RecordBatch;
@@ -48,8 +49,14 @@ pub struct AlertInstance {
     pub(crate) status: String,
     pub(crate) service_name: String,
     pub(crate) container_name: String,
-    pub(crate) starts_at: String,
-    pub(crate) ends_at: Option<String>,
+    /// When the alert started firing, microseconds since the Unix epoch.
+    pub(crate) starts_ts: i64,
+    /// `starts_ts` in RFC 3339 (UTC).
+    pub(crate) starts_iso: String,
+    /// When it recovered; absent while firing.
+    pub(crate) ends_ts: Option<i64>,
+    /// `ends_ts` in RFC 3339 (UTC).
+    pub(crate) ends_iso: Option<String>,
     pub(crate) occurrence_count: u64,
 }
 
@@ -684,7 +691,8 @@ impl AlertStore {
         Ok(DeliverySummary {
             queued: u64::try_from(queued).unwrap_or(0),
             dead: u64::try_from(dead).unwrap_or(0),
-            oldest_queued_at: oldest.map(format_timestamp).transpose()?,
+            oldest_queued_ts: oldest,
+            oldest_queued_iso: oldest.map(iso_from_micros),
             last_dead_error: last_error,
         })
     }
@@ -776,9 +784,13 @@ pub struct DeliverySummary {
     pub queued: u64,
     /// Notifications that failed permanently; replay with `POST /v1/alerts/replay`.
     pub dead: u64,
-    /// When the oldest queued notification was enqueued (RFC 3339).
+    /// When the oldest queued notification was enqueued, microseconds since
+    /// the Unix epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub oldest_queued_at: Option<String>,
+    pub oldest_queued_ts: Option<i64>,
+    /// `oldest_queued_ts` in RFC 3339 (UTC).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_queued_iso: Option<String>,
     /// Error class of the most recent dead notification, e.g. `http_401`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_dead_error: Option<String>,
@@ -845,8 +857,10 @@ fn alert_instance(row: AlertRow) -> Result<AlertInstance> {
         status: row.status,
         service_name: row.service_name,
         container_name: row.container_name,
-        starts_at: format_timestamp(row.starts_at_us)?,
-        ends_at: row.ends_at_us.map(format_timestamp).transpose()?,
+        starts_ts: row.starts_at_us,
+        starts_iso: iso_from_micros(row.starts_at_us),
+        ends_ts: row.ends_at_us,
+        ends_iso: row.ends_at_us.map(iso_from_micros),
         occurrence_count: row
             .occurrence_count
             .try_into()
@@ -1689,7 +1703,7 @@ mod tests {
             .unwrap();
         let summary = store.delivery_summary(Some(project)).unwrap();
         assert_eq!((summary.queued, summary.dead), (1, 0));
-        assert!(summary.oldest_queued_at.is_some());
+        assert!(summary.oldest_queued_ts.is_some() && summary.oldest_queued_iso.is_some());
 
         // Queued -> Dead at once on a permanent rejection.
         let due = store.next_due(i64::MAX).unwrap().unwrap();
