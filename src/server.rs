@@ -24,7 +24,7 @@ use crate::pool::ProjectPool;
 use crate::responses::*;
 use crate::types::*;
 use sigiro_core::sql::escape_sql_string;
-use sigiro_segments::{ALLOWED_TABLES, validate_read_only_with};
+use sigiro_segments::ALLOWED_TABLES;
 use tracing_attributes::instrument;
 
 #[derive(OpenApi)]
@@ -250,10 +250,11 @@ impl AppState {
 // - `SET access_mode = 'read_only'` fails with "Cannot change access_mode setting while database is running"
 // - `Connection::open_with_flags(path, ReadOnly)` creates a separate database instance that
 //   doesn't share in-memory state with the write connection (ingested data invisible)
-//   Therefore we use AST-based SQL validation (sqlparser) + `prepare()` single-statement guarantee.
-//   `conn.prepare()` only handles one statement — multi-statement injection via semicolons
-//   is already prevented by DuckDB itself. The firewall itself lives in
-//   `sigiro_segments::read_only_sql` — see `sigiro_segments::validate_read_only`.
+//   Therefore `/v1/query` runs on reader connections that DuckDB's gatekeeper extension
+//   holds to a read-only policy, after the same policy has checked the text
+//   (see `crate::query_policy`). `conn.prepare()` only handles one statement.
+//   The quack edge, which gatekeeper cannot enforce, keeps the sqlparser firewall
+//   in `sigiro_segments::read_only_sql`.
 
 /// The public spec: everything `ApiDoc` describes, minus `/admin`.
 ///
@@ -1291,6 +1292,8 @@ pub(crate) async fn execute_sql(
         let readers = pool
             .create_project(&project_id)
             .with_context(|| format!("failed to initialize project {project_id}"))?;
+        // Checked before any reader parses it: see crate::query_policy.
+        readers.check(&sql_clone)?;
         let conn = readers.get();
         // Sent before `prepare`/`query` so the timeout branch below can
         // interrupt this exact connection even if it never gets a chance to
@@ -1387,19 +1390,20 @@ type QueryResponse = (
 /// rejection. Rejections that don't say what IS allowed force trial-and-error.
 fn query_sql_contract() -> String {
     format!(
-        "Accepts exactly one read-only SELECT statement (raw SQL as the request body). \
+        "Accepts exactly one read-only statement (raw SQL as the request body): \
+         SELECT, WITH (also WITH RECURSIVE), DESCRIBE, SUMMARIZE or PIVOT. \
          Allowed tables (optionally qualified as lake.* or main.*): {}. \
-         WITH/CTE clauses are not supported — rewrite as derived-table subqueries \
-         (SELECT ... FROM (SELECT ...) t). Scalar functions are allowlisted \
-         (aggregates, json_extract/json_extract_string, date/time, string, math, \
-         coalesce/nullif, and list/array helpers such as unnest, list_filter and \
-         list_extract for VARCHAR[] columns like sigiro_profiles.stack_trace); \
-         file/network readers and settings introspection are blocked.",
+         Functions are those on DuckDB gatekeeper {}'s reviewed default list \
+         (aggregates, list, JSON, string, date/time and math functions); \
+         file/network readers, settings, secrets, catalog metadata such as \
+         information_schema, and dynamic SQL are refused. Use DESCRIBE <table> \
+         to see a table's columns.",
         ALLOWED_TABLES
             .iter()
             .map(|t| t.to_lowercase())
             .collect::<Vec<_>>()
-            .join(", ")
+            .join(", "),
+        crate::storage::EXPECTED_GATEKEEPER_VERSION
     )
 }
 
@@ -1414,6 +1418,23 @@ fn query_sql_contract() -> String {
 /// - `sigiro_metrics_histogram`
 /// - `sigiro_metrics_exp_histogram`
 /// - `sigiro_profiles`
+///
+/// ## What a query may do
+///
+/// One read-only statement: `SELECT`, `WITH` (including `WITH RECURSIVE`),
+/// `DESCRIBE`, `SUMMARIZE` or `PIVOT`. It may read the tables above and call
+/// any function on the reviewed default list of the DuckDB
+/// [gatekeeper](https://github.com/nozzle/duckdb-gatekeeper/blob/v0.4.5/inventories/default_identities.json)
+/// extension (v0.4.5): aggregates such as `string_agg`, `list` and `arg_max`,
+/// list, JSON, string, date and math functions, and the `range` and `unnest`
+/// table functions. File and network readers, settings, secrets, catalog
+/// metadata (`information_schema`, `duckdb_*()`) and SQL that runs other SQL
+/// are refused. To see a table's columns, run `DESCRIBE sigiro_spans`. Lambdas
+/// use DuckDB's `lambda x: ...` syntax; the old `x -> ...` form is an error.
+///
+/// A refused query returns 400 with the rule it broke, for example
+/// `forbidden: function: function is not allowed: current_setting`. A
+/// recursive CTE runs until the query timeout stops it.
 ///
 /// ## Bound `timestamp` with a literal, not `now()`
 ///
@@ -1468,9 +1489,9 @@ fn query_sql_contract() -> String {
     request_body(
         content = String,
         content_type = "text/plain",
-        description = "One SELECT statement. No WITH/CTE clauses — rewrite them as \
-derived-table subqueries. Scalar functions are allowlisted; file and network \
-readers are blocked. Bound timestamp columns with a literal TIMESTAMP rather \
+        description = "One read-only statement (SELECT, WITH, DESCRIBE, SUMMARIZE or \
+PIVOT) over the sigiro_* tables. File and network readers, settings and catalog \
+metadata are refused. Bound timestamp columns with a literal TIMESTAMP rather \
 than an expression built from now(), or statistics pruning is lost and the \
 query reads every file.",
         example = json!(
@@ -1502,17 +1523,6 @@ async fn query_handler(
     // leaves a server-side trace — a silently-throttled or errored query used
     // to leave none, which is what let a false "data loss" RCA take hold.
     let sql_preview: String = body.chars().take(200).collect();
-    // In hosted mode (shared PostgreSQL catalog) block information_schema
-    // enumeration — it would expose the control plane + sibling tenant schema
-    // names. Local/self-host keeps it (single-catalog, safe).
-    let allow_information_schema = !state.pool.storage_mode().is_distributed();
-    if let Err(e) = validate_read_only_with(&body, allow_information_schema) {
-        tracing::warn!(sql = %sql_preview, "query rejected (validation): {e}");
-        return Err(bad_request(
-            "query rejected",
-            &format!("{e}. {}", query_sql_contract()),
-        ));
-    }
     match execute_sql(&state, &auth, &body).await {
         Ok((results, truncated)) => {
             tracing::info!(
@@ -1530,6 +1540,13 @@ async fn query_handler(
             Ok((truncated_header, Json(results)))
         }
         Err(e) => {
+            if let Some(rejected) = e.downcast_ref::<crate::query_policy::QueryRejected>() {
+                tracing::warn!(sql = %sql_preview, "query rejected (policy): {rejected}");
+                return Err(bad_request(
+                    "query rejected",
+                    &format!("{rejected}. {}", query_sql_contract()),
+                ));
+            }
             tracing::warn!(sql = %sql_preview, "query failed: {e:#}");
             Err(query_api_error("query rejected", &e))
         }
@@ -2241,6 +2258,24 @@ mod legacy_removal_tests {
         }
         assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/ingest-keys"));
         assert!(PUBLIC_SPEC.paths.paths.contains_key("/v1/ingest-keys/{id}"));
+    }
+}
+
+#[cfg(test)]
+mod query_contract_tests {
+    use super::*;
+
+    /// The published SQL contract names the gatekeeper build that enforces it.
+    #[test]
+    fn the_query_docs_name_the_enforced_gatekeeper_version() {
+        let version = crate::storage::EXPECTED_GATEKEEPER_VERSION;
+        let operation = PUBLIC_SPEC.paths.paths["/v1/query"].post.as_ref().unwrap();
+        let description = operation.description.clone().unwrap_or_default();
+        assert!(
+            description.contains(&format!("duckdb-gatekeeper/blob/{version}/")),
+            "{description}"
+        );
+        assert!(query_sql_contract().contains(version));
     }
 }
 

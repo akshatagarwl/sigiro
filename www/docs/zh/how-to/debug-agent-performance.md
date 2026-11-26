@@ -99,7 +99,7 @@ curl -sS -D /tmp/sigiro-headers -X POST http://127.0.0.1:9999/v1/query \
           ORDER BY total_seconds DESC"
 ```
 
-检查 `x-sigiro-truncated` 响应头。如果它是 `true`，在声称结果完整之前，请缩小查询范围或进一步聚合。查询端点只接受一条只读 `SELECT`，不接受 CTE。
+检查 `x-sigiro-truncated` 响应头。如果它是 `true`，在声称结果完整之前，请缩小查询范围或进一步聚合。查询端点只接受一条只读语句，可以使用 `WITH` CTE；用 `DESCRIBE sigiro_spans` 可列出表的字段。
 
 ## 5. 把证据变成改动
 

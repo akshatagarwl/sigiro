@@ -79,6 +79,9 @@ pub struct ReaderPool {
 struct ReaderPoolInner {
     available: Mutex<Vec<Connection>>,
     ready: Condvar,
+    /// Checks each query before a reader runs it; see
+    /// `crate::query_policy::check`. Never enforced, never handed out.
+    validator: Mutex<Connection>,
 }
 
 pub struct ReaderConnection {
@@ -87,6 +90,9 @@ pub struct ReaderConnection {
 }
 
 impl ReaderPool {
+    /// Readers for `base`'s instance, which `crate::query_policy::install`
+    /// has already configured: every reader is enforced, so DuckDB itself
+    /// refuses a statement the `/v1/query` policy denies.
     fn new(base: &Connection, size: NonZeroUsize) -> Result<Self> {
         let size = size.get();
         let mut available = Vec::with_capacity(size);
@@ -97,15 +103,28 @@ impl ReaderPool {
             reader
                 .execute_batch("USE lake;")
                 .context("failed to set reader default schema")?;
+            crate::query_policy::enforce(&reader)?;
             available.push(reader);
         }
+        let validator = base
+            .try_clone()
+            .context("failed to clone the DuckDB query validator connection")?;
+        validator
+            .execute_batch("USE lake;")
+            .context("failed to set the query validator's default schema")?;
 
         Ok(Self {
             inner: Arc::new(ReaderPoolInner {
                 available: Mutex::new(available),
                 ready: Condvar::new(),
+                validator: Mutex::new(validator),
             }),
         })
+    }
+
+    /// Check `sql` against the `/v1/query` policy without running it.
+    pub fn check(&self, sql: &str) -> Result<(), crate::query_policy::QueryRejected> {
+        crate::query_policy::check(&self.inner.validator.lock(), sql)
     }
 
     pub fn get(&self) -> ReaderConnection {
@@ -676,12 +695,12 @@ impl ProjectPool {
     /// skipped when data lives in S3 — DuckLake itself needs network access to
     /// reach it, which this lockdown would prevent entirely (not just for user
     /// queries). This is NOT a gap for untrusted queries in S3 mode: with
-    /// `enable_external_access` left on, the SQL-level firewall
-    /// (`crate::server::validate_read_only` — SELECT-only, `sigiro_*` table
-    /// allowlist, reader-function denylist, positive scalar-function allowlist,
-    /// WITH-ban) is what the quack query surface's authorization gate runs on
-    /// every query (see `crate::quack::install_authorization_gate`), and does so
-    /// identically regardless of whether this engine-level lockdown ran.
+    /// `enable_external_access` left on, `/v1/query` is still held to the
+    /// gatekeeper policy (`crate::query_policy`, which grants no file or network
+    /// reader), and the quack query surface's authorization gate still runs
+    /// `sigiro_segments::validate_read_only` on every query (see
+    /// `crate::quack::install_authorization_gate`), whether or not this
+    /// engine-level lockdown ran.
     ///
     /// `LOAD parquet; LOAD json; LOAD icu;` runs first, while access is still open:
     /// `parquet` (DuckLake's storage format), `json` (used by
@@ -728,6 +747,8 @@ impl ProjectPool {
         // Ensure DuckLake tables are discoverable without schema prefix.
         base.execute_batch("USE lake;")
             .context("failed to set DuckDB default schema")?;
+        // Last, because it locks the configuration.
+        crate::query_policy::install(&base)?;
         let writer = base
             .try_clone()
             .context("failed to clone DuckDB writer connection")?;

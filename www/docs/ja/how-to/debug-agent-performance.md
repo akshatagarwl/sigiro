@@ -99,7 +99,7 @@ curl -sS -D /tmp/sigiro-headers -X POST http://127.0.0.1:9999/v1/query \
           ORDER BY total_seconds DESC"
 ```
 
-レスポンスヘッダー `x-sigiro-truncated` を確認してください。`true` の場合は、完全性を主張する前に、クエリの範囲を狭めるか、さらに集計してください。クエリエンドポイントは読み取り専用の `SELECT` を 1 つだけ受け付け、CTE は受け付けません。
+レスポンスヘッダー `x-sigiro-truncated` を確認してください。`true` の場合は、完全性を主張する前に、クエリの範囲を狭めるか、さらに集計してください。クエリエンドポイントは読み取り専用の文を 1 つだけ受け付けます。`WITH` による CTE も使えます。テーブルの列は `DESCRIBE sigiro_spans` で一覧できます。
 
 ## 5. 根拠を変更に変える
 

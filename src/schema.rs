@@ -307,7 +307,12 @@ mod tests {
                    FROM sigiro_spans \
                    WHERE timestamp >= make_timestamp(1795604408000000) \
                    AND timestamp < make_timestamp(1795608008000000)";
-        sigiro_segments::validate_read_only(sql).unwrap();
+        conn.execute_batch(
+            "LOAD gatekeeper; \
+             CALL gatekeeper_configure(allowed_tables := [{schema_path: ['main'], 'table': 'sigiro_spans'}]);",
+        )
+        .unwrap();
+        crate::query_policy::check(&conn, sql).unwrap();
         let mut stmt = conn.prepare(sql).unwrap();
         let mut rows = stmt.query([]).unwrap();
         let row = rows.next().unwrap().unwrap();

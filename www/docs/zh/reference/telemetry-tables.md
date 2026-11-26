@@ -7,7 +7,7 @@ sidebar:
 
 以下是 `src/schema.rs` 创建的七个可查询的 `sigiro_*` 表。类型为 DuckDB SQL 类型，已声明的 `NOT NULL` 会明确标出。查询中可以使用 `lake.` 前缀或简短表名。这是**当前**结构的参考，不是运行时获取字段的 API。
 
-**1.0 前的兼容性：**字段名、类型及 JSON 结构在 1.0 前可能变化。本文不承诺 DuckLake/Parquet 磁盘格式稳定、自动原地升级或支持降级。存储格式校验和升级策略尚未确定，运行时字段发现也尚未提供。
+**1.0 前的兼容性：**字段名、类型及 JSON 结构在 1.0 前可能变化。本文不承诺 DuckLake/Parquet 磁盘格式稳定、自动原地升级或支持降级。存储格式校验和升级策略尚未确定。要列出某张表当前的字段，可通过 `/v1/query` 执行 `DESCRIBE sigiro_spans`（其他表同理）。
 
 表示时间点的列（`timestamp`、`end_timestamp`、`observed_timestamp` 以及指标的 `start_timestamp`）都是微秒精度、UTC 的 `TIMESTAMP`，因此任意两列都可以直接比较和相减，无需转换。请用 `TIMESTAMP '2026-01-01 00:00:00'` 或 `make_timestamp(<微秒>)` 限定范围，而不是裸整数。时间长度（跨度的 `duration`，以及 `end_timestamp - timestamp` 这样的间隔）使用由 OTLP 纳秒转换的**微秒**。`/v1/query` 将时间点返回为自 Unix 纪元起的微秒数，将间隔返回为微秒。但 `events_json` 和 `exemplars_json` 内部的 `time_unix_nano` 仍是**纳秒**。指标值与直方图边界的单位由发送方的 `metric_unit` 决定；剖析值使用 `unit`。
 

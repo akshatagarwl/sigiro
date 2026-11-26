@@ -21,6 +21,7 @@ pub mod otel;
 pub mod pool;
 #[cfg(not(target_os = "android"))]
 pub mod profiling;
+pub mod query_policy;
 #[cfg(target_os = "android")]
 pub mod profiling {
     /// Self-profiling is unavailable on Android (no jemalloc, no pprof-rs).
