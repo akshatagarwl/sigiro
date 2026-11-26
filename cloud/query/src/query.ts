@@ -180,7 +180,7 @@ function toJsonValue(value: unknown): unknown {
       : value.toString();
   }
   if (value instanceof Date) {
-    return value.toISOString();
+    return value.getTime() * 1000;
   }
   return value;
 }
