@@ -303,7 +303,8 @@ impl ProjectPool {
         let evicted = if self.connections.len() >= self.max_connections {
             Some(self.remove_oldest_idle().ok_or_else(|| {
                 anyhow::anyhow!(
-                    "project connection capacity {} exhausted by active projects",
+                    "project capacity {} (SIGIRO_DUCKDB_TOTAL_MEMORY_LIMIT / \
+                     SIGIRO_DUCKDB_MEMORY_LIMIT) is held by active projects",
                     self.max_connections
                 )
             })?)

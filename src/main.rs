@@ -534,7 +534,18 @@ async fn run_serve() -> Result<()> {
         Some(config) => sigiro::admin::open_hosted_admin_db(config.catalog_url()).await?,
         None => sigiro::admin::open_local_admin_db(&dir)?,
     };
-    let pool = Arc::new(ProjectPool::new(dir.clone(), 100, storage_mode));
+    // Every open project is a DuckDB database with its own memory limit, so
+    // the pool keeps only as many open as fit the total budget (#189).
+    let max_open_projects = sigiro::config::max_open_projects(100)?;
+    tracing::info!(
+        max_open_projects,
+        "project pool sized to the DuckDB memory budget"
+    );
+    let pool = Arc::new(ProjectPool::new(
+        dir.clone(),
+        max_open_projects,
+        storage_mode,
+    ));
 
     let kernel = probe_kernel_release();
 

@@ -101,6 +101,89 @@ pub(crate) static DUCKDB_MEMORY_LIMIT: Envar<String> =
         EnvarDef::Default("400MB".to_string())
     });
 
+/// Memory all open project databases may use together. Default: half of the
+/// machine's memory, or of the cgroup's `memory.max` when that is lower.
+///
+/// Each open project is its own DuckDB database capped at
+/// `SIGIRO_DUCKDB_MEMORY_LIMIT`, so the per-database cap alone does not bound
+/// the process (#189). The pool therefore keeps at most
+/// `total / per-project` projects open, evicting the least recently used idle
+/// one to open another, and refuses to open a project when all are busy.
+/// Memory outside DuckDB (decoded ingest, bounded by
+/// `SIGIRO_INGEST_QUEUE_BYTES`, and query results, bounded by
+/// `SIGIRO_MAX_RESULT_ROWS`) is not counted here.
+static DUCKDB_TOTAL_MEMORY_LIMIT: Envar<String> =
+    Envar::on_startup("SIGIRO_DUCKDB_TOTAL_MEMORY_LIMIT", || {
+        EnvarDef::Default(String::new())
+    });
+
+/// Projects whose DuckDB memory limits fit inside the total budget, at least
+/// one and at most `ceiling`.
+pub fn max_open_projects(ceiling: usize) -> Result<usize> {
+    let per_project = parse_memory_bytes(&duckdb_memory_limit()?)
+        .context("invalid SIGIRO_DUCKDB_MEMORY_LIMIT")?;
+    let configured = DUCKDB_TOTAL_MEMORY_LIMIT.value()?;
+    let total = if configured.trim().is_empty() {
+        default_total_memory().unwrap_or(per_project)
+    } else {
+        parse_memory_bytes(&configured).context("invalid SIGIRO_DUCKDB_TOTAL_MEMORY_LIMIT")?
+    };
+    Ok(open_projects_within(total, per_project, ceiling))
+}
+
+fn open_projects_within(total: u64, per_project: u64, ceiling: usize) -> usize {
+    usize::try_from(total / per_project.max(1))
+        .unwrap_or(usize::MAX)
+        .clamp(1, ceiling.max(1))
+}
+
+/// Half of physical memory, or of the cgroup v2 limit when one is set.
+fn default_total_memory() -> Option<u64> {
+    // SAFETY: sysconf only reads system configuration.
+    let (pages, page_size) = unsafe {
+        (
+            libc::sysconf(libc::_SC_PHYS_PAGES),
+            libc::sysconf(libc::_SC_PAGESIZE),
+        )
+    };
+    let physical = u64::try_from(pages)
+        .ok()?
+        .checked_mul(u64::try_from(page_size).ok()?)?;
+    let cgroup = std::fs::read_to_string("/sys/fs/cgroup/memory.max")
+        .ok()
+        .and_then(|max| max.trim().parse::<u64>().ok());
+    Some(cgroup.map_or(physical, |limit| limit.min(physical)) / 2)
+}
+
+/// Parse a DuckDB-style memory size: a number with an optional unit, where
+/// `KB`/`MB`/`GB`/`TB` are powers of 1000 and `KiB`/`MiB`/`GiB`/`TiB` powers of
+/// 1024, as DuckDB reads `memory_limit`.
+pub(crate) fn parse_memory_bytes(text: &str) -> Result<u64> {
+    let text = text.trim();
+    let split = text
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(text.len());
+    let (number, unit) = text.split_at(split);
+    let number: f64 = number
+        .parse()
+        .with_context(|| format!("{text:?} does not start with a number"))?;
+    let scale: f64 = match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "b" | "byte" | "bytes" => 1.0,
+        "kb" => 1e3,
+        "mb" => 1e6,
+        "gb" => 1e9,
+        "tb" => 1e12,
+        "kib" => 1024.0,
+        "mib" => 1024.0 * 1024.0,
+        "gib" => 1024.0 * 1024.0 * 1024.0,
+        "tib" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        other => anyhow::bail!("unknown memory unit {other:?} in {text:?}"),
+    };
+    anyhow::ensure!(number > 0.0, "{text:?} must be greater than zero");
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Ok((number * scale) as u64)
+}
+
 /// Per-query wall-clock timeout in seconds. DuckDB (pinned version) has no
 /// `statement_timeout` setting, so this is enforced by interrupting the
 /// reader connection from a watchdog once the deadline passes (see
@@ -479,3 +562,33 @@ pub(crate) fn query_row_cap() -> Result<usize> {
 /// Unset disables those mutation endpoints.
 pub(crate) static ADMIN_TOKEN: Envar<String> =
     Envar::on_startup("SIGIRO_ADMIN_TOKEN", || EnvarDef::Unset);
+
+#[cfg(test)]
+mod memory_budget_tests {
+    use super::*;
+
+    #[test]
+    fn memory_sizes_parse_like_duckdb() {
+        assert_eq!(parse_memory_bytes("400MB").unwrap(), 400_000_000);
+        assert_eq!(parse_memory_bytes("1GiB").unwrap(), 1 << 30);
+        assert_eq!(parse_memory_bytes(" 2 GB ").unwrap(), 2_000_000_000);
+        assert_eq!(parse_memory_bytes("1.5GB").unwrap(), 1_500_000_000);
+        assert_eq!(parse_memory_bytes("4096").unwrap(), 4096);
+        assert!(parse_memory_bytes("lots").is_err());
+        assert!(parse_memory_bytes("1PB").is_err());
+        assert!(parse_memory_bytes("0MB").is_err());
+    }
+
+    #[test]
+    fn open_projects_fit_the_total_budget() {
+        let mb = 1_000_000;
+        assert_eq!(open_projects_within(4_000 * mb, 400 * mb, 100), 10);
+        assert_eq!(
+            open_projects_within(100 * mb, 400 * mb, 100),
+            1,
+            "always one"
+        );
+        assert_eq!(open_projects_within(u64::MAX, 400 * mb, 100), 100, "capped");
+        assert!(default_total_memory().is_some_and(|bytes| bytes > 0));
+    }
+}
