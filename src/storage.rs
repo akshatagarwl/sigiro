@@ -8,13 +8,13 @@ use sigiro_core::sql::escape_sql_string;
 use tracing::instrument;
 use url::{Position, Url};
 
-const EXPECTED_DUCKDB_VERSION: &str = "v2.0.0";
+const EXPECTED_DUCKDB_VERSION: &str = "v2.0.1";
 
 /// Every DuckLake attach sets AUTOMATIC_MIGRATION, so bumping this pin migrates
 /// existing catalogs forward on first attach (v2.0.0 moved `1.1-dev1` to `1.1`)
 /// and the previous binary can no longer read them. Back up hosted catalogs
 /// before deploying a bump.
-const EXPECTED_DUCKLAKE_VERSION: &str = "417a9117f5";
+const EXPECTED_DUCKLAKE_VERSION: &str = "08089b16dc";
 
 /// Initialize DuckLake with a DuckDB-native file catalog + local Parquet (zero
 /// config). Tables accessible as `lake.sigiro_*`.

@@ -67,7 +67,7 @@ arrow = "60"
 # Linked against nix/duckdb.nix: DuckDB built from source with every extension
 # sigiro uses compiled in. Keep it feature-free beyond these two: `bundled`,
 # `parquet` and `json` would compile a second DuckDB locally.
-duckdb = { version = "=1.20000.1", default-features = false, features = ["appender-arrow", "vscalar"] }
+duckdb = { version = "=1.20001.0", default-features = false, features = ["appender-arrow", "vscalar"] }
 opentelemetry-proto = { version = "0.33", features = ["gen-tonic-messages", "logs", "trace", "metrics", "profiles", "with-serde"] }
 axum = "0.8"
 axum-server = { version = "0.9", features = ["tls-rustls"] }

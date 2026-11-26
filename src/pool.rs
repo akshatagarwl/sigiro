@@ -821,6 +821,11 @@ pub(crate) fn disable_ducklake_inlining(conn: &Connection) -> Result<()> {
 /// rows, clean unreferenced files, and delete storage orphans. The writer calls
 /// `CHECKPOINT lake` hourly, so these options are the scheduler and
 /// bounds. Do not duplicate that sequence in sigiro.
+///
+/// `parquet_row_group_size_bytes` caps the memory the Parquet writer holds for
+/// one row group. Without it a merge of large string values buffers the whole
+/// table (default 122,880 rows) and runs out of memory under the 400MB default
+/// (#223). DuckLake honours the cap during merges from DuckDB v2.0.1.
 pub(crate) fn set_ducklake_catalog_policy(conn: &Connection, retention_days: u32) -> Result<()> {
     let expiry = if retention_days == 0 {
         String::new()
@@ -832,6 +837,7 @@ pub(crate) fn set_ducklake_catalog_policy(conn: &Connection, retention_days: u32
          CALL lake.set_option('parquet_version', '2'); \
          CALL lake.set_option('auto_compact', true); \
          CALL lake.set_option('target_file_size', '32MB'); \
+         CALL lake.set_option('parquet_row_group_size_bytes', '16MB'); \
          CALL lake.set_option('rewrite_delete_threshold', 0.2); \
          CALL lake.set_option('expire_older_than', '{expiry}'); \
          CALL lake.set_option('delete_older_than', '2 days'); \

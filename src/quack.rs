@@ -24,10 +24,10 @@ use duckdb::vtab::arrow::WritableVector;
 /// authorization semantics underneath this gate without a deliberate,
 /// re-verified bump here.
 ///
-/// It is the commit DuckDB v2.0.0 pins for quack, compiled into the binary
+/// It is the commit DuckDB v2.0.1 pins for quack, compiled into the binary
 /// (duckdb-static fails its build if the two disagree). Bump it only together
 /// with DuckDB, after re-verifying the authorization gate against the new build.
-pub(crate) const EXPECTED_QUACK_VERSION: &str = "f96420ed46";
+pub(crate) const EXPECTED_QUACK_VERSION: &str = "3bc63c01f8";
 
 /// Scalar UDF name installed as the quack authorization gate. Re-registered
 /// from this Rust source on every server boot (see

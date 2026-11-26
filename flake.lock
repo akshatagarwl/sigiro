@@ -20,11 +20,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1795118163,
-        "narHash": "sha256-/cA+jzn3h4q5MZS7ZMH/pPfttr+BL2QPX6bJf8jpfLE=",
+        "lastModified": 1795183195,
+        "narHash": "sha256-wFKe8MGMCSUWzGhmOl5EKFJ/O7lBoSpVprqQlaZWmnk=",
         "owner": "akshatagarwl",
         "repo": "duckdb-static",
-        "rev": "3e038ad137f7df15a4f4667c2420a45d34c274d4",
+        "rev": "bbe2eada77b451aabeaf9524e2bd77e557ff2731",
         "type": "github"
       },
       "original": {
