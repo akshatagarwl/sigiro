@@ -295,7 +295,7 @@ fn bounded_maintenance_merges_a_lake_with_too_many_files_in_batches() {
         conn.execute_batch(&format!(
             "INSERT INTO lake.sigiro_logs (timestamp, observed_timestamp, service_name, \
              severity_number, severity_text, body) \
-             VALUES (TIMESTAMP '2026-11-26 00:00:00', {i}, 'many-files', 9, 'INFO', 'row {i}')"
+             VALUES (TIMESTAMP '2026-11-26 00:00:00', make_timestamp({i}), 'many-files', 9, 'INFO', 'row {i}')"
         ))
         .unwrap();
     }

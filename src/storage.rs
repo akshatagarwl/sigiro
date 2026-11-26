@@ -679,7 +679,7 @@ pub(crate) const TABLE_PREFIX: &str = "lake.";
 /// in a way an existing catalog cannot satisfy. A catalog with another
 /// version, or with telemetry but no version, is refused before sigiro
 /// accepts traffic.
-pub const STORAGE_FORMAT_VERSION: i32 = 1;
+pub const STORAGE_FORMAT_VERSION: i32 = 2;
 
 /// One-row table holding the catalog's storage-format version. Its name does
 /// not start with `sigiro_`, so the query surface cannot read it.
@@ -870,7 +870,7 @@ mod storage_format_tests {
             &dir,
             "DROP TABLE lake.storage_format; \
              INSERT INTO lake.sigiro_logs (timestamp, observed_timestamp, service_name, severity_number, severity_text, body) \
-             VALUES (TIMESTAMP '2026-11-26 00:00:00', 0, 'legacy', 9, 'INFO', 'old row')",
+             VALUES (TIMESTAMP '2026-11-26 00:00:00', TIMESTAMP '2026-11-26 00:00:00', 'legacy', 9, 'INFO', 'old row')",
         );
         let error = open_error(&dir).expect("legacy telemetry is refused");
         assert!(error.contains("unversioned"), "{error}");
