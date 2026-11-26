@@ -10,7 +10,8 @@ import { authHeaders } from "@/lib/sigiro/query";
 export type DeliverySummary = {
   queued: number;
   dead: number;
-  oldest_queued_at?: string;
+  oldest_queued_ts?: number;
+  oldest_queued_iso?: string;
   last_dead_error?: string;
 };
 

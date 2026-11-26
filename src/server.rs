@@ -1541,8 +1541,8 @@ async fn query_handler(
 #[derive(serde::Deserialize)]
 struct ServiceQueryRow {
     service_name: String,
-    first_seen: Option<String>,
-    last_seen: Option<String>,
+    first_seen: Option<i64>,
+    last_seen: Option<i64>,
     span_count: i64,
     log_count: i64,
     metric_count: i64,
@@ -1557,8 +1557,8 @@ struct ServiceQueryRow {
     operation_id = "list-services",
     summary = "List services",
     description = "Every service that has reported telemetry, with the first and \
-last timestamp seen for each (UTC text such as `2026-01-01 12:00:00.123`). The entry point \
-of an agent loop: pick a service here, then query its telemetry. Returns an error, never \
+last timestamp seen for each, as microseconds since the Unix epoch (`*_ts`) and RFC 3339 \
+(`*_iso`). The entry point of an agent loop: pick a service here, then query its telemetry. Returns an error, never \
 a partial list, if the number of services exceeds SIGIRO_MAX_RESULT_ROWS.",
     responses(
         (status = 200, description = "Complete list of services", body = ServicesResponse),
@@ -1574,8 +1574,8 @@ async fn services_handler(
     let prefix = ProjectPool::prefix();
     let sql = format!(
         "SELECT service_name, \
-                min(first_seen)::VARCHAR AS first_seen, \
-                max(last_seen)::VARCHAR AS last_seen, \
+                min(first_seen) AS first_seen, \
+                max(last_seen) AS last_seen, \
                 sum(span_count)::BIGINT AS span_count, \
                 sum(log_count)::BIGINT AS log_count, \
                 sum(metric_count)::BIGINT AS metric_count, \
@@ -1623,8 +1623,10 @@ async fn services_handler(
             .map_err(|e| bad_request("services query failed", &e.to_string()))?;
         services.push(ServiceEntry {
             name: row.service_name,
-            first_seen: row.first_seen,
-            last_seen: row.last_seen,
+            first_seen_iso: row.first_seen.map(iso_from_micros),
+            first_seen_ts: row.first_seen,
+            last_seen_iso: row.last_seen.map(iso_from_micros),
+            last_seen_ts: row.last_seen,
             signals: ServiceSignals {
                 spans: row.span_count,
                 logs: row.log_count,
@@ -1751,6 +1753,13 @@ async fn alerts_replay_handler(
     Ok(Json(AlertsReplayResponse { replayed }))
 }
 
+/// A VARCHAR column that holds JSON (attributes, events, links), returned as
+/// that JSON rather than as a string containing it (#59). Text that does not
+/// parse stays a string.
+fn json_column(text: &str) -> serde_json::Value {
+    serde_json::from_str(text).unwrap_or_else(|_| text.into())
+}
+
 /// Put the attribute values stored in `sigiro_span_values` back into each
 /// row's `span_attributes`.
 async fn restore_span_values(
@@ -1843,9 +1852,8 @@ async fn trace_detail_handler(
             trace_id, span_id, parent_span_id, span_name, duration,
             status_code, service_name, span_kind,
             span_attributes, span_attribute_refs, resource_attributes,
-            timestamp::VARCHAR AS start_timestamp,
-            epoch_us(timestamp) AS start_us,
-            end_timestamp,
+            timestamp AS start_us,
+            end_timestamp AS end_us,
             events_json, links_json,
             scope_name, scope_version,
             trace_state
@@ -1927,7 +1935,7 @@ async fn trace_detail_handler(
                 )
             })?;
         let end_us = obj
-            .get("end_timestamp")
+            .get("end_us")
             .and_then(serde_json::Value::as_i64)
             .ok_or_else(|| {
                 bad_request(
@@ -1957,11 +1965,10 @@ async fn trace_detail_handler(
             duration_us,
             status_code,
             service_name: service_name.clone(),
-            timestamp: obj
-                .get("start_timestamp")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
+            start_ts: start_us,
+            start_iso: iso_from_micros(start_us),
+            end_ts: end_us,
+            end_iso: iso_from_micros(end_us),
             span_kind: obj
                 .get("span_kind")
                 .and_then(serde_json::Value::as_i64)
@@ -1969,19 +1976,19 @@ async fn trace_detail_handler(
             span_attributes: obj
                 .get("span_attributes")
                 .and_then(|v| v.as_str())
-                .map(std::string::ToString::to_string),
+                .map(json_column),
             resource_attributes: obj
                 .get("resource_attributes")
                 .and_then(|v| v.as_str())
-                .map(std::string::ToString::to_string),
+                .map(json_column),
             events_json: obj
                 .get("events_json")
                 .and_then(|v| v.as_str())
-                .map(std::string::ToString::to_string),
+                .map(json_column),
             links_json: obj
                 .get("links_json")
                 .and_then(|v| v.as_str())
-                .map(std::string::ToString::to_string),
+                .map(json_column),
             scope_name: obj
                 .get("scope_name")
                 .and_then(|v| v.as_str())
@@ -2303,7 +2310,10 @@ mod critical_path_tests {
                     duration_us,
                     status_code: 0,
                     service_name: String::new(),
-                    timestamp: String::new(),
+                    start_ts: 0,
+                    start_iso: String::new(),
+                    end_ts: 0,
+                    end_iso: String::new(),
                     span_kind: None,
                     span_attributes: None,
                     resource_attributes: None,

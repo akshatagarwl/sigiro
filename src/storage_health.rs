@@ -17,9 +17,13 @@ use utoipa::ToSchema;
 /// One project's maintenance state.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct ProjectStorage {
-    /// When the last `CHECKPOINT` attempt finished (RFC 3339, UTC).
+    /// When the last `CHECKPOINT` attempt finished, microseconds since the
+    /// Unix epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_checkpoint_at: Option<String>,
+    pub last_checkpoint_ts: Option<i64>,
+    /// `last_checkpoint_ts` in RFC 3339 (UTC).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checkpoint_iso: Option<String>,
     /// Whether that attempt succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_checkpoint_ok: Option<bool>,
@@ -99,9 +103,9 @@ impl StorageHealth {
         self.checkpoints
             .add(1, &[KeyValue::new("outcome", outcome)]);
         let mut entry = self.projects.entry(project_id.to_string()).or_default();
-        entry.last_checkpoint_at = time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .ok();
+        let now_us = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000) as i64;
+        entry.last_checkpoint_ts = Some(now_us);
+        entry.last_checkpoint_iso = Some(crate::responses::iso_from_micros(now_us));
         entry.last_checkpoint_ok = Some(error.is_none());
         match error {
             None => {

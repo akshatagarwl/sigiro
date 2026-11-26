@@ -21,6 +21,7 @@
 
 use crate::admin::AdminConnection;
 use crate::declared_schema::DeclaredTable;
+use crate::responses::iso_from_micros;
 use crate::types::TenantId;
 use anyhow::{Context, Result};
 use dashmap::DashMap;
@@ -30,7 +31,6 @@ use prefixed_api_key::{PrefixedApiKey, PrefixedApiKeyController, rand::rngs::OsR
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 /// The first part of every ingest key. Distinct from a JWT (`eyJ…`), so the
 /// two credentials never need to be told apart by trial verification.
@@ -48,14 +48,21 @@ pub struct IngestKeyInfo {
     /// Public key id: the middle part of `sigiro_<id>_<secret>`.
     pub id: String,
     pub name: String,
-    /// RFC 3339.
-    pub created_at: String,
+    /// When the key was created, microseconds since the Unix epoch.
+    pub created_ts: i64,
+    /// `created_ts` in RFC 3339 (UTC).
+    pub created_iso: String,
     /// Subject of the OAuth token that created the key.
     pub created_by: String,
-    /// RFC 3339; updated at most once a minute per key.
-    pub last_used_at: Option<String>,
-    /// RFC 3339; set once the key is revoked.
-    pub revoked_at: Option<String>,
+    /// Last use, microseconds since the Unix epoch; updated at most once a
+    /// minute per key.
+    pub last_used_ts: Option<i64>,
+    /// `last_used_ts` in RFC 3339 (UTC).
+    pub last_used_iso: Option<String>,
+    /// Set once the key is revoked, microseconds since the Unix epoch.
+    pub revoked_ts: Option<i64>,
+    /// `revoked_ts` in RFC 3339 (UTC).
+    pub revoked_iso: Option<String>,
 }
 
 /// The one response that carries a secret.
@@ -136,13 +143,6 @@ fn now_us() -> i64 {
     (OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000) as i64
 }
 
-fn rfc3339(us: i64) -> String {
-    OffsetDateTime::from_unix_timestamp_nanos(i128::from(us) * 1_000)
-        .ok()
-        .and_then(|time| time.format(&Rfc3339).ok())
-        .unwrap_or_default()
-}
-
 #[derive(Clone)]
 struct KeyRow {
     id: String,
@@ -158,10 +158,13 @@ impl KeyRow {
         IngestKeyInfo {
             id: self.id,
             name: self.name,
-            created_at: rfc3339(self.created_at_us),
+            created_ts: self.created_at_us,
+            created_iso: iso_from_micros(self.created_at_us),
             created_by: self.created_by,
-            last_used_at: self.last_used_at_us.map(rfc3339),
-            revoked_at: self.revoked_at_us.map(rfc3339),
+            last_used_ts: self.last_used_at_us,
+            last_used_iso: self.last_used_at_us.map(iso_from_micros),
+            revoked_ts: self.revoked_at_us,
+            revoked_iso: self.revoked_at_us.map(iso_from_micros),
         }
     }
 }
@@ -508,8 +511,8 @@ mod tests {
         assert_eq!(keys.verify(&created.key).await, Err(KeyRejection::Revoked));
         let listed = keys.list(&acme).await.unwrap();
         assert_eq!(listed.len(), 1);
-        assert!(listed[0].revoked_at.is_some());
-        assert!(listed[0].last_used_at.is_some());
+        assert!(listed[0].revoked_ts.is_some());
+        assert!(listed[0].last_used_ts.is_some());
     }
 
     #[tokio::test]

@@ -242,8 +242,8 @@ impl SigiroMcp {
 
     #[tool(
         description = "Every service that has reported telemetry, with the first and last \
-timestamp seen for each (UTC text such as `2026-01-01 12:00:00.123`). The entry point of an agent \
-loop: pick a service here, then query its telemetry. Fails rather than returning a partial list \
+timestamp seen for each, as microseconds since the Unix epoch (`*_ts`) and RFC 3339 (`*_iso`). \
+The entry point of an agent loop: pick a service here, then query its telemetry. Fails rather than returning a partial list \
 if service count exceeds SIGIRO_MAX_RESULT_ROWS."
     )]
     async fn list_services(&self) -> Result<CallToolResult, ErrorData> {
