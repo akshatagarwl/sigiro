@@ -591,6 +591,14 @@ async fn run_serve() -> Result<()> {
     } else {
         match pool.create_project("default") {
             Ok(_) => tracing::info!("default project initialized"),
+            // An incompatible on-disk format is fatal: serving would accept
+            // telemetry this build cannot store alongside the old (#100).
+            Err(e)
+                if e.downcast_ref::<sigiro::storage::StorageFormatError>()
+                    .is_some() =>
+            {
+                return Err(e);
+            }
             Err(e) => {
                 let mut chain = format!("{e}");
                 for cause in e.chain().skip(1) {

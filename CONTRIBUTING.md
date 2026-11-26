@@ -254,6 +254,13 @@ Keep the generated contributor/PR changelog below that summary. Do not imply tha
 unreleased `main` features are included in an existing version, and do not replace
 published archives or checksums just to improve the presentation.
 
+Every release must say whether stored telemetry stays readable. If
+`schema::create_tables` changed in a way an existing catalog cannot satisfy,
+bump `STORAGE_FORMAT_VERSION` in `src/storage.rs` and say in the release notes
+that older data directories must be moved aside. Before 1.0 there are no
+migrations: a build refuses a catalog with another format, or with telemetry
+and no format, before it accepts traffic.
+
 Every other push to `main` finds the tag already there and does nothing.
 The `release` job refuses a tag that does not match `Cargo.toml` and a version
 that already has a GitHub Release. If a release fails after the tag is pushed,

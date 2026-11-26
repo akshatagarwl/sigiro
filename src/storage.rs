@@ -671,6 +671,102 @@ pub(crate) fn postgres_uri_to_libpq(uri: &str) -> Result<String> {
 
 pub(crate) const TABLE_PREFIX: &str = "lake.";
 
+/// The on-disk format this build reads and writes (#100).
+///
+/// Before 1.0, stored telemetry is disposable across incompatible format
+/// changes: there are no migrations, compatibility columns or dual writes.
+/// Bump this in any release that changes what `schema::create_tables` creates
+/// in a way an existing catalog cannot satisfy. A catalog with another
+/// version, or with telemetry but no version, is refused before sigiro
+/// accepts traffic.
+pub const STORAGE_FORMAT_VERSION: i32 = 1;
+
+/// One-row table holding the catalog's storage-format version. Its name does
+/// not start with `sigiro_`, so the query surface cannot read it.
+const STORAGE_FORMAT_TABLE: &str = "lake.storage_format";
+
+/// A catalog this build must not open.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "{dir} holds telemetry in {found} storage format, but this sigiro reads and writes format \
+     {STORAGE_FORMAT_VERSION}. sigiro does not migrate stored telemetry before 1.0. Stop \
+     sigiro, move {dir} aside (keep it as the backup, or delete it), and start sigiro again: it \
+     creates a new, empty catalog there. To keep the old data readable, run the sigiro release \
+     that wrote it against the moved directory."
+)]
+pub struct StorageFormatError {
+    dir: String,
+    found: String,
+}
+
+/// Whether the attached catalog needs its format version written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StorageFormat {
+    /// New, or created by an older build but holding no rows: stamp it.
+    Fresh,
+    /// Already stamped with [`STORAGE_FORMAT_VERSION`].
+    Current,
+}
+
+/// Check the attached `lake` catalog's storage format before any table is
+/// created. A catalog with sigiro tables but no version is fresh only while
+/// every table is empty; that is how an empty legacy directory is told apart
+/// from one holding pre-versioned telemetry.
+pub(crate) fn check_storage_format(
+    conn: &Connection,
+    project_dir: &Utf8Path,
+) -> Result<StorageFormat> {
+    let tables: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT table_name FROM duckdb_tables() WHERE database_name = 'lake' \
+             AND schema_name = 'main'",
+        )?;
+        stmt.query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?
+    };
+    let refuse = |found: String| StorageFormatError {
+        dir: project_dir.to_string(),
+        found,
+    };
+    if tables.iter().any(|t| t == "storage_format") {
+        let version: Option<i32> = conn
+            .query_row(
+                &format!("SELECT max(version) FROM {STORAGE_FORMAT_TABLE}"),
+                [],
+                |row| row.get(0),
+            )
+            .context("failed to read the catalog's storage format")?;
+        return match version {
+            Some(STORAGE_FORMAT_VERSION) => Ok(StorageFormat::Current),
+            Some(other) => Err(refuse(format!("format {other}")).into()),
+            None => Err(refuse("an unreadable".to_string()).into()),
+        };
+    }
+    for table in tables.iter().filter(|t| t.starts_with("sigiro_")) {
+        let rows: i64 = conn
+            .query_row(
+                &format!("SELECT count(*) FROM lake.main.{table}"),
+                [],
+                |row| row.get(0),
+            )
+            .with_context(|| format!("failed to count rows in {table}"))?;
+        if rows > 0 {
+            return Err(refuse("an unversioned (pre-format-1)".to_string()).into());
+        }
+    }
+    Ok(StorageFormat::Fresh)
+}
+
+/// Record [`STORAGE_FORMAT_VERSION`] in a fresh catalog.
+pub(crate) fn stamp_storage_format(conn: &Connection) -> Result<()> {
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {STORAGE_FORMAT_TABLE} (version INTEGER NOT NULL); \
+         DELETE FROM {STORAGE_FORMAT_TABLE}; \
+         INSERT INTO {STORAGE_FORMAT_TABLE} VALUES ({STORAGE_FORMAT_VERSION});"
+    ))
+    .context("failed to record the catalog's storage format")
+}
+
 pub fn table_prefix() -> &'static str {
     TABLE_PREFIX
 }
@@ -715,3 +811,68 @@ fn verify_duckdb_stack(conn: &Connection) -> Result<()> {
 /// satisfiable at that moment fails the connection, and because the lockdown is
 /// irreversible and instance-global there is no recovery.
 pub(crate) const LOCKDOWN_PRELOADED_EXTENSIONS: &[&str] = &["parquet", "json", "icu"];
+
+#[cfg(test)]
+mod storage_format_tests {
+    use super::*;
+    use crate::pool::ProjectPool;
+
+    fn pool(dir: &tempfile::TempDir) -> ProjectPool {
+        let data = camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        ProjectPool::new(data, 4, StorageMode::LocalFile)
+    }
+
+    /// Run `sql` on project `p` with its writer, in a pool that is then closed.
+    fn with_writer(dir: &tempfile::TempDir, sql: &str) {
+        let pool = pool(dir);
+        let writer = pool.create_project_writer("p").unwrap();
+        writer.execute_batch(sql).unwrap();
+    }
+
+    fn open_error(dir: &tempfile::TempDir) -> Option<String> {
+        let error = pool(dir).create_project("p").err()?;
+        assert!(
+            error.downcast_ref::<StorageFormatError>().is_some(),
+            "not a format error: {error:#}"
+        );
+        Some(format!("{error:#}"))
+    }
+
+    #[test]
+    fn a_new_catalog_is_stamped_and_reopens() {
+        let dir = tempfile::tempdir().unwrap();
+        with_writer(&dir, "SELECT 1");
+        let pool = pool(&dir);
+        let writer = pool.create_project_writer("p").unwrap();
+        let version: i32 = writer
+            .query_row("SELECT version FROM lake.storage_format", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, STORAGE_FORMAT_VERSION);
+    }
+
+    #[test]
+    fn another_format_is_refused_with_reset_instructions() {
+        let dir = tempfile::tempdir().unwrap();
+        with_writer(&dir, "UPDATE lake.storage_format SET version = 99");
+        let error = open_error(&dir).expect("format 99 is refused");
+        assert!(error.contains("format 99"), "{error}");
+        assert!(error.contains("move"), "{error}");
+        assert!(error.contains(dir.path().to_str().unwrap()), "{error}");
+    }
+
+    #[test]
+    fn unversioned_telemetry_is_refused_but_an_unversioned_empty_catalog_is_adopted() {
+        let dir = tempfile::tempdir().unwrap();
+        with_writer(&dir, "DROP TABLE lake.storage_format");
+        assert_eq!(open_error(&dir), None, "empty legacy catalog is adopted");
+
+        with_writer(
+            &dir,
+            "DROP TABLE lake.storage_format; \
+             INSERT INTO lake.sigiro_logs (timestamp, observed_timestamp, service_name, severity_number, severity_text, body) \
+             VALUES (TIMESTAMP '2026-11-26 00:00:00', 0, 'legacy', 9, 'INFO', 'old row')",
+        );
+        let error = open_error(&dir).expect("legacy telemetry is refused");
+        assert!(error.contains("unversioned"), "{error}");
+    }
+}

@@ -104,11 +104,15 @@ async fn small_commits_are_inlined_and_a_checkpoint_writes_one_file_per_table() 
 
     let conn = pool.create_project_writer("p").unwrap();
     let (files, inlined) = crate::storage_health::catalog_counts(&conn).unwrap();
-    // 40 commits, all inlined: no Parquet yet.
-    assert_eq!((files, inlined), (0, 40));
+    // 40 log rows plus the storage-format row, all inlined: no Parquet yet.
+    assert_eq!((files, inlined), (0, 41));
     assert!(matches!(run_checkpoint(&conn, 64), CheckpointOutcome::Done));
     let (files, inlined) = crate::storage_health::catalog_counts(&conn).unwrap();
-    assert_eq!((files, inlined), (1, 0), "one file for sigiro_logs");
+    assert_eq!(
+        (files, inlined),
+        (2, 0),
+        "one file each for sigiro_logs and storage_format"
+    );
     pool.return_writer("p", conn);
     assert_eq!(stored_logs(&pool, "p"), 40);
 }

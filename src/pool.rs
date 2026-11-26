@@ -584,8 +584,14 @@ impl ProjectPool {
                     // The inlining limit is set BEFORE the first table is
                     // created; see `set_ducklake_inlining` for why it is on for
                     // local catalogs and off for PostgreSQL ones.
+                    // The storage format is checked before anything is created,
+                    // so an incompatible catalog is refused untouched (#100).
+                    let format = crate::storage::check_storage_format(conn, project_dir)?;
                     set_ducklake_inlining(conn, inlining_row_limit(&self.storage_mode))?;
                     crate::schema::create_tables(conn, Self::prefix())?;
+                    if format == crate::storage::StorageFormat::Fresh {
+                        crate::storage::stamp_storage_format(conn)?;
+                    }
                     set_ducklake_catalog_policy(conn, retention_days)?;
                     // Lock the local filesystem unless data lives in S3 (DuckLake
                     // itself needs network access to reach S3). Local-file mode
