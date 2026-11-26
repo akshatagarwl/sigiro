@@ -117,7 +117,8 @@ curl -sS -D /tmp/sigiro-headers -X POST http://127.0.0.1:9999/v1/query \
 
 Check the `x-sigiro-truncated` response header. If it is `true`, narrow the query
 or aggregate further before making a completeness claim. The query endpoint
-accepts one read-only `SELECT`; it does not accept CTEs.
+accepts one read-only statement, `WITH` CTEs included; `DESCRIBE sigiro_spans`
+lists a table's columns.
 
 ## 5. Turn evidence into changes
 

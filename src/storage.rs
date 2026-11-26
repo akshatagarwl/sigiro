@@ -16,6 +16,11 @@ const EXPECTED_DUCKDB_VERSION: &str = "v2.0.1";
 /// before deploying a bump.
 const EXPECTED_DUCKLAKE_VERSION: &str = "08089b16dc";
 
+/// The gatekeeper build `/v1/query` is held to (`crate::query_policy`), checked
+/// when a project opens. A bump can change which functions a query may call:
+/// review gatekeeper's default function list before bumping.
+pub(crate) const EXPECTED_GATEKEEPER_VERSION: &str = "v0.4.5";
+
 /// Initialize DuckLake with a DuckDB-native file catalog + local Parquet (zero
 /// config). Tables accessible as `lake.sigiro_*`.
 /// Catalog stored in `project_dir/catalog.ducklake` (a DuckDB file catalog, NOT
@@ -27,9 +32,10 @@ pub fn init_default(conn: &Connection, project_dir: &Utf8Path) -> Result<()> {
     std::fs::create_dir_all(project_dir)
         .with_context(|| format!("failed to create project directory: {project_dir}",))?;
 
-    // Local mode needs only ducklake. Every extension is statically linked,
+    // Local mode needs only ducklake, and gatekeeper for /v1/query
+    // (`crate::query_policy`). Every extension is statically linked,
     // so loading it reads nothing from disk or the network.
-    load_extensions(conn, &["ducklake"])?;
+    load_extensions(conn, &["ducklake", "gatekeeper"])?;
     verify_duckdb_stack(conn)?;
 
     // Attach DuckLake with DuckDB file catalog + local Parquet.
@@ -92,9 +98,9 @@ pub(crate) fn init_distributed(
     tenant_id: &str,
 ) -> Result<()> {
     if config.uses_s3() {
-        load_extensions(conn, &["ducklake", "postgres", "httpfs"])?;
+        load_extensions(conn, &["ducklake", "gatekeeper", "postgres", "httpfs"])?;
     } else {
-        load_extensions(conn, &["ducklake", "postgres"])?;
+        load_extensions(conn, &["ducklake", "gatekeeper", "postgres"])?;
     }
     verify_duckdb_stack(conn)?;
 
@@ -800,6 +806,22 @@ fn verify_duckdb_stack(conn: &Connection) -> Result<()> {
         ducklake_version == EXPECTED_DUCKLAKE_VERSION,
         "DuckLake version mismatch: loaded {ducklake_version:?}, expected \
          {EXPECTED_DUCKLAKE_VERSION:?}"
+    );
+
+    // Read here, before the filesystem lockdown: listing `duckdb_extensions()`
+    // afterwards fails, because it reads the extension directory.
+    let gatekeeper_version: String = conn
+        .query_row(
+            "SELECT extension_version FROM duckdb_extensions() \
+             WHERE extension_name = 'gatekeeper' AND loaded",
+            [],
+            |row| row.get(0),
+        )
+        .context("failed to read the gatekeeper version")?;
+    anyhow::ensure!(
+        gatekeeper_version == EXPECTED_GATEKEEPER_VERSION,
+        "gatekeeper version mismatch: loaded {gatekeeper_version:?}, expected \
+         {EXPECTED_GATEKEEPER_VERSION:?}"
     );
     Ok(())
 }

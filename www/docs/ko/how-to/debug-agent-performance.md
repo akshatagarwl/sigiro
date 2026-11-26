@@ -99,7 +99,7 @@ curl -sS -D /tmp/sigiro-headers -X POST http://127.0.0.1:9999/v1/query \
           ORDER BY total_seconds DESC"
 ```
 
-`x-sigiro-truncated` 응답 헤더를 확인하십시오. `true`이면 완전성을 주장하기 전에 쿼리 범위를 좁히거나 더 집계하십시오. 쿼리 엔드포인트는 읽기 전용 `SELECT` 하나만 받으며 CTE는 받지 않습니다.
+`x-sigiro-truncated` 응답 헤더를 확인하십시오. `true`이면 완전성을 주장하기 전에 쿼리 범위를 좁히거나 더 집계하십시오. 쿼리 엔드포인트는 읽기 전용 문 하나만 받으며 `WITH` CTE도 쓸 수 있습니다. 테이블의 열은 `DESCRIBE sigiro_spans`로 볼 수 있습니다.
 
 ## 5. 근거를 변경으로 바꾸기
 

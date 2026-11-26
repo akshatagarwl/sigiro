@@ -7,7 +7,7 @@ sidebar:
 
 다음은 `src/schema.rs`에서 생성하는 쿼리 가능한 7개 `sigiro_*` 테이블입니다. 유형은 DuckDB SQL 유형이며 선언된 `NOT NULL`을 표시합니다. 쿼리에서는 `lake.` 접두사와 짧은 테이블 이름을 모두 사용합니다. 이는 **현재** 스키마의 참고 자료이며 런타임 스키마 검색 API가 아닙니다.
 
-**1.0 이전 호환성:** 열 이름, 유형, JSON 형태는 1.0 이전에 바뀔 수 있습니다. 이 문서는 DuckLake/Parquet 디스크 형식의 안정성, 자동 인플레이스 업그레이드 또는 다운그레이드 지원을 보장하지 않습니다. 저장소 형식 검증과 업그레이드 정책은 아직 정해지지 않았고, 런타임 스키마 검색도 아직 제공하지 않습니다.
+**1.0 이전 호환성:** 열 이름, 유형, JSON 형태는 1.0 이전에 바뀔 수 있습니다. 이 문서는 DuckLake/Parquet 디스크 형식의 안정성, 자동 인플레이스 업그레이드 또는 다운그레이드 지원을 보장하지 않습니다. 저장소 형식 검증과 업그레이드 정책은 아직 정해지지 않았습니다. 테이블의 현재 열 목록은 `/v1/query`로 `DESCRIBE sigiro_spans`(다른 테이블도 마찬가지)를 실행하면 볼 수 있습니다.
 
 시각을 나타내는 열(`timestamp`, `end_timestamp`, `observed_timestamp`, 메트릭 `start_timestamp`)은 모두 마이크로초 정밀도의 UTC `TIMESTAMP`이므로 캐스트 없이 비교하고 뺄 수 있습니다. 범위는 정수가 아니라 `TIMESTAMP '2026-01-01 00:00:00'` 또는 `make_timestamp(<마이크로초>)`로 지정합니다. 시간의 길이(스팬 `duration`, 그리고 `end_timestamp - timestamp` 같은 간격)는 OTLP 나노초를 변환한 **마이크로초**입니다. `/v1/query`는 시각을 Unix 에폭 기준 마이크로초로, 간격을 마이크로초로 반환합니다. 반면 `events_json` 및 `exemplars_json` 내부의 `time_unix_nano`는 **나노초** 그대로입니다. 메트릭 값과 히스토그램 경계의 단위는 전송자의 `metric_unit`, 프로파일 값은 `unit`에 따릅니다.
 

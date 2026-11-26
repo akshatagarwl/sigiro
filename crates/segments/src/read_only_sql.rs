@@ -1,4 +1,7 @@
-//! The read-only SQL firewall shared by the native binary and the Workers.
+//! The read-only SQL firewall of the quack edge (`src/quack.rs`, whose
+//! sessions gatekeeper cannot enforce) and of the Workers' `/v1/query`. The
+//! native `/v1/query` is held to DuckDB's gatekeeper extension instead; see
+//! `src/query_policy.rs`.
 
 use sqlparser::ast::{
     Expr, ObjectName, ObjectNamePart, Query as SqlQuery, SetExpr, Statement, TableFactor, Visit,
@@ -451,7 +454,7 @@ pub fn validate_read_only(sql: &str) -> Result<(), String> {
 /// tenant connection, letting it read the names of sibling tenant schemas.
 /// Data reads are already blocked by the table allowlist; this closes the
 /// structure disclosure.
-/// The `/v1/query` handler passes `!hosted`; local/edge callers pass `true`.
+/// The Workers pass `false`; the quack edge passes `true`.
 pub fn validate_read_only_with(sql: &str, allow_information_schema: bool) -> Result<(), String> {
     // Validate the syntax users actually execute. GenericDialect rejects
     // DuckDB's standard aggregate `FILTER (WHERE ...)` clause before the

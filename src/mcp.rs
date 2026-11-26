@@ -256,8 +256,9 @@ if service count exceeds SIGIRO_MAX_RESULT_ROWS."
     }
 
     #[tool(
-        description = "Execute read-only SQL against allowlisted telemetry tables. \
-Every `*timestamp` column is a TIMESTAMP (UTC): bound it with `TIMESTAMP '2026-01-01 00:00:00'`, \
+        description = "Execute read-only SQL against allowlisted telemetry tables: one \
+SELECT, WITH, DESCRIBE or SUMMARIZE statement. On a self-hosted server, `DESCRIBE sigiro_spans` \
+lists a table's columns (information_schema is not readable). Every `*timestamp` column is a TIMESTAMP (UTC): bound it with `TIMESTAMP '2026-01-01 00:00:00'`, \
 `make_timestamp(<microseconds>)` or `now() - INTERVAL '1 hour'`, never a bare integer. Result \
 rows render timestamps as microseconds since the Unix epoch, and `duration` and intervals \
 (such as `end_timestamp - timestamp`) in microseconds."
