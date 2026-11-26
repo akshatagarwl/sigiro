@@ -71,15 +71,7 @@ impl OtlpGrpcService {
         let project_id = msg.project_id().to_string();
         if let Err(e) = self.router.send(msg).await {
             tracing::error!(project_id, "ingest router error: {e:?}");
-            return Err(match e {
-                RouterError::DiskCapacityExceeded => {
-                    Status::resource_exhausted("disk capacity exceeded")
-                }
-                RouterError::MaintenanceStalled { .. } | RouterError::Admission(_) => {
-                    Status::resource_exhausted(e.to_string())
-                }
-                _ => Status::internal("ingest failed"),
-            });
+            return Err(router_error_grpc_status(&e));
         }
         Ok(())
     }
@@ -406,6 +398,7 @@ pub fn otlp_http_router(
         .route("/v1/metrics", post(otlp_http_metrics))
         .route("/v1development/profiles", post(otlp_http_profiles))
         .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
+        .layer(axum::middleware::map_response(retry_after_on_unavailable))
         .with_state(state);
 
     if rate_limit {
@@ -509,19 +502,65 @@ impl From<crate::auth::AuthError> for IngestAuthFailure {
     }
 }
 
-/// Common helper: send ingest message.
-/// Returns 500 on failure, 200 on success.
+/// How long a sender should wait before retrying a 503 (stalled maintenance).
+/// Checkpoints are retried on the maintenance cycle, so retrying sooner is wasted.
+const STALLED_RETRY_AFTER_SECS: &str = "60";
+
+/// HTTP status for a router rejection. Only a full disk is 507: a stalled
+/// maintenance cycle is a temporary server-side outage (503, retryable per
+/// OTLP), and a full admission budget is backpressure (429).
+fn router_error_http_status(error: &RouterError) -> StatusCode {
+    match error {
+        RouterError::DiskCapacityExceeded => StatusCode::INSUFFICIENT_STORAGE,
+        RouterError::MaintenanceStalled { .. } => StatusCode::SERVICE_UNAVAILABLE,
+        RouterError::Admission(_) => StatusCode::TOO_MANY_REQUESTS,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// gRPC status for a router rejection; `UNAVAILABLE` is the retryable OTLP
+/// code for a temporary outage, `RESOURCE_EXHAUSTED` is for capacity.
+fn router_error_grpc_status(error: &RouterError) -> Status {
+    match error {
+        RouterError::DiskCapacityExceeded => Status::resource_exhausted("disk capacity exceeded"),
+        RouterError::MaintenanceStalled { .. } => Status::unavailable(error.to_string()),
+        RouterError::Admission(_) => Status::resource_exhausted(error.to_string()),
+        _ => Status::internal("ingest failed"),
+    }
+}
+
+/// gRPC code carried in an OTLP/HTTP error body for a given HTTP status.
+fn http_status_grpc_code(status: StatusCode) -> tonic::Code {
+    match status {
+        StatusCode::SERVICE_UNAVAILABLE => tonic::Code::Unavailable,
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::INSUFFICIENT_STORAGE => {
+            tonic::Code::ResourceExhausted
+        }
+        _ => tonic::Code::Internal,
+    }
+}
+
+/// OTLP/HTTP senders honour `Retry-After` on 429 and 503 (OTLP spec,
+/// "Retryable Response Codes").
+async fn retry_after_on_unavailable(mut response: AxumResponse) -> AxumResponse {
+    let retry_after = match response.status() {
+        StatusCode::SERVICE_UNAVAILABLE => STALLED_RETRY_AFTER_SECS,
+        StatusCode::TOO_MANY_REQUESTS => "1",
+        _ => return response,
+    };
+    response
+        .headers_mut()
+        .entry(axum::http::header::RETRY_AFTER)
+        .or_insert(axum::http::HeaderValue::from_static(retry_after));
+    response
+}
+
+/// Common helper: send ingest message; 200 on success, else the rejection's status.
 async fn route_ingest_msg(state: &OtlpHttpState, msg: IngestMsg) -> StatusCode {
     let project_id = msg.project_id().to_string();
     if let Err(e) = state.router.send(msg).await {
         tracing::error!(project_id, "ingest router error: {e:?}");
-        return match e {
-            RouterError::DiskCapacityExceeded | RouterError::MaintenanceStalled { .. } => {
-                StatusCode::INSUFFICIENT_STORAGE
-            }
-            RouterError::Admission(_) => StatusCode::TOO_MANY_REQUESTS,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
+        return router_error_http_status(&e);
     }
     StatusCode::OK
 }
@@ -747,13 +786,7 @@ async fn otlp_http_metrics(
     )
     .await;
     if status != StatusCode::OK {
-        let code = if status == StatusCode::TOO_MANY_REQUESTS
-            || status == StatusCode::INSUFFICIENT_STORAGE
-        {
-            tonic::Code::ResourceExhausted
-        } else {
-            tonic::Code::Internal
-        };
+        let code = http_status_grpc_code(status);
         return metrics_http_error_response(fmt, status, code, "failed to ingest metrics");
     }
     metrics_http_response(fmt, status, partial_success)
@@ -868,5 +901,71 @@ mod ingest_auth_reason_tests {
         let status = tonic_types::pb::Status::decode(bytes).unwrap();
         assert_eq!(status.code, tonic::Code::Unauthenticated as i32);
         assert!(status.message.contains("revoked"));
+    }
+}
+
+#[cfg(test)]
+mod router_error_status_tests {
+    use super::*;
+    use axum::http::header::RETRY_AFTER;
+
+    fn stalled() -> RouterError {
+        RouterError::MaintenanceStalled {
+            project_id: "default".to_owned(),
+            failures: 4,
+        }
+    }
+
+    fn admission() -> RouterError {
+        RouterError::Admission(crate::workload::AdmissionError {
+            workload: crate::workload::WorkloadClass::Query,
+            scope: crate::workload::AdmissionScope::Process,
+            capacity: 1,
+        })
+    }
+
+    #[test]
+    fn only_a_full_disk_is_insufficient_storage() {
+        let cases = [
+            (
+                RouterError::DiskCapacityExceeded,
+                StatusCode::INSUFFICIENT_STORAGE,
+                tonic::Code::ResourceExhausted,
+            ),
+            (
+                stalled(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                tonic::Code::Unavailable,
+            ),
+            (
+                admission(),
+                StatusCode::TOO_MANY_REQUESTS,
+                tonic::Code::ResourceExhausted,
+            ),
+        ];
+        for (error, http, grpc) in cases {
+            assert_eq!(router_error_http_status(&error), http, "{error}");
+            assert_eq!(router_error_grpc_status(&error).code(), grpc, "{error}");
+            assert_eq!(http_status_grpc_code(http), grpc, "{error}");
+        }
+    }
+
+    #[test]
+    fn stalled_grpc_status_says_why() {
+        let status = router_error_grpc_status(&stalled());
+        assert!(status.message().contains("maintenance stalled"));
+    }
+
+    #[tokio::test]
+    async fn retryable_rejections_tell_the_sender_when_to_retry() {
+        let unavailable =
+            retry_after_on_unavailable(StatusCode::SERVICE_UNAVAILABLE.into_response()).await;
+        assert_eq!(unavailable.headers().get(RETRY_AFTER).unwrap(), "60");
+        let busy = retry_after_on_unavailable(StatusCode::TOO_MANY_REQUESTS.into_response()).await;
+        assert_eq!(busy.headers().get(RETRY_AFTER).unwrap(), "1");
+        for status in [StatusCode::OK, StatusCode::INSUFFICIENT_STORAGE] {
+            let response = retry_after_on_unavailable(status.into_response()).await;
+            assert!(response.headers().get(RETRY_AFTER).is_none(), "{status}");
+        }
     }
 }

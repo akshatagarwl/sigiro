@@ -296,7 +296,7 @@ pub fn max_disk_bytes() -> Result<u64> {
 }
 
 /// Consecutive DuckLake `CHECKPOINT` failures on one project's writer before
-/// its ingest is shed with 507 / `resource_exhausted`.
+/// its ingest is shed with 503 / `unavailable`.
 ///
 /// A failed checkpoint materialises nothing: telemetry keeps accumulating in
 /// the catalog while no Parquet is written. In distributed mode that catalog is

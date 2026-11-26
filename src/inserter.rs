@@ -40,7 +40,8 @@ pub enum RouterError {
     /// queued telemetry can no longer be materialised into Parquet. Accepting
     /// more would grow the catalog without bound — in distributed mode that is
     /// the external Postgres, which `SIGIRO_MAX_DISK_BYTES` never measures.
-    /// Maps to HTTP 507 / gRPC `resource_exhausted`, like the disk cap.
+    /// Maps to HTTP 503 + `Retry-After` / gRPC `unavailable`: a temporary
+    /// outage, not a full disk.
     #[error(
         "storage maintenance stalled for project {project_id} — {failures} consecutive DuckLake CHECKPOINT failures; ingest rejected so the catalog cannot grow unbounded"
     )]
@@ -1344,7 +1345,7 @@ fn run_writer_thread(
                 // so an unwritable/unreachable storage backend could have the
                 // catalog absorbing telemetry forever while nothing was ever
                 // materialised into Parquet. Every outcome is now recorded, and
-                // sustained failure sheds ingest (507 / resource_exhausted) at
+                // sustained failure sheds ingest (503 / unavailable) at
                 // the top of `MsgRouter::send`.
                 match flusher.checkpoint(project_id) {
                     Ok(()) => {
