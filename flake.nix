@@ -117,10 +117,13 @@
             pkgs.git
             pkgs.gh
           ];
-          # `dev-services` and `test-postgres` (nix/dev-services.nix).
+          # `dev-services` and `test-postgres` (nix/dev-services.nix). Only
+          # `test-postgres` is on the shell's PATH: `dev-services` carries RustFS,
+          # which cache.nixos.org does not always have for aarch64-linux and which
+          # gets rustc killed when CI compiles it (#233). Start it with
+          # `nix run .#dev-services`.
           services = pkgs.callPackage ./nix/dev-services.nix { };
           devPackages = javascriptPackages ++ [
-            services.dev-services
             services.test-postgres
             devToolchain
             # Must equal the locked wasm-bindgen crate; build-segments-wasm.sh checks it.
