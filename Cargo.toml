@@ -119,17 +119,6 @@ keyring = "4.2.0"
 webbrowser = { version = "1.2.4", features = ["hardened"] }
 rpassword = "7.4.0"
 
-[dev-dependencies]
-criterion = { version = "0.8", features = ["html_reports"] }
-schemars = "1"
-tokio-util = "0.7"
-
-[lints]
-workspace = true
-
-# Android (bionic) can't build jemalloc and doesn't need self-profiling;
-# it uses the system allocator and reports self-profiling as disabled.
-[target.'cfg(not(target_os = "android"))'.dependencies]
 # framehop: unwinds from the interrupted registers through .eh_frame. The
 # default unwinder starts inside the SIGPROF handler and, on musl, stops at the
 # signal trampoline (it has no unwind info), so every sample came back empty.
@@ -138,6 +127,14 @@ jemalloc_pprof = "0.9"
 pprof_util = "0.8.2"
 backtrace = "0.3"
 tikv-jemallocator = { version = "0.7", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+schemars = "1"
+tokio-util = "0.7"
+
+[lints]
+workspace = true
 
 [profile.dev]
 split-debuginfo = "unpacked"

@@ -7,7 +7,6 @@ use sigiro::responses::HealthResponse;
 use sigiro::{data_dir, inserter::MsgRouter, pool::ProjectPool, profiling::start_profiling};
 use std::sync::atomic::AtomicBool;
 
-#[cfg(not(target_os = "android"))]
 #[global_allocator]
 static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
