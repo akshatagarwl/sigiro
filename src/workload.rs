@@ -240,6 +240,16 @@ impl WorkloadBudget {
         Ok(self.admit(workload, class_permit, None))
     }
 
+    /// Admits one operation, waiting as long as it takes for a slot. For work
+    /// that must happen and may only be delayed, never rejected.
+    pub async fn acquire(&self, workload: WorkloadClass) -> WorkloadPermit {
+        let class_permit = Arc::clone(&self.state.semaphores[workload.index()])
+            .acquire_owned()
+            .await
+            .expect("workload semaphores are never closed");
+        self.admit(workload, class_permit, None)
+    }
+
     /// Admits one query for `tenant`, waiting up to a few seconds for a slot.
     ///
     /// The tenant's own slot ([`QUERIES_PER_TENANT`]) is taken first, so a
@@ -437,6 +447,22 @@ mod tests {
             .acquire_query_within("b", SHORT)
             .await
             .expect("other tenant has its own slots");
+    }
+
+    #[tokio::test]
+    async fn acquire_waits_for_a_slot_instead_of_rejecting() {
+        let budget = budget(8);
+        let held = budget.try_acquire(WorkloadClass::Maintenance).unwrap();
+        let waiter = {
+            let budget = budget.clone();
+            tokio::spawn(async move { budget.acquire(WorkloadClass::Maintenance).await })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!waiter.is_finished(), "waits while the only slot is held");
+        drop(held);
+        let permit = waiter.await.expect("waiter task");
+        assert_eq!(permit.workload(), WorkloadClass::Maintenance);
+        assert_eq!(budget.rejected(WorkloadClass::Maintenance), 0);
     }
 
     #[tokio::test]
