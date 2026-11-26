@@ -581,16 +581,10 @@ impl ProjectPool {
                     let retention_days = crate::config::RETENTION_DAYS
                         .value()
                         .context("invalid SIGIRO_RETENTION_DAYS")?;
-                    // Inlining must be off BEFORE the first table is created.
-                    // DuckLake's inlining path flushes catalog changes as one
-                    // multi-statement string, and the postgres extension sends
-                    // that as a prepared statement, which PostgreSQL rejects
-                    // with "cannot insert multiple commands into a prepared
-                    // statement" — so creating a new tenant's very first table
-                    // against the PostgreSQL catalog failed outright and no new
-                    // tenant could ingest. Existing tenants were unaffected
-                    // because their tables predate the PostgreSQL catalog.
-                    disable_ducklake_inlining(conn)?;
+                    // The inlining limit is set BEFORE the first table is
+                    // created; see `set_ducklake_inlining` for why it is on for
+                    // local catalogs and off for PostgreSQL ones.
+                    set_ducklake_inlining(conn, inlining_row_limit(&self.storage_mode))?;
                     crate::schema::create_tables(conn, Self::prefix())?;
                     set_ducklake_catalog_policy(conn, retention_days)?;
                     // Lock the local filesystem unless data lives in S3 (DuckLake
@@ -797,21 +791,46 @@ impl ProjectPool {
     }
 }
 
-/// Turn off DuckLake data inlining for the whole catalog.
+/// Rows per table and commit that DuckLake stores in a local catalog instead
+/// of writing a Parquet file.
 ///
-/// Must run before any table is created. Inlining makes DuckLake flush its
-/// catalog changes as a single multi-statement string; the `postgres`
-/// extension issues that as a prepared statement, and PostgreSQL allows
-/// exactly one command per prepared statement. The result is
+/// Without inlining, every commit writes one small Parquet file per table:
+/// about 1,750 files of 9 KB an hour on a local install, which the hourly
+/// `CHECKPOINT` then had to open at once (#228). Inlined rows are stored in the
+/// catalog file and are queryable at once; `CHECKPOINT` writes them out as one
+/// file per table. Larger commits still go straight to Parquet, as files of a
+/// useful size.
+pub(crate) const LOCAL_INLINING_ROW_LIMIT: usize = 1_000;
+
+/// The catalog-wide inlining limit for a storage mode: on for a local DuckDB
+/// file catalog, off for a PostgreSQL one.
+pub(crate) fn inlining_row_limit(mode: &crate::storage::StorageMode) -> usize {
+    if mode.is_distributed() {
+        0
+    } else {
+        LOCAL_INLINING_ROW_LIMIT
+    }
+}
+
+/// Set DuckLake's data inlining limit for the whole catalog.
+///
+/// Must run before any table is created. With a PostgreSQL catalog, inlining
+/// makes DuckLake flush its catalog changes as a single multi-statement
+/// string; the `postgres` extension issues that as a prepared statement, and
+/// PostgreSQL allows exactly one command per prepared statement. The result is
 /// "cannot insert multiple commands into a prepared statement" on the first
-/// `CREATE TABLE`, which blocks every newly provisioned tenant from ingesting.
+/// `CREATE TABLE`, which blocks every newly provisioned tenant from ingesting
+/// (#122), so PostgreSQL catalogs keep it at 0. A local DuckDB file catalog
+/// has no such limit.
 ///
-/// Catalog-wide rather than per-table: `set_ducklake_catalog_policy` scopes the
-/// limit to `sigiro_profiles`, which leaves `sigiro_spans` — the first table
-/// created — inlining by default.
-pub(crate) fn disable_ducklake_inlining(conn: &Connection) -> Result<()> {
-    conn.execute_batch("CALL lake.set_option('data_inlining_row_limit', 0);")
-        .context("failed to disable DuckLake data inlining")
+/// Catalog-wide rather than per-table: `set_ducklake_catalog_policy` keeps
+/// `sigiro_profiles` at 0 in every catalog, because profile inlining has not
+/// been shown safe alongside concurrent retention deletes.
+pub(crate) fn set_ducklake_inlining(conn: &Connection, rows: usize) -> Result<()> {
+    conn.execute_batch(&format!(
+        "CALL lake.set_option('data_inlining_row_limit', {rows});"
+    ))
+    .context("failed to set the DuckLake data inlining limit")
 }
 
 /// Persist the policy consumed by DuckLake's native `CHECKPOINT` maintenance.
