@@ -72,6 +72,43 @@ web dashboard at `http://localhost:9999/dashboard/`. The dashboard is built into
 the binary. Set `SIGIRO_DASHBOARD_DIR` to the directory that holds a different
 static build (`dashboard/dist`) to serve that one instead.
 
+### Storage and ingest
+
+A `200` (OTLP/HTTP) or `OK` (OTLP/gRPC) means the request's rows are committed
+to the project's DuckLake catalog and survive a restart. A request that cannot
+be committed gets `503` with `Retry-After: 1` (gRPC `UNAVAILABLE`). Nothing from
+it was stored, so retrying it cannot store it twice. Only the disk cap answers
+`507`.
+
+Small commits are stored in the catalog file instead of as one Parquet file
+each. Each project's writer runs DuckLake's `CHECKPOINT` every hour while it is
+busy and once when it goes idle. The checkpoint writes the stored rows to
+Parquet and merges small files. A failed checkpoint is retried after 30
+seconds, then less often, and never stops ingest. `GET /health` lists, under
+`storage`, each project's last checkpoint, its failures since the last success,
+its data files and the rows still waiting for a checkpoint.
+
+These settings are environment variables only, read once at start:
+
+| Variable                            | Default                    | Meaning                                                                     |
+| ----------------------------------- | -------------------------- | --------------------------------------------------------------------------- |
+| `SIGIRO_RETENTION_DAYS`             | `7`                        | Days of telemetry kept. `0` keeps everything                                |
+| `SIGIRO_MAX_DISK_BYTES`             | `0` (off)                  | Bytes under the data directory above which ingest gets `507`                |
+| `SIGIRO_CHECKPOINT_INTERVAL_SECS`   | `3600`                     | Seconds between checkpoints of a busy project                               |
+| `SIGIRO_INGEST_QUEUE_BYTES`         | `134217728` (128 MiB)      | Decoded bytes waiting for a commit, all projects. Past it, requests get 503 |
+| `SIGIRO_INGEST_PROJECT_QUEUE_BYTES` | `33554432` (32 MiB)        | The share of that one project may hold                                      |
+| `SIGIRO_DUCKDB_MEMORY_LIMIT`        | `400MB`                    | DuckDB memory per open project                                              |
+| `SIGIRO_DUCKDB_TOTAL_MEMORY_LIMIT`  | half the machine's memory  | DuckDB memory for all open projects; sets how many stay open at once        |
+| `SIGIRO_DUCKDB_THREADS`             | number of CPUs             | DuckDB threads per project. A checkpoint uses at most 2                     |
+| `SIGIRO_MAX_INGEST_BODY_BYTES`      | `8388608` (8 MiB)          | Largest request body, after decompression                                   |
+| `SIGIRO_SHUTDOWN_TIMEOUT_SECS`      | `5`                        | One deadline for all writers to stop at shutdown                            |
+
+The data directory records a storage format version. Before 1.0, sigiro does
+not migrate stored telemetry: a release with a new format refuses to start on
+an older directory and says which one. To back up, copy the whole data
+directory while sigiro is stopped. To reset, stop sigiro, move the directory
+aside, and start sigiro again.
+
 ## query
 
 `sigiro query "<SQL>"` is a **federated coordinator**, not a local client. It
