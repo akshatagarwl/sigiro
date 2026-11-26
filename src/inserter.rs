@@ -1,3 +1,34 @@
+//! Per-project writers.
+//!
+//! **Contract (#186).** An ingest request is acknowledged only after its rows
+//! are committed to the project's DuckLake catalog. A local catalog is a DuckDB
+//! file with its own WAL, so a committed row survives a crash. Every request
+//! either commits or gets an error its sender can retry; nothing is buffered
+//! after a success response, and nothing acknowledged is dropped.
+//!
+//! **Group commit.** Each project has one writer thread that owns the
+//! project's single DuckDB writer connection. It takes every request that is
+//! queued when it wakes, up to [`GROUP_COMMIT_BYTES`], and commits them as one
+//! DuckLake snapshot. Under load the groups grow; when idle each request
+//! commits on its own. With DuckLake data inlining on (local catalogs, see
+//! `pool::LOCAL_INLINING_ROW_LIMIT`) a small commit is a catalog row insert, not
+//! a Parquet file, so there is no flush timer or row threshold to tune (#228).
+//!
+//! **Memory (#188).** Queued requests hold byte permits from a process-wide and
+//! a per-project budget until their commit finishes. A request that cannot get
+//! its permits within [`QUEUE_WAIT`] is rejected with a retryable 503, so the
+//! queued, decoded Arrow data is bounded in bytes, not in messages.
+//!
+//! **Maintenance (#228, #223).** The writer runs `CHECKPOINT lake` (DuckLake's
+//! compaction and cleanup) on its own schedule. A failed checkpoint never
+//! rejects ingest: it is retried with backoff, falls back to bounded steps, and
+//! is reported on `/health` and as metrics. Only the disk cap rejects ingest.
+//!
+//! **Lifecycle (#190, #192).** A writer with nothing to do exits, returns its
+//! connection to the pool and leaves the project evictable; the next request
+//! starts a new one. Shutdown has one deadline for every writer; a writer
+//! still running at the deadline is interrupted and reported.
+
 use anyhow::{Context, Result};
 use arrow::array::{Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
@@ -6,24 +37,26 @@ use duckdb::Connection;
 use sigiro_segments::MetricBatches;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle as TokioJoinHandle;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 use tracing_attributes::instrument;
 
-use crate::config::BackpressurePolicy;
 use crate::pool::ProjectPool;
 use crate::types::{IngestMsg, SignalTable};
 use sigiro_core::drain::DrainTree;
 
+pub use crate::disk_gate::DiskCapacityState;
+pub use crate::storage_health::StorageHealth;
+
 /// Errors from the ingest router.
 #[derive(Debug, thiserror::Error)]
 pub enum RouterError {
-    /// Channel closed — flusher task exited unexpectedly.
-    #[error("channel closed for project {project_id}")]
-    ChannelClosed { project_id: String },
-    /// Failed to get or create a DuckDB connection.
+    /// The project's writer stopped before it committed this request.
+    #[error("writer stopped for project {project_id}")]
+    WriterStopped { project_id: String },
+    /// Failed to open the project's DuckLake catalog.
     #[error("connection failed for project {project_id}: {source:#}")]
     ConnectionFailed {
         project_id: String,
@@ -35,278 +68,228 @@ pub enum RouterError {
     /// 507 / gRPC `resource_exhausted`, distinct from an internal 500.
     #[error("disk capacity exceeded — ingest rejected to protect the box")]
     DiskCapacityExceeded,
-    /// DuckLake `CHECKPOINT` has failed on every attempt for
-    /// `SIGIRO_MAX_CHECKPOINT_FAILURES` consecutive maintenance cycles, so
-    /// queued telemetry can no longer be materialised into Parquet. Accepting
-    /// more would grow the catalog without bound — in distributed mode that is
-    /// the external Postgres, which `SIGIRO_MAX_DISK_BYTES` never measures.
-    /// Maps to HTTP 503 + `Retry-After` / gRPC `unavailable`: a temporary
-    /// outage, not a full disk.
-    #[error(
-        "storage maintenance stalled for project {project_id} — {failures} consecutive DuckLake CHECKPOINT failures; ingest rejected so the catalog cannot grow unbounded"
-    )]
-    MaintenanceStalled { project_id: String, failures: u32 },
+    /// The queued-bytes budget stayed full for [`QUEUE_WAIT`]: the writer is
+    /// behind. Maps to HTTP 503 + `Retry-After` / gRPC `unavailable`.
+    #[error("ingest queue for project {project_id} is full — retry shortly")]
+    QueueFull { project_id: String },
+    /// The commit failed. Nothing from this request was stored, so the sender
+    /// may retry it. Maps to HTTP 503 / gRPC `unavailable`.
+    #[error("commit failed for project {project_id}: {message}")]
+    CommitFailed { project_id: String, message: String },
     /// Expensive work reached its process-wide concurrency budget.
     #[error(transparent)]
     Admission(#[from] crate::workload::AdmissionError),
 }
 
-/// Per-project DuckLake maintenance health: how many consecutive
-/// `CHECKPOINT lake` attempts have failed on each project's writer.
-///
-/// **Why this gates ingest.** A failed checkpoint means nothing materialises
-/// into Parquet, while ingest keeps appending to the catalog. In distributed
-/// mode the catalog is an external Postgres that `SIGIRO_MAX_DISK_BYTES` never
-/// samples, so the local disk gate cannot see the growth at all. Sustained
-/// failure is therefore its own back-pressure signal.
-///
-/// **Why per project, not per box.** Each project has its own writer thread and
-/// its own DuckLake. A corrupt or unwritable single tenant must not reject
-/// every other tenant's ingest; a genuine shared-storage outage trips every
-/// project independently and reaches the same place.
-///
-/// **Why consecutive, not cumulative.** A checkpoint that fails once and then
-/// succeeds has materialised the backlog — the condition is self-healing and
-/// must not be counted against a later, unrelated failure. Any success resets
-/// the project to healthy.
-#[derive(Debug)]
-pub struct MaintenanceHealth {
-    /// Consecutive checkpoint failures needed before ingest is shed. 0 disables
-    /// shedding entirely (failures are still counted and surfaced on /health).
-    threshold: u32,
-    /// project_id -> consecutive checkpoint failures. Absent means healthy;
-    /// entries are removed on success rather than zeroed, so the map stays the
-    /// size of the unhealthy set.
-    failures: DashMap<String, u32>,
-    /// Rows the writers gave up on after their append retry, all projects.
-    rows_dropped: AtomicU64,
-    rows_dropped_metric: opentelemetry::metrics::Counter<u64>,
+/// Largest group of queued requests committed as one transaction. Bounds the
+/// size of one DuckLake snapshot and of the writer's in-flight data.
+const GROUP_COMMIT_BYTES: usize = 8 * 1024 * 1024;
+
+/// How long a request waits for queued-bytes permits before it is rejected.
+const QUEUE_WAIT: Duration = Duration::from_secs(2);
+
+/// A writer with no requests and no maintenance due for this long exits and
+/// returns its connection, so the project can be evicted (#190).
+const WRITER_IDLE: Duration = Duration::from_secs(60);
+
+/// How often a busy writer re-reads its data-file and inlined-row counts for
+/// `/health` and metrics. Each read is a few catalog queries.
+const HEALTH_REFRESH: Duration = Duration::from_secs(10);
+
+/// Bytes per semaphore permit. Permits are counted in KiB so a budget of
+/// gigabytes fits the semaphore's `u32` request size.
+const PERMIT_BYTES: usize = 1024;
+
+/// The process-wide and per-project queued-bytes budgets (#188).
+#[derive(Clone)]
+struct QueueBudget {
+    global: Arc<Semaphore>,
+    global_permits: u32,
+    project_permits: u32,
 }
 
-impl MaintenanceHealth {
-    pub fn new(threshold: u32) -> Arc<Self> {
-        Arc::new(Self {
-            threshold,
-            failures: DashMap::new(),
-            rows_dropped: AtomicU64::new(0),
-            // Exported to Prometheus as `sigiro_rows_dropped_total`.
-            rows_dropped_metric: opentelemetry::global::meter("sigiro.ingest")
-                .u64_counter("sigiro.rows.dropped")
-                .with_unit("{row}")
-                .with_description("Buffered rows dropped after a failed append and its retry")
-                .build(),
-        })
-    }
-
-    /// Count rows a writer dropped, by table.
-    pub(crate) fn record_rows_dropped(&self, table: &str, rows: u64) {
-        self.rows_dropped.fetch_add(rows, Ordering::Relaxed);
-        self.rows_dropped_metric.add(
-            rows,
-            &[opentelemetry::KeyValue::new("table", table.to_string())],
-        );
-    }
-
-    /// Total rows dropped since start (`sigiro_rows_dropped_total`).
-    pub fn rows_dropped(&self) -> u64 {
-        self.rows_dropped.load(Ordering::Relaxed)
-    }
-
-    /// A gate that never sheds — the default for callers that have not opted
-    /// into shedding.
-    pub(crate) fn disabled() -> Arc<Self> {
-        Self::new(0)
-    }
-
-    /// Record one failed `CHECKPOINT`. Returns the new consecutive count and
-    /// whether that count just crossed the shed threshold (so the caller logs
-    /// the transition exactly once, not on every subsequent cycle).
-    pub fn record_checkpoint_failure(&self, project_id: &str) -> (u32, bool) {
-        let mut entry = self.failures.entry(project_id.to_string()).or_insert(0);
-        *entry += 1;
-        let failures = *entry;
-        let tripped = self.threshold > 0 && failures == self.threshold;
-        (failures, tripped)
-    }
-
-    /// Record a successful `CHECKPOINT`. Returns true when this cleared a
-    /// project that had been shedding, so the caller can log the recovery.
-    pub fn record_checkpoint_success(&self, project_id: &str) -> bool {
-        match self.failures.remove(project_id) {
-            Some((_, failures)) => self.threshold > 0 && failures >= self.threshold,
-            None => false,
-        }
-    }
-
-    /// True when this project's writer has failed `threshold` consecutive
-    /// checkpoints. Cheap enough for the ingest hot path: one `DashMap` lookup,
-    /// and only for projects that have actually failed.
-    pub fn is_stalled(&self, project_id: &str) -> bool {
-        self.threshold > 0
-            && self
-                .failures
-                .get(project_id)
-                .is_some_and(|f| *f >= self.threshold)
-    }
-
-    /// Consecutive failure count for a project (0 when healthy).
-    pub fn consecutive_failures(&self, project_id: &str) -> u32 {
-        self.failures.get(project_id).map_or(0, |f| *f)
-    }
-
-    /// Every project currently shedding ingest, for the health endpoint.
-    pub fn stalled_projects(&self) -> Vec<String> {
-        if self.threshold == 0 {
-            return Vec::new();
-        }
-        self.failures
-            .iter()
-            .filter(|e| *e.value() >= self.threshold)
-            .map(|e| e.key().clone())
-            .collect()
-    }
-}
-
-pub use crate::disk_gate::DiskCapacityState;
-
-/// Per-project channel capacity. When full, messages are dropped
-/// (the OTLP SDK retries). Better to drop one project's data than block all.
-const PROJECT_CHANNEL_CAPACITY: usize = 10_000;
-
-// CHECKPOINT runs DuckLake compaction and catalog cleanup on the sole writer.
-// Large remote catalogs take tens of seconds, so this is hourly maintenance,
-// not a flush mechanism.
-const DUCKLAKE_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60 * 60);
-
-/// Flusher configuration derived from env vars at startup.
-#[derive(Debug, Clone)]
-pub struct FlushConfig {
-    pub(crate) row_threshold: usize,
-    pub(crate) byte_threshold: usize,
-    pub(crate) interval: Duration,
-    pub(crate) backpressure: BackpressurePolicy,
-}
-
-impl FlushConfig {
-    pub(crate) fn from_env() -> Self {
-        let row_threshold = crate::config::FLUSH_ROW_THRESHOLD
-            .value()
-            .expect("FLUSH_ROW_THRESHOLD config must be valid");
-        let byte_threshold = crate::config::FLUSH_BYTE_THRESHOLD
-            .value()
-            .expect("FLUSH_BYTE_THRESHOLD config must be valid");
-        let interval_secs = crate::config::FLUSH_INTERVAL_SECS
-            .value()
-            .expect("FLUSH_INTERVAL_SECS config must be valid");
-        let backpressure =
-            crate::config::backpressure_policy().expect("BACKPRESSURE_POLICY config must be valid");
+impl QueueBudget {
+    fn new(global_bytes: usize, project_bytes: usize) -> Self {
+        let permits = |bytes: usize| -> u32 {
+            u32::try_from((bytes / PERMIT_BYTES).max(1)).unwrap_or(u32::MAX)
+        };
+        let global_permits = permits(global_bytes);
+        let project_permits = permits(project_bytes).min(global_permits);
         Self {
-            row_threshold,
-            byte_threshold,
-            interval: Duration::from_secs(interval_secs),
-            backpressure,
+            global: Arc::new(Semaphore::new(global_permits as usize)),
+            global_permits,
+            project_permits,
         }
+    }
+
+    /// Permits a request of `bytes` needs. Every request costs at least one,
+    /// so the message count is bounded too; a request larger than a project's
+    /// whole budget takes the whole budget and runs alone.
+    fn permits_for(&self, bytes: usize) -> u32 {
+        let permits = u32::try_from(bytes.div_ceil(PERMIT_BYTES)).unwrap_or(u32::MAX);
+        permits.clamp(1, self.project_permits)
+    }
+
+    /// Wait up to `wait` for both permits. The project's are taken first, so
+    /// one busy project waits on its own share before it can hold global ones.
+    async fn acquire(
+        &self,
+        project: &Arc<Semaphore>,
+        bytes: usize,
+        wait: Duration,
+    ) -> Option<QueuePermit> {
+        let permits = self.permits_for(bytes);
+        tokio::time::timeout(wait, async {
+            let project = Arc::clone(project).acquire_many_owned(permits).await.ok()?;
+            let global = Arc::clone(&self.global)
+                .acquire_many_owned(permits)
+                .await
+                .ok()?;
+            Some(QueuePermit {
+                _project: project,
+                _global: global,
+            })
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    fn queued_bytes(&self) -> usize {
+        (self.global_permits as usize - self.global.available_permits()) * PERMIT_BYTES
     }
 }
 
-/// Routes IngestMsg to per-project flusher tasks.
-/// Handlers call `router.send(msg)` directly. The router lazily creates
-/// per-project bounded channels and tokio tasks on first message per project.
-/// No dispatcher thread — handlers fan out directly.
-pub struct MsgRouter {
-    pool: Arc<ProjectPool>,
-    flush_config: FlushConfig,
-    project_senders: DashMap<String, (mpsc::Sender<FlusherCommand>, TokioJoinHandle<()>)>,
-    project_initializers: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
-    drop_count: AtomicUsize,
-    disk: Arc<DiskCapacityState>,
-    maintenance: Arc<MaintenanceHealth>,
-    workloads: crate::workload::WorkloadBudget,
-    alerts: Option<crate::alerts::AlertStore>,
+/// Byte permits held by one queued request until its commit finishes.
+struct QueuePermit {
+    _project: OwnedSemaphorePermit,
+    _global: OwnedSemaphorePermit,
 }
 
-enum FlusherCommand {
-    Ingest(Box<IngestMsg>),
-    RetentionCleanup {
-        days: u32,
-        ack: oneshot::Sender<Result<(), String>>,
-    },
+/// One queued ingest request.
+struct Job {
+    msg: IngestMsg,
+    bytes: usize,
+    ack: oneshot::Sender<Result<(), String>>,
+    _permit: QueuePermit,
 }
 
 enum WriterCommand {
-    Ingest(Box<IngestMsg>),
-    FlushIfNeeded,
-    Checkpoint,
+    Ingest(Box<Job>),
     RetentionCleanup {
         days: u32,
         ack: oneshot::Sender<Result<(), String>>,
     },
-    Shutdown,
+    Stop,
+}
+
+/// Why a writer thread stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriterExit {
+    Idle,
+    Stopped,
+}
+
+/// A running writer, shared between the router and its thread.
+struct WriterHandle {
+    id: u64,
+    tx: std_mpsc::Sender<WriterCommand>,
+    /// False once the thread has decided to exit. Senders check it and send
+    /// under the same lock, so every request sent while it is true is still
+    /// in the channel when the thread drains it on the way out.
+    open: parking_lot::Mutex<bool>,
+    project_budget: Arc<Semaphore>,
+    interrupt: Arc<duckdb::InterruptHandle>,
+    thread: parking_lot::Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl WriterHandle {
+    /// Queue a command unless the writer is exiting; returns it back if so.
+    fn send(&self, command: WriterCommand) -> std::result::Result<(), WriterCommand> {
+        let open = self.open.lock();
+        if !*open {
+            return Err(command);
+        }
+        self.tx.send(command).map_err(|error| error.0)
+    }
+
+    fn close(&self) {
+        *self.open.lock() = false;
+    }
+
+    fn is_open(&self) -> bool {
+        *self.open.lock()
+    }
+
+    /// Open and its thread still running: requests sent now get committed.
+    fn is_serving(&self) -> bool {
+        self.is_open() && !self.has_died()
+    }
+
+    fn take_thread(&self) -> Option<std::thread::JoinHandle<()>> {
+        self.thread.lock().take()
+    }
+
+    fn has_died(&self) -> bool {
+        self.is_open()
+            && self
+                .thread
+                .lock()
+                .as_ref()
+                .is_some_and(std::thread::JoinHandle::is_finished)
+    }
+}
+
+/// Routes ingest to per-project writers and waits for each commit.
+pub struct MsgRouter {
+    pool: Arc<ProjectPool>,
+    writers: Arc<DashMap<String, Arc<WriterHandle>>>,
+    initializers: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
+    next_writer_id: AtomicU64,
+    budget: QueueBudget,
+    maintenance: MaintenanceSchedule,
+    disk: Arc<DiskCapacityState>,
+    health: Arc<StorageHealth>,
+    workloads: crate::workload::WorkloadBudget,
+    alerts: Option<crate::alerts::AlertStore>,
+    stopping: std::sync::atomic::AtomicBool,
 }
 
 impl MsgRouter {
-    pub fn new(pool: Arc<ProjectPool>) -> Self {
-        Self::with_config(pool, FlushConfig::from_env())
-    }
-
-    pub(crate) fn with_config(pool: Arc<ProjectPool>, flush_config: FlushConfig) -> Self {
-        Self::with_config_and_disk(pool, flush_config, DiskCapacityState::disabled())
-    }
-
-    /// Build a router with the disk-capacity gate enabled from config. Used by
-    /// the production server (`main::run_serve`); other callers get a disabled
-    /// gate via `new`/`with_config`.
-    pub fn new_with_disk(pool: Arc<ProjectPool>, disk: Arc<DiskCapacityState>) -> Self {
-        Self::with_config_and_disk(pool, FlushConfig::from_env(), disk)
-    }
-
-    pub fn new_with_disk_and_alerts(
+    /// The production router: budgets and schedule from config, the given
+    /// disk gate, and alert evaluation on log ingest.
+    pub fn new(
         pool: Arc<ProjectPool>,
         disk: Arc<DiskCapacityState>,
-        alerts: crate::alerts::AlertStore,
-    ) -> Self {
-        let mut router = Self::with_config_disk_and_maintenance(
-            pool,
-            FlushConfig::from_env(),
-            disk,
-            MaintenanceHealth::new(
-                crate::config::max_checkpoint_failures()
-                    .expect("MAX_CHECKPOINT_FAILURES config must be valid"),
-            ),
+        alerts: Option<crate::alerts::AlertStore>,
+    ) -> Result<Self> {
+        let budget = QueueBudget::new(
+            crate::config::ingest_queue_bytes()?,
+            crate::config::ingest_project_queue_bytes()?,
         );
-        router.alerts = Some(alerts);
-        router
+        let maintenance = MaintenanceSchedule::from_config()?;
+        Ok(Self::with_parts(pool, disk, alerts, budget, maintenance))
     }
 
-    pub(crate) fn with_config_and_disk(
+    fn with_parts(
         pool: Arc<ProjectPool>,
-        flush_config: FlushConfig,
         disk: Arc<DiskCapacityState>,
-    ) -> Self {
-        Self::with_config_disk_and_maintenance(
-            pool,
-            flush_config,
-            disk,
-            MaintenanceHealth::disabled(),
-        )
-    }
-
-    pub(crate) fn with_config_disk_and_maintenance(
-        pool: Arc<ProjectPool>,
-        flush_config: FlushConfig,
-        disk: Arc<DiskCapacityState>,
-        maintenance: Arc<MaintenanceHealth>,
+        alerts: Option<crate::alerts::AlertStore>,
+        budget: QueueBudget,
+        maintenance: MaintenanceSchedule,
     ) -> Self {
         Self {
             pool,
-            flush_config,
-            project_senders: DashMap::new(),
-            project_initializers: DashMap::new(),
-            drop_count: AtomicUsize::new(0),
-            disk,
+            writers: Arc::new(DashMap::new()),
+            initializers: DashMap::new(),
+            next_writer_id: AtomicU64::new(0),
+            budget,
             maintenance,
+            disk,
+            health: StorageHealth::new(),
             workloads: crate::workload::WorkloadBudget::new(),
-            alerts: None,
+            alerts,
+            stopping: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -316,10 +299,14 @@ impl MsgRouter {
         Arc::clone(&self.disk)
     }
 
-    /// Shared handle to the per-project DuckLake maintenance health, so the
-    /// health endpoint reports the same state the ingest gate sheds on.
-    pub(crate) fn maintenance_health(&self) -> Arc<MaintenanceHealth> {
-        Arc::clone(&self.maintenance)
+    /// Per-project checkpoint and file state, for `/health` and metrics.
+    pub(crate) fn storage_health(&self) -> Arc<StorageHealth> {
+        Arc::clone(&self.health)
+    }
+
+    /// Decoded bytes waiting for a commit, all projects.
+    pub(crate) fn queued_bytes(&self) -> usize {
+        self.budget.queued_bytes()
     }
 
     /// Explicit lifecycle start. Logs activation and ensures the router is ready.
@@ -328,15 +315,10 @@ impl MsgRouter {
         tracing::info!("MsgRouter started — accepting ingest messages");
     }
 
-    /// Return true if any flusher task has panicked or exited unexpectedly.
-    pub(crate) fn has_dead_flushers(&self) -> bool {
-        self.project_senders
-            .iter()
-            .any(|entry| entry.value().1.is_finished())
-    }
-
-    pub(crate) fn dropped_messages(&self) -> usize {
-        self.drop_count.load(Ordering::Relaxed)
+    /// True if a writer thread died without exiting through its lifecycle
+    /// (a panic). Its project's requests fail until the next request replaces it.
+    pub(crate) fn has_dead_writers(&self) -> bool {
+        self.writers.iter().any(|entry| entry.value().has_died())
     }
 
     pub(crate) fn workloads(&self) -> crate::workload::WorkloadBudget {
@@ -348,22 +330,13 @@ impl MsgRouter {
         // connection map, and the idle evictor drops anything untouched for
         // 300s while this runs hourly, so a low-traffic tenant was almost never
         // pooled at the moment retention fired and was skipped indefinitely.
-        // `ensure_flusher` below opens a connection for any project that does
-        // not have one, so enumerating beyond the pool is safe.
+        // `writer` below opens a connection for any project that does not have
+        // one, so enumerating beyond the pool is safe.
         for project_id in self.pool.known_project_ids() {
-            self.ensure_flusher(&project_id)
-                .await
-                .map_err(|e| anyhow::anyhow!("failed to ensure retention flusher: {e}"))?;
-            let sender = self
-                .project_senders
-                .get(&project_id)
-                .map(|entry| entry.value().0.clone())
-                .ok_or_else(|| anyhow::anyhow!("flusher missing for project {project_id}"))?;
             let (ack, done) = oneshot::channel();
-            sender
-                .send(FlusherCommand::RetentionCleanup { days, ack })
+            self.submit(&project_id, WriterCommand::RetentionCleanup { days, ack })
                 .await
-                .with_context(|| format!("retention flusher channel closed for {project_id}"))?;
+                .map_err(|e| anyhow::anyhow!("failed to queue retention cleanup: {e}"))?;
             match done
                 .await
                 .with_context(|| format!("retention writer stopped for {project_id}"))?
@@ -377,197 +350,194 @@ impl MsgRouter {
         Ok(())
     }
 
-    /// Ensure a flusher exists for the project (lazy creation on first use).
-    /// DuckLake attachment runs once per project on Tokio's blocking pool.
-    async fn ensure_flusher(&self, project_id: &str) -> Result<(), RouterError> {
-        if self.project_senders.contains_key(project_id) {
-            return Ok(());
+    /// The project's running writer, starting one if there is none. A writer
+    /// that is exiting is joined first: it returns the project's connection to
+    /// the pool on its way out, and the new writer takes it from there.
+    async fn writer(&self, project_id: &str) -> Result<Arc<WriterHandle>, RouterError> {
+        if let Some(handle) = self.writers.get(project_id).map(|e| Arc::clone(e.value()))
+            && handle.is_serving()
+        {
+            return Ok(handle);
         }
 
         let initializer = self
-            .project_initializers
+            .initializers
             .entry(project_id.to_string())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone();
         let _initializing = initializer.lock().await;
-        if self.project_senders.contains_key(project_id) {
-            return Ok(());
+        if let Some(handle) = self.writers.get(project_id).map(|e| Arc::clone(e.value())) {
+            if handle.is_serving() {
+                return Ok(handle);
+            }
+            self.join_writer(project_id, &handle).await;
+        }
+        if self.stopping.load(Ordering::Acquire) {
+            return Err(RouterError::WriterStopped {
+                project_id: project_id.to_string(),
+            });
         }
 
         let pid = project_id.to_string();
         let permit = self
             .workloads
             .try_acquire(crate::workload::WorkloadClass::ProjectInit)?;
-        let pool_for_open = Arc::clone(&self.pool);
+        let pool = Arc::clone(&self.pool);
         let open_pid = pid.clone();
-        let writer_result = tokio::task::spawn_blocking(move || {
+        let conn = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            pool_for_open.create_project_writer(&open_pid)
+            pool.create_project_writer(&open_pid)
         })
         .await
         .map_err(|source| RouterError::ConnectionFailed {
             project_id: pid.clone(),
             source: anyhow::anyhow!("project initialization task failed: {source}"),
-        })
-        .and_then(|result| {
-            result.map_err(|source| RouterError::ConnectionFailed {
-                project_id: pid.clone(),
-                source,
-            })
-        });
-        let writer = match writer_result {
-            Ok(writer) => writer,
-            Err(error) => return Err(error),
-        };
+        })?
+        .map_err(|source| RouterError::ConnectionFailed {
+            project_id: pid.clone(),
+            source,
+        })?;
 
-        let pool = Arc::clone(&self.pool);
-        let cfg = self.flush_config.clone();
-        let maintenance = Arc::clone(&self.maintenance);
-        let (tx, rx) = mpsc::channel::<FlusherCommand>(PROJECT_CHANNEL_CAPACITY);
-        let pid_spawn = pid.clone();
-        tracing::info!(project_id = %pid, "ensure_flusher: spawning new flusher task");
-        let handle = tokio::spawn(async move {
-            run_flusher(pid_spawn, writer, rx, pool, cfg, maintenance).await;
-        });
-        self.project_senders.insert(pid.clone(), (tx, handle));
-        self.project_initializers.remove(&pid);
-        tracing::info!(project_id = %pid, "ensure_flusher: inserted new sender into project_senders");
-        Ok(())
+        let handle = self.spawn_writer(&pid, conn)?;
+        self.writers.insert(pid.clone(), Arc::clone(&handle));
+        self.initializers.remove(&pid);
+        Ok(handle)
     }
 
-    /// Route a message to the appropriate per-project flusher.
-    /// Creates the flusher task lazily on first message for a project.
+    fn spawn_writer(
+        &self,
+        project_id: &str,
+        conn: Connection,
+    ) -> Result<Arc<WriterHandle>, RouterError> {
+        let (tx, rx) = std_mpsc::channel();
+        let handle = Arc::new(WriterHandle {
+            id: self.next_writer_id.fetch_add(1, Ordering::Relaxed),
+            tx,
+            open: parking_lot::Mutex::new(true),
+            project_budget: Arc::new(Semaphore::new(self.budget.project_permits as usize)),
+            interrupt: conn.interrupt_handle(),
+            thread: parking_lot::Mutex::new(None),
+        });
+        let writer = Writer {
+            project_id: project_id.to_string(),
+            handle: Arc::clone(&handle),
+            writers: Arc::clone(&self.writers),
+            pool: Arc::clone(&self.pool),
+            health: Arc::clone(&self.health),
+            schedule: self.maintenance,
+        };
+        let conn_slot = Arc::new(parking_lot::Mutex::new(Some(conn)));
+        let thread_conn = Arc::clone(&conn_slot);
+        let thread = std::thread::Builder::new()
+            .name(format!("sigiro-writer-{project_id}"))
+            .spawn(move || {
+                let conn = thread_conn.lock().take().expect("connection moves once");
+                writer.run(conn, &rx);
+            })
+            .map_err(|error| {
+                if let Some(conn) = conn_slot.lock().take() {
+                    self.pool.return_writer(project_id, conn);
+                }
+                RouterError::ConnectionFailed {
+                    project_id: project_id.to_string(),
+                    source: anyhow::anyhow!("failed to spawn writer thread: {error}"),
+                }
+            })?;
+        *handle.thread.lock() = Some(thread);
+        tracing::info!(project_id, "writer started");
+        Ok(handle)
+    }
+
+    /// Wait for an exiting writer to finish and forget it.
+    async fn join_writer(&self, project_id: &str, handle: &Arc<WriterHandle>) {
+        if let Some(thread) = handle.take_thread() {
+            match tokio::task::spawn_blocking(move || thread.join()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => tracing::error!(project_id, "writer thread panicked"),
+                Err(error) => tracing::error!(project_id, "writer join task failed: {error}"),
+            }
+        }
+        self.writers
+            .remove_if(project_id, |_, current| current.id == handle.id);
+    }
+
+    /// Queue a command on the project's writer, replacing a writer that
+    /// exited between lookup and send.
+    async fn submit(
+        &self,
+        project_id: &str,
+        mut command: WriterCommand,
+    ) -> Result<(), RouterError> {
+        for _ in 0..3 {
+            let handle = self.writer(project_id).await?;
+            match handle.send(command) {
+                Ok(()) => return Ok(()),
+                Err(returned) => command = returned,
+            }
+        }
+        Err(RouterError::WriterStopped {
+            project_id: project_id.to_string(),
+        })
+    }
+
+    /// Commit one ingest request. Returns once its rows are committed, or with
+    /// the reason they were not.
     #[instrument(skip_all, fields(project_id = %msg.project_id()))]
     pub async fn send(&self, msg: IngestMsg) -> Result<(), RouterError> {
-        // Disk-capacity gate: reject at the very top (before any flusher/DuckDB
+        // Disk-capacity gate: reject at the very top (before any writer/DuckDB
         // work) when the box is over its byte cap. All ingest surfaces funnel
         // through here, so this one check protects every entry point.
         if self.disk.is_over_cap() {
             return Err(RouterError::DiskCapacityExceeded);
         }
-
         let project_id = msg.project_id().to_string();
-        // Maintenance gate: this project's writer has failed every checkpoint
-        // for `SIGIRO_MAX_CHECKPOINT_FAILURES` consecutive cycles, so nothing
-        // it accepts can be materialised. Checked per project (after the
-        // box-wide disk gate) so one wedged tenant cannot reject the others.
-        if self.maintenance.is_stalled(&project_id) {
-            return Err(RouterError::MaintenanceStalled {
-                failures: self.maintenance.consecutive_failures(&project_id),
-                project_id,
-            });
-        }
-
-        let project_id_for_err = project_id.clone();
         let alert_batch = match &msg {
             IngestMsg::Logs { batch, .. } if self.alerts.is_some() => Some(batch.clone()),
             _ => None,
         };
 
-        // Lazy creation: ensure flusher exists before sending.
-        self.ensure_flusher(&project_id).await?;
-
-        let sender = self
-            .project_senders
-            .get(&project_id)
-            .map(|entry| entry.value().0.clone())
-            .ok_or_else(|| RouterError::ConnectionFailed {
+        let bytes = msg_byte_size(&msg);
+        let handle = self.writer(&project_id).await?;
+        let permit = self
+            .budget
+            .acquire(&handle.project_budget, bytes, QUEUE_WAIT)
+            .await
+            .ok_or_else(|| RouterError::QueueFull {
                 project_id: project_id.clone(),
-                source: anyhow::anyhow!("project sender disappeared after flusher initialization"),
             })?;
-
-        let alert_permit = if alert_batch.is_some() {
-            Some(
-                self.workloads
-                    .try_acquire(crate::workload::WorkloadClass::Maintenance)?,
-            )
-        } else {
-            None
-        };
-
-        match self.flush_config.backpressure {
-            BackpressurePolicy::Block => {
-                match sender.send(FlusherCommand::Ingest(Box::new(msg))).await {
-                    Ok(()) => {
-                        self.process_alerts(&project_id, alert_batch, alert_permit)
-                            .await;
-                        Ok(())
-                    }
-                    Err(e) => {
-                        tracing::error!(project_id = %project_id_for_err, "send failed: channel error: {:?}", e);
-                        // Remove the entry and check if the flusher task panicked.
-                        if let Some((_, (_, handle))) = self.project_senders.remove(&project_id)
-                            && handle.is_finished()
-                        {
-                            match handle.await {
-                                Err(join_err) if join_err.is_panic() => {
-                                    tracing::error!(project_id = %project_id_for_err, "FLUSHER TASK PANICKED — data in buffer may be lost: {}", join_err);
-                                }
-                                Err(join_err) => {
-                                    tracing::error!(project_id = %project_id_for_err, "flusher task exited with error: {}", join_err);
-                                }
-                                Ok(()) => {
-                                    tracing::warn!(project_id = %project_id_for_err, "flusher task exited normally (unexpected — should only exit on shutdown)");
-                                }
-                            }
-                        }
-                        Err(RouterError::ChannelClosed {
-                            project_id: project_id_for_err,
-                        })
-                    }
-                }
+        let (ack, committed) = oneshot::channel();
+        let job = Box::new(Job {
+            msg,
+            bytes,
+            ack,
+            _permit: permit,
+        });
+        self.submit(&project_id, WriterCommand::Ingest(job)).await?;
+        match committed.await {
+            Ok(Ok(())) => {}
+            Ok(Err(message)) => {
+                return Err(RouterError::CommitFailed {
+                    project_id,
+                    message,
+                });
             }
-            BackpressurePolicy::DropNewest => {
-                match sender.try_send(FlusherCommand::Ingest(Box::new(msg))) {
-                    Ok(()) => {
-                        self.process_alerts(&project_id, alert_batch, alert_permit)
-                            .await;
-                        Ok(())
-                    }
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        let count = self.drop_count.fetch_add(1, Ordering::Relaxed) + 1;
-                        tracing::warn!(
-                            project_id = %project_id_for_err,
-                            total_dropped = count,
-                            "channel full — DATA LOSS: dropping incoming message (BackpressurePolicy::DropNewest)"
-                        );
-                        Ok(())
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        tracing::error!(project_id = %project_id_for_err, "send failed: channel closed");
-                        if let Some((_, (_, handle))) = self.project_senders.remove(&project_id)
-                            && handle.is_finished()
-                        {
-                            match handle.await {
-                                Err(join_err) if join_err.is_panic() => {
-                                    tracing::error!(project_id = %project_id_for_err, "FLUSHER TASK PANICKED — data in buffer may be lost: {}", join_err);
-                                }
-                                Err(join_err) => {
-                                    tracing::error!(project_id = %project_id_for_err, "flusher task exited with error: {}", join_err);
-                                }
-                                Ok(()) => {
-                                    tracing::warn!(project_id = %project_id_for_err, "flusher task exited normally (unexpected — should only exit on shutdown)");
-                                }
-                            }
-                        }
-                        Err(RouterError::ChannelClosed {
-                            project_id: project_id_for_err,
-                        })
-                    }
-                }
-            }
+            Err(_) => return Err(RouterError::WriterStopped { project_id }),
         }
+        self.process_alerts(&project_id, alert_batch).await;
+        Ok(())
     }
 
-    async fn process_alerts(
-        &self,
-        project_id: &str,
-        batch: Option<RecordBatch>,
-        permit: Option<crate::workload::WorkloadPermit>,
-    ) {
-        let (Some(alerts), Some(batch), Some(permit)) = (self.alerts.clone(), batch, permit) else {
+    /// Evaluate alert rules on committed logs. Waits for an alert slot rather
+    /// than failing the request: the logs are already stored, and a rejection
+    /// here would make the sender retry and store them twice.
+    async fn process_alerts(&self, project_id: &str, batch: Option<RecordBatch>) {
+        let (Some(alerts), Some(batch)) = (self.alerts.clone(), batch) else {
             return;
         };
+        let permit = self
+            .workloads
+            .acquire(crate::workload::WorkloadClass::Maintenance)
+            .await;
         let project_id = project_id.to_string();
         let alert_project_id = project_id.clone();
         let result = match tokio::task::spawn_blocking(move || {
@@ -603,211 +573,586 @@ impl MsgRouter {
         }
     }
 
-    /// Shut down and await all flusher tasks. Guarantees all buffered data
-    /// is flushed before returning.
+    /// Stop every writer within one deadline (`SIGIRO_SHUTDOWN_TIMEOUT_SECS`).
+    ///
+    /// Writers commit what is already queued, then return their connections.
+    /// A writer still running at the deadline has its DuckDB statement
+    /// interrupted; its uncommitted requests were never acknowledged, so their
+    /// senders retry them. Any writer that did not stop is reported.
     pub async fn shutdown_and_wait(&self) -> Result<()> {
-        let project_ids: Vec<String> = self
-            .project_senders
+        self.stopping.store(true, Ordering::Release);
+        let budget = Duration::from_secs(crate::config::shutdown_timeout_secs()?);
+        let writers: Vec<(String, Arc<WriterHandle>)> = self
+            .writers
             .iter()
-            .map(|entry| entry.key().clone())
+            .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
             .collect();
-        let mut flushers = Vec::with_capacity(project_ids.len());
-        for project_id in project_ids {
-            if let Some((project_id, (sender, handle))) = self.project_senders.remove(&project_id) {
-                drop(sender);
-                flushers.push((project_id, handle));
-            }
-        }
-
-        let budget_secs = crate::config::shutdown_timeout_secs()?;
-        let mut failures = Vec::new();
-        for (project_id, mut handle) in flushers {
-            match tokio::time::timeout(Duration::from_secs(budget_secs), &mut handle).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    failures.push(format!("{project_id}: flusher task failed: {error}"));
-                }
-                Err(_) => {
-                    handle.abort();
-                    if let Err(error) = handle.await
-                        && !error.is_cancelled()
-                    {
-                        failures.push(format!("{project_id}: flusher abort failed: {error}"));
-                    }
-                    failures.push(format!(
-                        "{project_id}: flusher did not stop within {budget_secs} seconds \
-                         (raise SIGIRO_SHUTDOWN_TIMEOUT_SECS if this is a loaded machine \
-                         rather than a stuck drain)"
-                    ));
-                }
-            }
-        }
-
+        let failures = stop_writers(writers, budget).await;
         anyhow::ensure!(
             failures.is_empty(),
-            "flusher shutdown failed: {}",
+            "writer shutdown failed: {}",
             failures.join("; ")
         );
         Ok(())
     }
 }
 
-/// Per-project flusher state. Each project gets its own flusher task
-/// so project A's load cannot block project B.
-/// Crash recovery: DuckDB has its own WAL — once `append_record_batch`
-/// returns, the data is durable. The only data-loss window is the buffer
-/// here (up to 1s / 10k rows between 200 OK and DuckDB append). This is
-/// acceptable for a debugging tool where the data source is still running
-/// and will re-emit.
-struct ProjectFlusher {
-    conn: Connection,
-    table_names: BTreeMap<SignalTable, String>,
-    buffers: BTreeMap<SignalTable, Vec<RecordBatch>>,
-    total_rows: usize,
-    total_bytes: usize,
-    last_flush: Instant,
-    row_threshold: usize,
-    byte_threshold: usize,
-    flush_interval: Duration,
-    drain: DrainTree,
-    stored_values: StoredValues,
-    phase: FlusherPhase,
-    /// Failed append attempts for the batches still buffered per table.
-    failed_appends: BTreeMap<SignalTable, u8>,
+/// Ask every writer to stop, wait until `budget` has passed in total, then
+/// interrupt the stragglers and give them one more second.
+async fn stop_writers(writers: Vec<(String, Arc<WriterHandle>)>, budget: Duration) -> Vec<String> {
+    let deadline = tokio::time::Instant::now() + budget;
+    let mut joins = Vec::new();
+    for (project_id, handle) in writers {
+        // A closed writer is already draining; only a running one needs Stop.
+        let _ignored = handle.send(WriterCommand::Stop).is_ok();
+        if let Some(thread) = handle.take_thread() {
+            joins.push((
+                project_id,
+                handle,
+                tokio::task::spawn_blocking(move || thread.join()),
+            ));
+        }
+    }
+    let mut failures = Vec::new();
+    for (project_id, handle, mut join) in joins {
+        let joined = match tokio::time::timeout_at(deadline, &mut join).await {
+            Ok(result) => Some(result),
+            Err(_) => {
+                handle.interrupt.interrupt();
+                tokio::time::timeout(Duration::from_secs(1), &mut join)
+                    .await
+                    .ok()
+            }
+        };
+        match joined {
+            Some(Ok(Ok(()))) => {}
+            Some(Ok(Err(_))) => failures.push(format!("{project_id}: writer thread panicked")),
+            Some(Err(error)) => failures.push(format!("{project_id}: writer join failed: {error}")),
+            None => failures.push(format!(
+                "{project_id}: writer did not stop within {}s and ignored the interrupt; \
+                 its queued requests were not acknowledged",
+                budget.as_secs()
+            )),
+        }
+    }
+    failures
 }
 
-/// Where a project's writer is between flushes. The append itself
-/// (Flushing) happens inside one [`ProjectFlusher::flush`] call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FlusherPhase {
-    /// Nothing flushed yet: the first batch is written at once, so a new
-    /// project's data is queryable without waiting a whole interval.
-    Cold,
-    /// Nothing buffered.
-    Empty,
-    /// Rows buffered; flushed on row, byte, or age threshold.
-    Buffering,
-    /// A table's append failed; its rows are kept for one retry.
-    Failed,
+/// When a writer runs `CHECKPOINT lake`.
+#[derive(Debug, Clone, Copy)]
+struct MaintenanceSchedule {
+    /// Routine maintenance interval (`SIGIRO_CHECKPOINT_INTERVAL_SECS`).
+    interval: Duration,
+    /// Data files written since the last checkpoint that trigger one early.
+    /// Derived from the open-files limit, which sigiro never raises.
+    file_budget: u64,
+    /// Upper bound on files one fallback merge opens.
+    merge_files: u64,
+    /// First retry delay after a failure; doubles up to `interval`.
+    first_retry: Duration,
+    /// How long a writer waits for work before it exits ([`WRITER_IDLE`]).
+    idle: Duration,
 }
 
-/// Appends per batch: the first try plus one retry.
-const APPEND_ATTEMPTS: u8 = 2;
+impl MaintenanceSchedule {
+    fn from_config() -> Result<Self> {
+        let fd_limit = crate::storage_health::open_files_limit();
+        Ok(Self::new(
+            Duration::from_secs(crate::config::checkpoint_interval_secs()?),
+            fd_limit,
+        ))
+    }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TableOutcome {
-    Written,
-    /// Keep the unwritten batches for the next flush.
-    Retry,
-    /// Give up: count the rows in `sigiro_rows_dropped_total`.
-    Dropped,
-}
+    fn new(interval: Duration, fd_limit: Option<u64>) -> Self {
+        // A checkpoint merges files and reads every file of a table; keep the
+        // files written between checkpoints, and the files one fallback merge
+        // opens, to a quarter of what the process may have open.
+        let quarter = fd_limit.map_or(1024, |limit| (limit / 4).max(16));
+        Self {
+            interval,
+            file_budget: quarter,
+            merge_files: quarter,
+            first_retry: Duration::from_secs(30).min(interval),
+            idle: WRITER_IDLE,
+        }
+    }
 
-/// One table's result in a flush. `failed_before` counts earlier failed
-/// appends of the same batches; on the final flush there is no next time.
-fn table_outcome(failed_before: u8, ok: bool, last_chance: bool) -> TableOutcome {
-    if ok {
-        TableOutcome::Written
-    } else if last_chance || failed_before.saturating_add(1) >= APPEND_ATTEMPTS {
-        TableOutcome::Dropped
-    } else {
-        TableOutcome::Retry
+    /// Delay before the next attempt after `failures` consecutive failures.
+    fn retry_after(&self, failures: u32) -> Duration {
+        let doublings = failures.saturating_sub(1).min(16);
+        self.first_retry
+            .saturating_mul(1 << doublings)
+            .min(self.interval)
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct FlushThresholds {
-    rows: usize,
-    bytes: usize,
-    interval: Duration,
+/// The state one writer thread owns.
+struct Writer {
+    project_id: String,
+    handle: Arc<WriterHandle>,
+    writers: Arc<DashMap<String, Arc<WriterHandle>>>,
+    pool: Arc<ProjectPool>,
+    health: Arc<StorageHealth>,
+    schedule: MaintenanceSchedule,
 }
 
-fn flush_due(
-    phase: FlusherPhase,
-    rows: usize,
-    bytes: usize,
-    since_last_flush: Duration,
-    limits: FlushThresholds,
-) -> bool {
-    match phase {
-        FlusherPhase::Empty => false,
-        FlusherPhase::Cold => rows > 0,
-        FlusherPhase::Buffering | FlusherPhase::Failed => {
-            rows >= limits.rows || bytes >= limits.bytes || since_last_flush >= limits.interval
+impl Writer {
+    fn run(self, conn: Connection, rx: &std_mpsc::Receiver<WriterCommand>) {
+        let project_id = self.project_id.clone();
+        let inlining = InliningLimits::for_pool(&self.pool);
+        let mut tables = Tables::new(conn, inlining);
+        let mut maintenance = Maintenance::new(self.schedule);
+        self.health.refresh(&project_id, &tables.conn);
+        let exit = self.serve(&mut tables, &mut maintenance, rx);
+        // Close first, then drain: a sender that saw the writer open has
+        // already queued its request, and every later one starts a new writer.
+        self.handle.close();
+        while let Ok(command) = rx.try_recv() {
+            self.handle_command(&mut tables, &mut maintenance, command, rx);
+        }
+        if exit == WriterExit::Idle && maintenance.dirty() {
+            maintenance.checkpoint(&project_id, &tables.conn, &self.health);
+        }
+        self.pool
+            .return_writer(&project_id, tables.into_connection());
+        // Shutdown joins and forgets its writers itself.
+        if exit == WriterExit::Idle {
+            self.writers
+                .remove_if(&project_id, |_, current| current.id == self.handle.id);
+        }
+        tracing::info!(project_id, ?exit, "writer stopped");
+    }
+
+    fn serve(
+        &self,
+        tables: &mut Tables,
+        maintenance: &mut Maintenance,
+        rx: &std_mpsc::Receiver<WriterCommand>,
+    ) -> WriterExit {
+        let mut last_activity = Instant::now();
+        let mut last_refresh = Instant::now();
+        loop {
+            let wake = maintenance
+                .next_due()
+                .min(last_activity + self.schedule.idle);
+            match rx.recv_timeout(wake.saturating_duration_since(Instant::now())) {
+                Ok(command) => {
+                    if self
+                        .handle_command(tables, maintenance, command, rx)
+                        .is_some()
+                    {
+                        return WriterExit::Stopped;
+                    }
+                    last_activity = Instant::now();
+                }
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => return WriterExit::Stopped,
+            }
+            let now = Instant::now();
+            if maintenance.is_due(now) {
+                maintenance.checkpoint(&self.project_id, &tables.conn, &self.health);
+                last_refresh = Instant::now();
+            } else if now >= last_activity + self.schedule.idle {
+                return WriterExit::Idle;
+            } else if now >= last_refresh + HEALTH_REFRESH {
+                self.health.refresh(&self.project_id, &tables.conn);
+                last_refresh = now;
+            }
+        }
+    }
+
+    /// Handle one command. An ingest also takes every ingest queued behind
+    /// it, up to [`GROUP_COMMIT_BYTES`], and commits them together. Returns
+    /// `Some` when the writer must stop (a `Stop`, possibly found while
+    /// grouping).
+    fn handle_command(
+        &self,
+        tables: &mut Tables,
+        maintenance: &mut Maintenance,
+        command: WriterCommand,
+        rx: &std_mpsc::Receiver<WriterCommand>,
+    ) -> Option<WriterExit> {
+        match command {
+            WriterCommand::Ingest(job) => {
+                let mut group = vec![*job];
+                let mut bytes = group[0].bytes;
+                let mut next = None;
+                while bytes < GROUP_COMMIT_BYTES {
+                    match rx.try_recv() {
+                        Ok(WriterCommand::Ingest(job)) => {
+                            bytes += job.bytes;
+                            group.push(*job);
+                        }
+                        Ok(other) => {
+                            next = Some(other);
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                self.commit(tables, maintenance, group);
+                next.and_then(|command| self.handle_command(tables, maintenance, command, rx))
+            }
+            WriterCommand::RetentionCleanup { days, ack } => {
+                let result = tables
+                    .retention_cleanup(&self.project_id, days)
+                    .map_err(|e| format!("{e:#}"));
+                if ack.send(result).is_err() {
+                    tracing::debug!(project_id = %self.project_id, "retention cleanup receiver dropped");
+                }
+                None
+            }
+            WriterCommand::Stop => Some(WriterExit::Stopped),
+        }
+    }
+
+    /// Commit a group in one transaction and acknowledge each request. If the
+    /// group fails, each request is retried alone, so one bad request cannot
+    /// fail the others.
+    fn commit(&self, tables: &mut Tables, maintenance: &mut Maintenance, group: Vec<Job>) {
+        let msgs: Vec<&IngestMsg> = group.iter().map(|job| &job.msg).collect();
+        match tables.commit(&msgs) {
+            Ok(written) => {
+                maintenance.wrote(written);
+                self.pool.touch_project(&self.project_id);
+                for job in group {
+                    let _ignored = job.ack.send(Ok(())).is_ok();
+                }
+            }
+            Err(error) if group.len() == 1 => {
+                tracing::error!(project_id = %self.project_id, "commit failed: {error:#}");
+                let job = group.into_iter().next().expect("one job");
+                let _ignored = job.ack.send(Err(format!("{error:#}"))).is_ok();
+            }
+            Err(error) => {
+                tracing::warn!(
+                    project_id = %self.project_id,
+                    requests = group.len(),
+                    "group commit failed, committing each request alone: {error:#}"
+                );
+                for job in group {
+                    self.commit(tables, maintenance, vec![job]);
+                }
+            }
         }
     }
 }
 
-fn phase_after_buffer(phase: FlusherPhase) -> FlusherPhase {
-    match phase {
-        FlusherPhase::Empty => FlusherPhase::Buffering,
-        phase @ (FlusherPhase::Cold | FlusherPhase::Buffering | FlusherPhase::Failed) => phase,
+/// What one commit wrote, for scheduling maintenance.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Written {
+    rows: u64,
+    /// Tables whose rows went to a new Parquet file rather than inline.
+    files: u64,
+}
+
+/// The most rows DuckLake inlines into the catalog per table and commit.
+#[derive(Debug, Clone, Copy)]
+struct InliningLimits {
+    rows: usize,
+    profiles: usize,
+}
+
+impl InliningLimits {
+    fn for_pool(pool: &ProjectPool) -> Self {
+        let rows = crate::pool::inlining_row_limit(pool.storage_mode());
+        Self { rows, profiles: 0 }
+    }
+
+    fn for_table(self, table: SignalTable) -> usize {
+        if table == SignalTable::Profiles {
+            self.profiles
+        } else {
+            self.rows
+        }
     }
 }
 
-fn phase_after_flush(retained_rows: usize) -> FlusherPhase {
-    if retained_rows > 0 {
-        FlusherPhase::Failed
-    } else {
-        FlusherPhase::Empty
+/// When the next `CHECKPOINT lake` runs, and how the last ones went.
+struct Maintenance {
+    schedule: MaintenanceSchedule,
+    next: Instant,
+    failures: u32,
+    written: Written,
+}
+
+impl Maintenance {
+    fn new(schedule: MaintenanceSchedule) -> Self {
+        Self {
+            schedule,
+            next: Instant::now() + schedule.interval,
+            failures: 0,
+            written: Written::default(),
+        }
+    }
+
+    fn wrote(&mut self, written: Written) {
+        self.written.rows += written.rows;
+        self.written.files += written.files;
+    }
+
+    /// Anything committed since the last successful checkpoint.
+    fn dirty(&self) -> bool {
+        self.written.rows > 0
+    }
+
+    /// Too many new files trigger a checkpoint early, unless one is already
+    /// failing (then the backoff decides).
+    fn files_due(&self) -> bool {
+        self.failures == 0 && self.written.files >= self.schedule.file_budget
+    }
+
+    fn next_due(&self) -> Instant {
+        if self.files_due() {
+            Instant::now()
+        } else {
+            self.next
+        }
+    }
+
+    fn is_due(&self, now: Instant) -> bool {
+        self.files_due() || now >= self.next
+    }
+
+    fn checkpoint(&mut self, project_id: &str, conn: &Connection, health: &StorageHealth) {
+        let started = Instant::now();
+        let outcome = run_checkpoint(conn, self.schedule.merge_files);
+        let elapsed_ms = started.elapsed().as_millis();
+        match &outcome {
+            CheckpointOutcome::Done => {
+                self.failures = 0;
+                self.next = Instant::now() + self.schedule.interval;
+                self.written = Written::default();
+                health.record_checkpoint(project_id, None);
+                tracing::info!(project_id, elapsed_ms, "DuckLake CHECKPOINT completed");
+            }
+            CheckpointOutcome::Failed { error, fallback } => {
+                self.failures += 1;
+                // While the bounded steps make progress, keep going at the
+                // first retry delay; back off only when they fail too.
+                let retry = if fallback.is_ok() {
+                    self.schedule.first_retry
+                } else {
+                    self.schedule.retry_after(self.failures)
+                };
+                self.next = Instant::now() + retry;
+                if fallback.is_ok() {
+                    // The bounded steps wrote the inlined rows and merged
+                    // files, so the file trigger starts over.
+                    self.written = Written::default();
+                }
+                health.record_checkpoint(project_id, Some(error));
+                tracing::warn!(
+                    project_id,
+                    elapsed_ms,
+                    failures = self.failures,
+                    retry_in_secs = retry.as_secs(),
+                    fallback = ?fallback,
+                    "DuckLake CHECKPOINT failed; ingest continues: {error}"
+                );
+            }
+        }
+        health.refresh(project_id, conn);
     }
 }
 
-/// What one flush did, for the caller to log and count.
-#[derive(Debug, Default)]
-struct FlushReport {
-    failures: Vec<String>,
-    dropped: Vec<(String, usize)>,
+#[derive(Debug)]
+enum CheckpointOutcome {
+    Done,
+    /// The full checkpoint failed. `fallback` is the result of the bounded
+    /// steps run instead.
+    Failed {
+        error: String,
+        fallback: std::result::Result<(), String>,
+    },
 }
 
-impl ProjectFlusher {
-    fn new(conn: Connection, cfg: &FlushConfig) -> Self {
-        let signals = SignalTable::ALL;
-        let table_names: BTreeMap<SignalTable, String> = signals
+/// Threads a checkpoint may use. DuckLake's merge buffers row groups per
+/// thread, and with 4 or more threads it ran out of memory at the 400MB
+/// default even with row groups capped (#223).
+const CHECKPOINT_THREADS: i64 = 2;
+
+/// How long one fallback keeps merging batches of files. Each batch is small
+/// and quick; the budget bounds how long ingest waits behind it.
+const FALLBACK_MERGE_BUDGET: Duration = Duration::from_secs(10);
+
+/// Run DuckLake's full maintenance pass. If it fails, run the steps that
+/// matter for file count on their own, with the merge bounded to
+/// `merge_files` files, so a lake that already holds more files than the
+/// process may open still converges, one batch per attempt (#228).
+fn run_checkpoint(conn: &Connection, merge_files: u64) -> CheckpointOutcome {
+    let full = with_threads(conn, CHECKPOINT_THREADS, || {
+        conn.execute_batch("CHECKPOINT lake;")
+            .context("DuckLake CHECKPOINT failed")
+    });
+    let Err(error) = full else {
+        return CheckpointOutcome::Done;
+    };
+    let fallback = with_threads(conn, CHECKPOINT_THREADS, || {
+        bounded_maintenance(conn, merge_files, FALLBACK_MERGE_BUDGET)
+    })
+    .map_err(|e| format!("{e:#}"));
+    CheckpointOutcome::Failed {
+        error: format!("{error:#}"),
+        fallback,
+    }
+}
+
+/// The parts of a checkpoint that bound the file count, each small enough to
+/// fit the open-files limit: write inlined rows out, then merge at most
+/// `merge_files` files at a time until a batch merges nothing or `budget`
+/// is spent (the next attempt continues), then delete files past their grace
+/// period.
+fn bounded_maintenance(conn: &Connection, merge_files: u64, budget: Duration) -> Result<()> {
+    let step = |sql: &str| {
+        conn.execute_batch(sql)
+            .with_context(|| format!("{sql} failed"))
+    };
+    step("CALL ducklake_flush_inlined_data('lake')")?;
+    let merge =
+        format!("CALL ducklake_merge_adjacent_files('lake', max_compacted_files => {merge_files})");
+    let deadline = Instant::now() + budget;
+    let mut files = crate::storage_health::data_file_count(conn)?;
+    loop {
+        step(&merge)?;
+        let after = crate::storage_health::data_file_count(conn)?;
+        if after >= files || Instant::now() >= deadline {
+            break;
+        }
+        files = after;
+    }
+    step("CALL ducklake_cleanup_old_files('lake')")
+}
+
+/// Run `f` with DuckDB's thread count lowered to at most `threads`, then
+/// restore it. The setting is per database, so queries running meanwhile
+/// share the lower count.
+fn with_threads<T>(conn: &Connection, threads: i64, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let current: i64 = conn
+        .query_row("SELECT current_setting('threads')::BIGINT", [], |row| {
+            row.get(0)
+        })
+        .context("failed to read DuckDB threads")?;
+    if current <= threads {
+        return f();
+    }
+    conn.execute_batch(&format!("SET threads = {threads};"))
+        .context("failed to lower DuckDB threads")?;
+    let result = f();
+    if let Err(error) = conn.execute_batch(&format!("SET threads = {current};")) {
+        tracing::error!("failed to restore DuckDB threads to {current}: {error}");
+    }
+    result
+}
+
+/// The writer's connection and the per-table state its commits need.
+struct Tables {
+    conn: Connection,
+    table_names: BTreeMap<SignalTable, String>,
+    inlining: InliningLimits,
+    drain: DrainTree,
+    stored_values: StoredValues,
+}
+
+impl Tables {
+    fn new(conn: Connection, inlining: InliningLimits) -> Self {
+        let table_names = SignalTable::ALL
             .iter()
             .map(|s| (*s, s.table_name(ProjectPool::prefix())))
             .collect();
-        let buffers: BTreeMap<SignalTable, Vec<RecordBatch>> =
-            signals.iter().map(|s| (*s, Vec::new())).collect();
-
         Self {
             conn,
             table_names,
-            buffers,
-            total_rows: 0,
-            total_bytes: 0,
-            last_flush: Instant::now(),
-            row_threshold: cfg.row_threshold,
-            byte_threshold: cfg.byte_threshold,
-            flush_interval: cfg.interval,
+            inlining,
             drain: DrainTree::new(),
             stored_values: StoredValues::default(),
-            phase: FlusherPhase::Cold,
-            failed_appends: BTreeMap::new(),
         }
     }
-    #[instrument(skip_all, fields(signal = ?signal, rows = batch.num_rows()))]
-    fn buffer(&mut self, signal: SignalTable, batch: RecordBatch) {
-        let batch = if signal == SignalTable::Logs {
-            match self.classify_logs(&batch) {
-                Ok(classified) => classified,
-                Err(e) => {
-                    tracing::warn!(
-                        rows = batch.num_rows(),
-                        "log classification failed, skipping batch: {e:#}"
-                    );
-                    return;
+
+    /// Append every message's rows and commit them as one transaction (one
+    /// DuckLake snapshot). On failure nothing is stored.
+    fn commit(&mut self, msgs: &[&IngestMsg]) -> Result<Written> {
+        let mut batches: BTreeMap<SignalTable, Vec<RecordBatch>> = BTreeMap::new();
+        let mut new_values = Vec::new();
+        for msg in msgs {
+            match msg {
+                IngestMsg::Traces { batch, values, .. } => {
+                    let values = self.stored_values.keep_new(values)?;
+                    if values.num_rows() > 0 {
+                        new_values.push(values.clone());
+                        batches
+                            .entry(SignalTable::SpanValues)
+                            .or_default()
+                            .push(values);
+                    }
+                    batches
+                        .entry(SignalTable::Spans)
+                        .or_default()
+                        .push(batch.clone());
+                }
+                IngestMsg::Logs { batch, .. } => {
+                    let classified = self.classify_logs(batch)?;
+                    batches
+                        .entry(SignalTable::Logs)
+                        .or_default()
+                        .push(classified);
+                }
+                IngestMsg::Metrics {
+                    batches: metrics, ..
+                } => {
+                    for (table, batch) in metric_tables(metrics) {
+                        batches.entry(table).or_default().push(batch.clone());
+                    }
+                }
+                IngestMsg::Profiles { batch, .. } => {
+                    batches
+                        .entry(SignalTable::Profiles)
+                        .or_default()
+                        .push(batch.clone());
                 }
             }
-        } else {
-            batch
-        };
-        let batch_bytes = batch_byte_size(&batch);
-        self.total_rows += batch.num_rows();
-        self.total_bytes += batch_bytes;
-        self.buffers.entry(signal).or_default().push(batch);
-        self.phase = phase_after_buffer(self.phase);
+        }
+        let result = self.append_all(&batches);
+        if result.is_err() {
+            // Values that were not written must be written next time.
+            self.stored_values.forget(&new_values);
+        }
+        result
     }
+
+    fn append_all(&self, batches: &BTreeMap<SignalTable, Vec<RecordBatch>>) -> Result<Written> {
+        self.conn
+            .execute_batch("BEGIN TRANSACTION;")
+            .context("failed to begin the commit")?;
+        let appended = (|| -> Result<Written> {
+            let mut written = Written::default();
+            for (table, batches) in batches {
+                let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+                if rows == 0 {
+                    continue;
+                }
+                append_batches(&self.conn, &self.table_names[table], batches)?;
+                written.rows += rows as u64;
+                if rows > self.inlining.for_table(*table) {
+                    written.files += 1;
+                }
+            }
+            Ok(written)
+        })();
+        let committed = appended.and_then(|written| {
+            self.conn
+                .execute_batch("COMMIT;")
+                .context("failed to commit")?;
+            Ok(written)
+        });
+        if committed.is_err()
+            && let Err(error) = self.conn.execute_batch("ROLLBACK;")
+        {
+            tracing::debug!("rollback after a failed commit: {error}");
+        }
+        committed
+    }
+
     /// Run DRAIN on each log body and append its classification to the same row.
     #[instrument(skip_all, fields(rows = batch.num_rows()))]
     fn classify_logs(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
@@ -835,13 +1180,10 @@ impl ProjectFlusher {
             template_texts.push(template);
         }
 
-        let id_array = std::sync::Arc::new(UInt64Array::from(template_ids));
-        let values_array = std::sync::Arc::new(StringArray::from(template_values));
-        let text_array = std::sync::Arc::new(StringArray::from(template_texts));
         let mut columns = batch.columns().to_vec();
-        columns.push(id_array);
-        columns.push(values_array);
-        columns.push(text_array);
+        columns.push(Arc::new(UInt64Array::from(template_ids)));
+        columns.push(Arc::new(StringArray::from(template_values)));
+        columns.push(Arc::new(StringArray::from(template_texts)));
 
         let mut fields: Vec<arrow::datatypes::Field> = batch
             .schema()
@@ -864,170 +1206,9 @@ impl ProjectFlusher {
             arrow::datatypes::DataType::Utf8,
             true,
         ));
-        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(fields));
+        let schema = Arc::new(arrow::datatypes::Schema::new(fields));
 
         RecordBatch::try_new(schema, columns).context("failed to add template columns")
-    }
-
-    /// Buffer spans and the values they refer to that this writer has not
-    /// stored for that day yet.
-    fn buffer_traces(&mut self, spans: RecordBatch, values: &RecordBatch) {
-        match self.stored_values.keep_new(values) {
-            Ok(values) if values.num_rows() > 0 => self.buffer(SignalTable::SpanValues, values),
-            Ok(_) => {}
-            Err(error) => {
-                tracing::warn!(
-                    rows = spans.num_rows(),
-                    "span values unreadable, skipping batch: {error:#}"
-                );
-                return;
-            }
-        }
-        self.buffer(SignalTable::Spans, spans);
-    }
-
-    fn buffer_metrics(&mut self, batches: MetricBatches) {
-        if let Some(b) = batches.gauge {
-            self.buffer(SignalTable::MetricsGauge, b);
-        }
-        if let Some(b) = batches.sum {
-            self.buffer(SignalTable::MetricsSum, b);
-        }
-        if let Some(b) = batches.histogram {
-            self.buffer(SignalTable::MetricsHistogram, b);
-        }
-        if let Some(b) = batches.exp_histogram {
-            self.buffer(SignalTable::MetricsExpHistogram, b);
-        }
-    }
-
-    fn should_flush(&self) -> bool {
-        flush_due(
-            self.phase,
-            self.total_rows,
-            self.total_bytes,
-            self.last_flush.elapsed(),
-            FlushThresholds {
-                rows: self.row_threshold,
-                bytes: self.byte_threshold,
-                interval: self.flush_interval,
-            },
-        )
-    }
-
-    fn reached_flush_threshold(&self) -> bool {
-        self.total_rows >= self.row_threshold || self.total_bytes >= self.byte_threshold
-    }
-
-    /// Flush all buffered batches to DuckDB using appenders per table.
-    /// Uses appender_to_catalog_and_db for DuckLake catalog-qualified table access.
-    ///
-    /// A table whose append fails keeps its unwritten batches for one retry
-    /// on the next flush; a second failure, or any failure on the final
-    /// (`last_chance`) flush, drops them and reports the rows.
-    #[tracing::instrument(skip_all, fields(project_id = %project_id, rows = self.total_rows))]
-    fn flush(&mut self, project_id: &str, last_chance: bool) -> FlushReport {
-        let mut report = FlushReport::default();
-        if self.total_rows == 0 {
-            // F-25: demoted from debug! to trace! — fires every flush interval
-            // per project (default 60s) and was polluting `RUST_LOG=debug` runs
-            // with per-project "nothing happened" noise.
-            tracing::trace!(project_id, "flush skipped: no rows");
-            return report;
-        }
-
-        tracing::info!(project_id, rows = self.total_rows, phase = ?self.phase, tables = ?self.buffers.keys().collect::<Vec<_>>(), "flushing batches");
-        let conn = &self.conn;
-        let (mut retained_rows, mut retained_bytes) = (0, 0);
-        // `SpanValues` sorts first. Spans must not be written while the values
-        // they refer to are unwritten, and are dropped with them.
-        let mut values_outcome = TableOutcome::Written;
-        for (signal, buf) in &mut self.buffers {
-            if buf.is_empty() {
-                continue;
-            }
-            let table = &self.table_names[signal];
-            let batches = std::mem::take(buf);
-            let failed_before = self.failed_appends.remove(signal).unwrap_or(0);
-            let waits_for_values =
-                *signal == SignalTable::Spans && values_outcome != TableOutcome::Written;
-            let (written, error) = if waits_for_values {
-                (
-                    0,
-                    Some(anyhow::anyhow!(
-                        "the span values these spans refer to were not written"
-                    )),
-                )
-            } else {
-                match append_batches(conn, table, &batches) {
-                    Ok(()) => (batches.len(), None),
-                    Err((written, error)) => (written, Some(error)),
-                }
-            };
-            let mut outcome = table_outcome(failed_before, error.is_none(), last_chance);
-            if waits_for_values && values_outcome == TableOutcome::Dropped {
-                outcome = TableOutcome::Dropped;
-            }
-            if *signal == SignalTable::SpanValues {
-                values_outcome = outcome;
-                if outcome == TableOutcome::Dropped {
-                    self.stored_values.forget(&batches[written..]);
-                }
-            }
-            match outcome {
-                TableOutcome::Written => {}
-                TableOutcome::Retry => {
-                    let kept = batches[written..].to_vec();
-                    let rows: usize = kept.iter().map(RecordBatch::num_rows).sum();
-                    tracing::warn!(
-                        project_id,
-                        table = %table,
-                        rows_kept = rows,
-                        "flush failed — keeping buffered batches for one retry: {:#}",
-                        error.as_ref().expect("a retry follows a failure")
-                    );
-                    retained_rows += rows;
-                    retained_bytes += kept.iter().map(batch_byte_size).sum::<usize>();
-                    *buf = kept;
-                    self.failed_appends.insert(*signal, failed_before + 1);
-                }
-                TableOutcome::Dropped => {
-                    let error = error.expect("a drop follows a failure");
-                    let rows: usize = batches[written..].iter().map(RecordBatch::num_rows).sum();
-                    tracing::error!(
-                        project_id,
-                        table = %table,
-                        rows_lost = rows,
-                        attempts = failed_before + 1,
-                        "flush failed — dropping buffered batches: {error:#}"
-                    );
-                    report.dropped.push((table.clone(), rows));
-                    report.failures.push(format!("{table}: {error:#}"));
-                }
-            }
-        }
-
-        tracing::info!(
-            project_id,
-            rows = self.total_rows - retained_rows,
-            retained_rows,
-            "flushed batches"
-        );
-
-        self.total_rows = retained_rows;
-        self.total_bytes = retained_bytes;
-        self.last_flush = Instant::now();
-        self.phase = phase_after_flush(retained_rows);
-        report
-    }
-
-    #[tracing::instrument(skip_all, fields(project_id = %project_id))]
-    fn checkpoint(&self, project_id: &str) -> Result<()> {
-        self.conn
-            .execute_batch("CHECKPOINT lake;")
-            .context("DuckLake CHECKPOINT failed")?;
-        tracing::debug!(project_id, "DuckLake CHECKPOINT completed");
-        Ok(())
     }
 
     #[tracing::instrument(skip_all, fields(project_id = %project_id, days))]
@@ -1050,14 +1231,14 @@ impl ProjectFlusher {
                 .with_context(|| format!("retention cleanup failed for {table}"))?;
         }
 
-        // DELETE writes DuckLake delete-files. The periodic `CHECKPOINT lake`
-        // performs DuckLake's own bounded rewrite, compaction, snapshot expiry,
-        // old-file cleanup, and orphan deletion using the catalog policy set in
-        // `pool::set_ducklake_catalog_policy`. Do not run that sequence here:
-        // the old hand-written reclaim blocked this same writer thread for more
-        // than twenty minutes on a tenant with 3,115 files, which stopped its
-        // telemetry flushes and serialized maintenance for every tenant behind
-        // it.
+        // DELETE writes DuckLake delete-files. The writer's periodic
+        // `CHECKPOINT lake` performs DuckLake's own bounded rewrite,
+        // compaction, snapshot expiry, old-file cleanup, and orphan deletion
+        // using the catalog policy set in `pool::set_ducklake_catalog_policy`.
+        // Do not run that sequence here: the old hand-written reclaim blocked
+        // this same writer thread for more than twenty minutes on a tenant
+        // with 3,115 files, which stopped its ingest and serialized
+        // maintenance for every tenant behind it.
         tracing::info!(project_id, days, "retention cleanup completed");
         Ok(())
     }
@@ -1067,9 +1248,23 @@ impl ProjectFlusher {
     }
 }
 
-/// The `(day, hash)` of span values this writer has buffered or stored, so
-/// each distinct value is written once per day. Forgotten on restart and when
-/// full; either only costs a repeated row, which readers deduplicate.
+fn metric_tables(batches: &MetricBatches) -> impl Iterator<Item = (SignalTable, &RecordBatch)> {
+    [
+        (SignalTable::MetricsGauge, batches.gauge.as_ref()),
+        (SignalTable::MetricsSum, batches.sum.as_ref()),
+        (SignalTable::MetricsHistogram, batches.histogram.as_ref()),
+        (
+            SignalTable::MetricsExpHistogram,
+            batches.exp_histogram.as_ref(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(table, batch)| batch.map(|batch| (table, batch)))
+}
+
+/// The `(day, hash)` of span values this writer has stored, so each distinct
+/// value is written once per day. Forgotten on restart and when full; either
+/// only costs a repeated row, which readers deduplicate.
 #[derive(Default)]
 struct StoredValues(std::collections::HashSet<(i64, u128)>);
 
@@ -1104,9 +1299,9 @@ impl StoredValues {
         Ok(arrow::compute::filter_record_batch(values, &keep)?)
     }
 
-    /// Values that were dropped unwritten must be written again next time.
-    fn forget(&mut self, dropped: &[RecordBatch]) {
-        for batch in dropped {
+    /// Values whose commit failed must be written again next time.
+    fn forget(&mut self, unwritten: &[RecordBatch]) {
+        for batch in unwritten {
             if let Ok(keys) = Self::keys(batch) {
                 for key in keys {
                     self.0.remove(&key);
@@ -1116,49 +1311,45 @@ impl StoredValues {
     }
 }
 
-/// Append a table's buffered batches via a DuckLake catalog-qualified appender.
-/// Isolated as a free function (not a `&mut self` method) so `ProjectFlusher::flush`
-/// can call it per-table inside a loop that also borrows `self.buffers` mutably.
-///
-/// On failure returns how many leading batches were handed to the appender
-/// before the error, so a retry does not append them twice. A failed
-/// appender creation or final flush reports 0: nothing was committed.
-fn append_batches(
-    conn: &Connection,
-    table: &str,
-    batches: &[RecordBatch],
-) -> std::result::Result<(), (usize, anyhow::Error)> {
-    // Extract bare table name (strip "lake." prefix for catalog-qualified appender).
+/// Append a table's batches via a DuckLake catalog-qualified appender, inside
+/// the caller's transaction.
+fn append_batches(conn: &Connection, table: &str, batches: &[RecordBatch]) -> Result<()> {
     // conn.appender("lake.table") fails — must use appender_to_catalog_and_db.
     let bare_table = table.strip_prefix("lake.").unwrap_or(table);
     let mut appender = conn
         .appender_to_catalog_and_db(bare_table, "lake", "main")
-        .with_context(|| format!("failed to create {table} appender"))
-        .map_err(|error| (0, error))?;
-    for (index, batch) in batches.iter().enumerate() {
+        .with_context(|| format!("failed to create {table} appender"))?;
+    for batch in batches {
         if batch.num_rows() > 0 {
             appender
                 .append_record_batch(batch.clone())
-                .with_context(|| format!("failed to append {table} batch"))
-                .map_err(|error| (index, error))?;
+                .with_context(|| format!("failed to append {table} batch"))?;
         }
     }
     appender
         .flush()
         .with_context(|| format!("failed to flush {table} appender"))
-        .map_err(|error| (0, error))?;
-    // Appender::drop cleans up
-    Ok(())
+}
+
+/// Approximate decoded size of an ingest request.
+fn msg_byte_size(msg: &IngestMsg) -> usize {
+    match msg {
+        IngestMsg::Traces { batch, values, .. } => batch_byte_size(batch) + batch_byte_size(values),
+        IngestMsg::Logs { batch, .. } | IngestMsg::Profiles { batch, .. } => batch_byte_size(batch),
+        IngestMsg::Metrics { batches, .. } => metric_tables(batches)
+            .map(|(_, batch)| batch_byte_size(batch))
+            .sum(),
+    }
 }
 
 /// Approximate in-memory byte size of an Arrow RecordBatch.
 /// Sums the buffer sizes of all arrays (data + validity + offsets).
 fn batch_byte_size(batch: &RecordBatch) -> usize {
-    let mut total = 0usize;
-    for col in batch.columns() {
-        total += array_byte_size(col.as_ref());
-    }
-    total
+    batch
+        .columns()
+        .iter()
+        .map(|col| array_byte_size(col.as_ref()))
+        .sum()
 }
 
 fn array_byte_size(array: &dyn Array) -> usize {
@@ -1174,426 +1365,5 @@ fn array_byte_size(array: &dyn Array) -> usize {
     total
 }
 
-/// Per-project flusher loop. Receives pre-transformed RecordBatches,
-/// buffers them, and flushes to DuckDB on timer or row count threshold.
-// This task boundary owns six independent lifecycle resources. Wrapping them in
-// a one-use context struct would hide its dependencies without reducing them.
-#[allow(clippy::too_many_arguments)]
-#[instrument(skip_all, fields(project_id = %project_id))]
-async fn run_flusher(
-    project_id: String,
-    writer: Connection,
-    mut rx: mpsc::Receiver<FlusherCommand>,
-    pool: Arc<ProjectPool>,
-    cfg: FlushConfig,
-    maintenance: Arc<MaintenanceHealth>,
-) {
-    let flush_interval = cfg.interval;
-    let (writer_tx, writer_rx) = mpsc::channel::<WriterCommand>(PROJECT_CHANNEL_CAPACITY);
-    let writer_project_id = project_id.clone();
-    let writer_cfg = cfg.clone();
-    let writer_maintenance = Arc::clone(&maintenance);
-    let writer_slot = Arc::new(parking_lot::Mutex::new(Some(writer)));
-    let writer_for_thread = Arc::clone(&writer_slot);
-    let writer_handle = match std::thread::Builder::new()
-        .name(format!("sigiro-flusher-{project_id}"))
-        .spawn(move || {
-            let writer = writer_for_thread
-                .lock()
-                .take()
-                .expect("writer is transferred exactly once");
-            run_writer_thread(
-                &writer_project_id,
-                writer,
-                writer_rx,
-                &writer_cfg,
-                &writer_maintenance,
-            )
-        }) {
-        Ok(handle) => handle,
-        Err(error) => {
-            tracing::error!(project_id, "failed to spawn writer thread: {error}");
-            if let Some(writer) = writer_slot.lock().take() {
-                pool.return_writer(&project_id, writer);
-            }
-            return;
-        }
-    };
-    let mut interval = tokio::time::interval(flush_interval);
-    let mut checkpoint_interval = tokio::time::interval_at(
-        tokio::time::Instant::now() + DUCKLAKE_MAINTENANCE_INTERVAL,
-        DUCKLAKE_MAINTENANCE_INTERVAL,
-    );
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    checkpoint_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            biased;
-
-            _ = interval.tick() => {
-                pool.touch_project(&project_id);
-                // F-25: demoted from debug! to trace! (see flush skipped above).
-                tracing::trace!(project_id, "flusher timer tick");
-                match writer_tx.try_send(WriterCommand::FlushIfNeeded) {
-                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        tracing::error!(project_id, "writer thread stopped before timer flush");
-                        break;
-                    }
-                }
-            }
-
-            _ = checkpoint_interval.tick() => {
-                pool.touch_project(&project_id);
-                match writer_tx.try_send(WriterCommand::Checkpoint) {
-                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        tracing::error!(project_id, "writer thread stopped before checkpoint");
-                        break;
-                    }
-                }
-            }
-
-            command = rx.recv() => {
-                match command {
-                    Some(FlusherCommand::Ingest(msg)) => {
-                        pool.touch_project(&project_id);
-                        tracing::debug!(project_id, "flusher received message");
-                        if writer_tx.send(WriterCommand::Ingest(msg)).await.is_err() {
-                            tracing::error!(project_id, "writer thread stopped before ingest");
-                            break;
-                        }
-                    }
-                    Some(FlusherCommand::RetentionCleanup { days, ack }) => {
-                        pool.touch_project(&project_id);
-                        if writer_tx.send(WriterCommand::RetentionCleanup { days, ack }).await.is_err() {
-                            tracing::error!(project_id, "writer thread stopped before retention cleanup");
-                            break;
-                        }
-                    }
-                    None => {
-                        if writer_tx.send(WriterCommand::Shutdown).await.is_err() {
-                            tracing::debug!(project_id, "writer already stopped during shutdown");
-                        }
-                        tracing::info!(project_id, "flusher task exiting (channel closed)");
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    drop(writer_tx);
-    match tokio::task::spawn_blocking(move || writer_handle.join()).await {
-        Ok(Ok(writer)) => {
-            pool.return_writer(&project_id, writer);
-        }
-        Ok(Err(_panic)) => {
-            tracing::error!(project_id, "writer thread panicked");
-        }
-        Err(error) => {
-            tracing::error!(project_id, "writer join task failed: {error}");
-        }
-    }
-}
-
-fn run_writer_thread(
-    project_id: &str,
-    writer: Connection,
-    mut rx: mpsc::Receiver<WriterCommand>,
-    cfg: &FlushConfig,
-    maintenance: &MaintenanceHealth,
-) -> Connection {
-    let mut flusher = ProjectFlusher::new(writer, cfg);
-    let mut pending = None;
-    while let Some(command) = pending.take().or_else(|| rx.blocking_recv()) {
-        match command {
-            WriterCommand::Ingest(msg) => {
-                buffer_msg(&mut flusher, *msg);
-                while !flusher.reached_flush_threshold() {
-                    match rx.try_recv() {
-                        Ok(WriterCommand::Ingest(msg)) => buffer_msg(&mut flusher, *msg),
-                        Ok(command) => {
-                            pending = Some(command);
-                            break;
-                        }
-                        Err(mpsc::error::TryRecvError::Empty) => break,
-                        Err(mpsc::error::TryRecvError::Disconnected) => break,
-                    }
-                }
-                if flusher.should_flush() {
-                    record_flush(
-                        project_id,
-                        "flush",
-                        &flusher.flush(project_id, false),
-                        maintenance,
-                    );
-                }
-            }
-            WriterCommand::FlushIfNeeded => {
-                if flusher.should_flush() {
-                    record_flush(
-                        project_id,
-                        "timer flush",
-                        &flusher.flush(project_id, false),
-                        maintenance,
-                    );
-                }
-            }
-            WriterCommand::Checkpoint => {
-                // #91: a failing CHECKPOINT used to only `warn!` and continue,
-                // so an unwritable/unreachable storage backend could have the
-                // catalog absorbing telemetry forever while nothing was ever
-                // materialised into Parquet. Every outcome is now recorded, and
-                // sustained failure sheds ingest (503 / unavailable) at
-                // the top of `MsgRouter::send`.
-                match flusher.checkpoint(project_id) {
-                    Ok(()) => {
-                        if maintenance.record_checkpoint_success(project_id) {
-                            tracing::info!(
-                                project_id,
-                                "DuckLake CHECKPOINT recovered — ingest re-enabled for this project"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        let (failures, tripped) = maintenance.record_checkpoint_failure(project_id);
-                        if tripped {
-                            tracing::error!(
-                                project_id,
-                                failures,
-                                "DuckLake CHECKPOINT failed {failures} consecutive times — REJECTING ingest for this project until a checkpoint succeeds: {e:#}"
-                            );
-                        } else {
-                            tracing::warn!(
-                                project_id,
-                                failures,
-                                "DuckLake CHECKPOINT failed ({failures} consecutive): {e:#}"
-                            );
-                        }
-                    }
-                }
-            }
-            WriterCommand::RetentionCleanup { days, ack } => {
-                let result = flusher
-                    .retention_cleanup(project_id, days)
-                    .map_err(|e| format!("{e:#}"));
-                if ack.send(result).is_err() {
-                    tracing::debug!(project_id, "retention cleanup receiver dropped");
-                }
-            }
-            WriterCommand::Shutdown => break,
-        }
-    }
-
-    record_flush(
-        project_id,
-        "final flush",
-        &flusher.flush(project_id, true),
-        maintenance,
-    );
-    // A successful flush commits the final DuckLake transaction. CHECKPOINT is
-    // compaction/retention maintenance, not the durability boundary, and remains
-    // owned by ProjectPool after the writer has been returned without lock overlap.
-    flusher.into_connection()
-}
-
-/// Count a flush's dropped rows and log its failures once.
-fn record_flush(
-    project_id: &str,
-    what: &str,
-    report: &FlushReport,
-    maintenance: &MaintenanceHealth,
-) {
-    for (table, rows) in &report.dropped {
-        maintenance.record_rows_dropped(table, *rows as u64);
-    }
-    if !report.failures.is_empty() {
-        tracing::error!(
-            project_id,
-            "{what} failed for {} table(s): {}",
-            report.failures.len(),
-            report.failures.join("; ")
-        );
-    }
-}
-
-/// Route an IngestMsg into the flusher's signal-keyed buffers.
-fn buffer_msg(flusher: &mut ProjectFlusher, msg: IngestMsg) {
-    match msg {
-        IngestMsg::Traces { batch, values, .. } => flusher.buffer_traces(batch, &values),
-        IngestMsg::Logs { batch, .. } => flusher.buffer(SignalTable::Logs, batch),
-        IngestMsg::Metrics { batches, .. } => flusher.buffer_metrics(batches),
-        IngestMsg::Profiles { batch, .. } => flusher.buffer(SignalTable::Profiles, batch),
-    }
-}
-
 #[cfg(test)]
-mod flusher_tests {
-    use super::*;
-    use FlusherPhase::{Buffering, Cold, Empty, Failed};
-    use arrow::array::Int64Array;
-    use arrow::datatypes::{DataType, Field, Schema};
-
-    const LIMITS: FlushThresholds = FlushThresholds {
-        rows: 100,
-        bytes: 1_000,
-        interval: Duration::from_secs(60),
-    };
-
-    #[test]
-    fn flush_is_due_by_phase_and_threshold() {
-        let young = Duration::from_secs(1);
-        let old = Duration::from_secs(60);
-        let cases = [
-            (Cold, 0, 0, old, false),
-            (Cold, 1, 1, young, true),
-            (Empty, 0, 0, old, false),
-            (Buffering, 1, 1, young, false),
-            (Buffering, 100, 1, young, true),
-            (Buffering, 1, 1_000, young, true),
-            (Buffering, 1, 1, old, true),
-            (Failed, 1, 1, young, false),
-            (Failed, 1, 1, old, true),
-            (Failed, 100, 1, young, true),
-        ];
-        for (phase, rows, bytes, age, due) in cases {
-            assert_eq!(
-                flush_due(phase, rows, bytes, age, LIMITS),
-                due,
-                "{phase:?} {rows} rows {bytes} B {age:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn every_flusher_phase_edge_follows_the_table() {
-        assert_eq!(phase_after_buffer(Cold), Cold, "Cold stays until a flush");
-        assert_eq!(phase_after_buffer(Empty), Buffering);
-        assert_eq!(phase_after_buffer(Buffering), Buffering);
-        assert_eq!(phase_after_buffer(Failed), Failed);
-        assert_eq!(phase_after_flush(0), Empty);
-        assert_eq!(phase_after_flush(5), Failed);
-
-        assert_eq!(table_outcome(0, true, false), TableOutcome::Written);
-        assert_eq!(table_outcome(1, true, false), TableOutcome::Written);
-        assert_eq!(table_outcome(0, false, false), TableOutcome::Retry);
-        assert_eq!(table_outcome(1, false, false), TableOutcome::Dropped);
-        assert_eq!(
-            table_outcome(0, false, true),
-            TableOutcome::Dropped,
-            "no retry after shutdown"
-        );
-        assert_eq!(table_outcome(1, true, true), TableOutcome::Written);
-    }
-
-    fn batch(rows: i64) -> RecordBatch {
-        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
-        RecordBatch::try_new(
-            schema,
-            vec![Arc::new(Int64Array::from_iter_values(0..rows))],
-        )
-        .unwrap()
-    }
-
-    fn flusher() -> ProjectFlusher {
-        let conn = crate::pool::open_duckdb().unwrap();
-        conn.execute_batch("ATTACH ':memory:' AS lake").unwrap();
-        let cfg = FlushConfig {
-            row_threshold: 100,
-            byte_threshold: usize::MAX,
-            interval: Duration::from_secs(3_600),
-            backpressure: BackpressurePolicy::Block,
-        };
-        ProjectFlusher::new(conn, &cfg)
-    }
-
-    fn create_spans_table(flusher: &ProjectFlusher) {
-        flusher
-            .conn
-            .execute_batch(&format!(
-                "CREATE TABLE lake.main.{} (v BIGINT)",
-                SignalTable::Spans.table_suffix()
-            ))
-            .unwrap();
-    }
-
-    fn stored_rows(flusher: &ProjectFlusher) -> i64 {
-        flusher
-            .conn
-            .query_row(
-                &format!(
-                    "SELECT count(*) FROM lake.main.{}",
-                    SignalTable::Spans.table_suffix()
-                ),
-                [],
-                |row| row.get(0),
-            )
-            .unwrap()
-    }
-
-    #[test]
-    fn cold_writes_the_first_batch_then_buffers() {
-        let mut flusher = flusher();
-        create_spans_table(&flusher);
-        assert_eq!(flusher.phase, Cold);
-        assert!(!flusher.should_flush(), "nothing to write yet");
-        flusher.buffer(SignalTable::Spans, batch(3));
-        assert!(
-            flusher.should_flush(),
-            "Cold flushes the first batch at once"
-        );
-        let report = flusher.flush("p", false);
-        assert!(report.failures.is_empty() && report.dropped.is_empty());
-        assert_eq!((flusher.phase, stored_rows(&flusher)), (Empty, 3));
-        flusher.buffer(SignalTable::Spans, batch(2));
-        assert_eq!(flusher.phase, Buffering);
-        assert!(!flusher.should_flush(), "under every threshold");
-    }
-
-    #[test]
-    fn a_failed_append_keeps_rows_for_one_retry_that_can_succeed() {
-        let mut flusher = flusher();
-        flusher.buffer(SignalTable::Spans, batch(4));
-        let report = flusher.flush("p", false);
-        assert!(report.dropped.is_empty(), "first failure keeps the rows");
-        assert_eq!((flusher.phase, flusher.total_rows), (Failed, 4));
-        create_spans_table(&flusher);
-        let report = flusher.flush("p", false);
-        assert!(report.dropped.is_empty());
-        assert_eq!(
-            (flusher.phase, flusher.total_rows, stored_rows(&flusher)),
-            (Empty, 0, 4)
-        );
-    }
-
-    #[test]
-    fn a_second_failure_drops_and_reports_the_rows() {
-        let mut flusher = flusher();
-        flusher.buffer(SignalTable::Spans, batch(4));
-        assert!(flusher.flush("p", false).dropped.is_empty());
-        flusher.buffer(SignalTable::Spans, batch(1));
-        assert_eq!(flusher.phase, Failed, "new rows join the pending retry");
-        let report = flusher.flush("p", false);
-        assert_eq!(
-            report.dropped,
-            vec![(SignalTable::Spans.table_name(ProjectPool::prefix()), 5)]
-        );
-        assert_eq!(report.failures.len(), 1);
-        assert_eq!((flusher.phase, flusher.total_rows), (Empty, 0));
-
-        let health = MaintenanceHealth::new(0);
-        record_flush("p", "flush", &report, &health);
-        assert_eq!(health.rows_dropped(), 5);
-    }
-
-    #[test]
-    fn the_final_flush_does_not_wait_for_a_retry() {
-        let mut flusher = flusher();
-        flusher.buffer(SignalTable::Spans, batch(2));
-        let report = flusher.flush("p", true);
-        assert_eq!(report.dropped.len(), 1);
-        assert_eq!(report.dropped[0].1, 2);
-        assert_eq!(flusher.phase, Empty);
-    }
-}
+mod writer_tests;

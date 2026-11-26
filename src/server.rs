@@ -1014,13 +1014,13 @@ pub async fn run_servers(
         Ok(())
     };
 
-    // Network tasks are gone, so no request can create a new flusher while the
+    // Network tasks are gone, so no request can start a new writer while the
     // existing channels are closed and drained.
-    tracing::info!("draining flusher tasks...");
+    tracing::info!("stopping writers...");
     let router_cleanup = router
         .shutdown_and_wait()
         .await
-        .context("failed to drain flusher tasks");
+        .context("failed to stop writers");
 
     if let Some(error) = server_error {
         return Err(error);
@@ -1211,42 +1211,21 @@ async fn health(
     _path: HealthPath,
     State(state): State<Arc<AppState>>,
 ) -> impl axum::response::IntoResponse {
-    // 1. Flusher health — most critical. A dead flusher silently drops
-    //    telemetry, so we must report degraded even if init completed.
-    if state.router.has_dead_flushers() {
-        tracing::warn!("health check: dead flushers detected");
+    // 1. Writer health. A writer thread that panicked fails its project's
+    //    requests until the next one replaces it, so report degraded even if
+    //    init completed. Checkpoint failures are NOT reported here: ingest
+    //    keeps committing through them, and they are listed under `storage`.
+    if state.router.has_dead_writers() {
+        tracing::warn!("health check: dead writers detected");
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             axum::Json(HealthResponse::Degraded {
-                reason: "dead flushers".to_string(),
+                reason: "dead writers".to_string(),
             }),
         );
     }
 
-    // 2. DuckLake maintenance health — a project whose writer has failed
-    //    `SIGIRO_MAX_CHECKPOINT_FAILURES` consecutive checkpoints is shedding
-    //    ingest, because nothing it accepts can be materialised into Parquet.
-    //    Reported before init for the same reason as dead flushers: the
-    //    condition means telemetry is being rejected right now.
-    let stalled = state.router.maintenance_health().stalled_projects();
-    if !stalled.is_empty() {
-        tracing::warn!(
-            projects = ?stalled,
-            "health check: DuckLake maintenance stalled — ingest is being shed"
-        );
-        return (
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(HealthResponse::Degraded {
-                reason: format!(
-                    "DuckLake maintenance stalled for {} project(s): {}",
-                    stalled.len(),
-                    stalled.join(", ")
-                ),
-            }),
-        );
-    }
-
-    // 3. Init completeness — `AppState::init_complete` is flipped by
+    // 2. Init completeness — `AppState::init_complete` is flipped by
     //    `run_servers` once `axum_server` reports the HTTP listener bound.
     //    A probe that arrives between the socket accepting connections and
     //    the rest of startup finishing (quack extension load, the `default`
@@ -1266,8 +1245,7 @@ async fn health(
         axum::Json(HealthResponse::Ready {
             alert_webhooks: state.alerts.delivery_health(),
             disk_gate: state.router.disk_state().health(),
-            rows_dropped_total: Some(state.router.maintenance_health().rows_dropped())
-                .filter(|rows| *rows > 0),
+            storage: state.router.storage_health().snapshot(),
         }),
     )
 }
@@ -2212,12 +2190,8 @@ async fn admin_status(
     .context_internal(("Admin", "admin status task panicked"))?
     .context_internal(("Admin", "failed to read status"))?;
     map.insert(
-        "ingest_dropped_messages_total".to_string(),
-        state.router.dropped_messages().to_string(),
-    );
-    map.insert(
-        "sigiro_rows_dropped_total".to_string(),
-        state.router.maintenance_health().rows_dropped().to_string(),
+        "ingest_queued_bytes".to_string(),
+        state.router.queued_bytes().to_string(),
     );
     Ok(Json(AdminStatusResponse { status: map }))
 }

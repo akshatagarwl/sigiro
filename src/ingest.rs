@@ -502,19 +502,22 @@ impl From<crate::auth::AuthError> for IngestAuthFailure {
     }
 }
 
-/// How long a sender should wait before retrying a 503 (stalled maintenance).
-/// Checkpoints are retried on the maintenance cycle, so retrying sooner is wasted.
-const STALLED_RETRY_AFTER_SECS: &str = "60";
+/// How long a sender should wait before retrying a 503. A 503 means the
+/// project's writer is behind or a commit failed; neither lasts long, and the
+/// request was not stored, so retrying it soon is safe.
+const UNAVAILABLE_RETRY_AFTER_SECS: &str = "1";
 
-/// HTTP status for a router rejection. Only a full disk is 507: a stalled
-/// maintenance cycle is a temporary server-side outage (503, retryable per
-/// OTLP), and a full admission budget is backpressure (429).
+/// HTTP status for a router rejection. Only a full disk is 507: a full queue,
+/// a failed commit or a stopped writer is a temporary server-side condition
+/// (503, retryable per OTLP), and a full admission budget is backpressure (429).
 fn router_error_http_status(error: &RouterError) -> StatusCode {
     match error {
         RouterError::DiskCapacityExceeded => StatusCode::INSUFFICIENT_STORAGE,
-        RouterError::MaintenanceStalled { .. } => StatusCode::SERVICE_UNAVAILABLE,
+        RouterError::QueueFull { .. }
+        | RouterError::CommitFailed { .. }
+        | RouterError::WriterStopped { .. } => StatusCode::SERVICE_UNAVAILABLE,
         RouterError::Admission(_) => StatusCode::TOO_MANY_REQUESTS,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
+        RouterError::ConnectionFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
@@ -523,9 +526,11 @@ fn router_error_http_status(error: &RouterError) -> StatusCode {
 fn router_error_grpc_status(error: &RouterError) -> Status {
     match error {
         RouterError::DiskCapacityExceeded => Status::resource_exhausted("disk capacity exceeded"),
-        RouterError::MaintenanceStalled { .. } => Status::unavailable(error.to_string()),
+        RouterError::QueueFull { .. }
+        | RouterError::CommitFailed { .. }
+        | RouterError::WriterStopped { .. } => Status::unavailable(error.to_string()),
         RouterError::Admission(_) => Status::resource_exhausted(error.to_string()),
-        _ => Status::internal("ingest failed"),
+        RouterError::ConnectionFailed { .. } => Status::internal("ingest failed"),
     }
 }
 
@@ -544,7 +549,7 @@ fn http_status_grpc_code(status: StatusCode) -> tonic::Code {
 /// "Retryable Response Codes").
 async fn retry_after_on_unavailable(mut response: AxumResponse) -> AxumResponse {
     let retry_after = match response.status() {
-        StatusCode::SERVICE_UNAVAILABLE => STALLED_RETRY_AFTER_SECS,
+        StatusCode::SERVICE_UNAVAILABLE => UNAVAILABLE_RETRY_AFTER_SECS,
         StatusCode::TOO_MANY_REQUESTS => "1",
         _ => return response,
     };
@@ -909,10 +914,9 @@ mod router_error_status_tests {
     use super::*;
     use axum::http::header::RETRY_AFTER;
 
-    fn stalled() -> RouterError {
-        RouterError::MaintenanceStalled {
+    fn queue_full() -> RouterError {
+        RouterError::QueueFull {
             project_id: "default".to_owned(),
-            failures: 4,
         }
     }
 
@@ -933,7 +937,7 @@ mod router_error_status_tests {
                 tonic::Code::ResourceExhausted,
             ),
             (
-                stalled(),
+                queue_full(),
                 StatusCode::SERVICE_UNAVAILABLE,
                 tonic::Code::Unavailable,
             ),
@@ -951,16 +955,20 @@ mod router_error_status_tests {
     }
 
     #[test]
-    fn stalled_grpc_status_says_why() {
-        let status = router_error_grpc_status(&stalled());
-        assert!(status.message().contains("maintenance stalled"));
+    fn unavailable_grpc_status_says_why() {
+        let status = router_error_grpc_status(&queue_full());
+        assert!(
+            status
+                .message()
+                .contains("queue for project default is full")
+        );
     }
 
     #[tokio::test]
     async fn retryable_rejections_tell_the_sender_when_to_retry() {
         let unavailable =
             retry_after_on_unavailable(StatusCode::SERVICE_UNAVAILABLE.into_response()).await;
-        assert_eq!(unavailable.headers().get(RETRY_AFTER).unwrap(), "60");
+        assert_eq!(unavailable.headers().get(RETRY_AFTER).unwrap(), "1");
         let busy = retry_after_on_unavailable(StatusCode::TOO_MANY_REQUESTS.into_response()).await;
         assert_eq!(busy.headers().get(RETRY_AFTER).unwrap(), "1");
         for status in [StatusCode::OK, StatusCode::INSUFFICIENT_STORAGE] {

@@ -189,7 +189,8 @@ impl DiskCapacityState {
         })
     }
 
-    /// A disabled (`cap == 0`) gate — the no-op default for constructors.
+    /// A disabled (`cap == 0`) gate, for tests that do not exercise it.
+    #[cfg(test)]
     pub(crate) fn disabled() -> Arc<Self> {
         Self::new(0)
     }

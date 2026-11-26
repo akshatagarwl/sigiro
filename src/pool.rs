@@ -30,8 +30,8 @@ pub struct ProjectPool {
 }
 
 pub struct PoolEntry {
-    /// The single writer connection while no flusher owns it. A flusher takes
-    /// this once and returns it on clean shutdown; no DuckDB work is performed
+    /// The single writer connection while no writer thread owns it. A writer thread takes
+    /// this while it runs and returns it when it stops; no DuckDB work is performed
     /// while holding this mutex.
     writer: Mutex<Option<Connection>>,
     readers: ReaderPool,
@@ -47,7 +47,7 @@ impl PoolEntry {
         self.last_access = Instant::now();
         let writer = if take_writer {
             Some(self.writer.lock().take().ok_or_else(|| {
-                anyhow::anyhow!("writer already owned by flusher for project {project_id}")
+                anyhow::anyhow!("writer already owned by a writer thread for project {project_id}")
             })?)
         } else {
             None
@@ -66,7 +66,7 @@ impl PoolEntry {
                 tracing::warn!("DuckDB CHECKPOINT failed during shutdown: {e}");
             }
         } else {
-            tracing::debug!("skipping pool-entry shutdown checkpoint; flusher owns writer");
+            tracing::debug!("skipping pool-entry shutdown checkpoint; a writer thread owns it");
         }
     }
 }
@@ -351,7 +351,7 @@ impl ProjectPool {
         }
     }
 
-    /// Transfer the single writer connection to the per-project flusher.
+    /// Transfer the single writer connection to the per-project writer thread.
     #[tracing::instrument(skip(self), fields(project_id = %project_id))]
     pub fn take_writer(&self, project_id: &str) -> Result<Connection> {
         let entry = self.connections.get(project_id).ok_or_else(|| {
@@ -362,11 +362,11 @@ impl ProjectPool {
         })?;
         let mut writer = entry.writer.lock();
         writer.take().ok_or_else(|| {
-            anyhow::anyhow!("writer already owned by flusher for project {project_id}")
+            anyhow::anyhow!("writer already owned by a writer thread for project {project_id}")
         })
     }
 
-    /// Return the writer connection after a flusher exits cleanly.
+    /// Return the writer connection when its writer thread exits.
     #[tracing::instrument(skip(self, writer), fields(project_id = %project_id))]
     pub fn return_writer(&self, project_id: &str, writer: Connection) {
         if let Some(entry) = self.connections.get(project_id) {
@@ -477,8 +477,8 @@ impl ProjectPool {
     }
 
     /// Refresh last_access for an existing project entry so it is not evicted as idle.
-    /// Callers (e.g. long-running per-project flusher tasks) should call this periodically
-    /// to prevent the idle evictor from removing their connection while they are alive.
+    /// The writer thread calls this after each commit, so a project with no
+    /// recent data becomes idle and evictable.
     #[tracing::instrument(skip(self), fields(project_id = %project_id))]
     pub(crate) fn touch_project(&self, project_id: &str) {
         if let Some(mut entry) = self.connections.get_mut(project_id) {
@@ -540,7 +540,7 @@ impl ProjectPool {
                     // maintenance pass. Its implementation runs, in order:
                     // flush_inlined_data, expire_snapshots, merge_adjacent_files,
                     // rewrite_data_files, cleanup_old_files,
-                    // delete_orphaned_files. The flusher has called
+                    // delete_orphaned_files. The writer has called
                     // `CHECKPOINT lake` periodically all along, but production had
                     // persisted only parquet_compression and parquet_version.
                     // Snapshot expiry was disabled, rewrites required 95% of a

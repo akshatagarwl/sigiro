@@ -305,12 +305,17 @@ async fn main() -> Result<()> {
                 Ok(HealthResponse::Ready {
                     alert_webhooks,
                     disk_gate,
-                    rows_dropped_total,
+                    storage,
                 }) => {
                     let mut notes = Vec::new();
-                    if let Some(rows) = rows_dropped_total {
+                    for (project, p) in storage
+                        .iter()
+                        .filter(|(_, p)| p.consecutive_checkpoint_failures > 0)
+                    {
                         notes.push(format!(
-                            "{rows} buffered row(s) dropped after a failed append"
+                            "project {project}: {} failed checkpoint(s), ingest continues (last error {})",
+                            p.consecutive_checkpoint_failures,
+                            p.last_checkpoint_error.as_deref().unwrap_or("unknown")
                         ));
                     }
                     if let Some(gate) = disk_gate {
@@ -529,7 +534,6 @@ async fn run_serve() -> Result<()> {
         Some(config) => sigiro::admin::open_hosted_admin_db(config.catalog_url()).await?,
         None => sigiro::admin::open_local_admin_db(&dir)?,
     };
-    // MsgRouter: handlers send directly to per-project flusher tasks.
     let pool = Arc::new(ProjectPool::new(dir.clone(), 100, storage_mode));
 
     let kernel = probe_kernel_release();
@@ -663,11 +667,11 @@ async fn run_serve() -> Result<()> {
 
     let disk_cap = sigiro::config::max_disk_bytes()?;
     let disk_state = sigiro::inserter::DiskCapacityState::new(disk_cap);
-    let router = Arc::new(MsgRouter::new_with_disk_and_alerts(
+    let router = Arc::new(MsgRouter::new(
         Arc::clone(&pool),
         disk_state,
-        alert_store.clone(),
-    ));
+        Some(alert_store.clone()),
+    )?);
     router.start();
 
     // Evict idle connections every 2 minutes

@@ -63,7 +63,7 @@ pub struct AdminStatusResponse {
 #[derive(Serialize, Deserialize, ToSchema, PartialEq, Eq, Debug)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum HealthResponse {
-    /// Init complete, no dead flushers. Background state that needs an
+    /// Init complete, no dead writers. Background state that needs an
     /// operator but does not make the server unready is reported alongside.
     Ready {
         /// Alert webhook outbox across every project; absent when delivery is off.
@@ -73,16 +73,18 @@ pub enum HealthResponse {
         /// (`tripped`, `healing`, or `stuck` with a `reason`) and the numbers.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         disk_gate: Option<crate::disk_gate::DiskGateHealth>,
-        /// Buffered rows dropped after a failed append and its retry, since
-        /// start (`sigiro_rows_dropped_total`); absent while zero.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        rows_dropped_total: Option<u64>,
+        /// DuckLake maintenance per project: the last `CHECKPOINT`, failures
+        /// since the last success, and current data files and inlined rows.
+        /// A failing checkpoint does not stop ingest; absent while no project
+        /// has a writer yet.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        storage: std::collections::BTreeMap<String, crate::storage_health::ProjectStorage>,
     },
     /// HTTP listener is up but init is still in progress (cold start). Probe
     /// should retry; no operator action required.
     Starting,
-    /// Init complete but a flusher task has panicked. Operator intervention
-    /// required; ingest is silently dropping data.
+    /// Init complete but a writer thread has panicked. Its project's ingest
+    /// fails (with a retryable error) until the next request replaces it.
     Degraded { reason: String },
 }
 
@@ -150,7 +152,7 @@ mod health_response_tests {
         let bare = HealthResponse::Ready {
             alert_webhooks: None,
             disk_gate: None,
-            rows_dropped_total: None,
+            storage: Default::default(),
         };
         assert_eq!(
             serde_json::to_string(&bare).unwrap(),
@@ -168,7 +170,7 @@ mod health_response_tests {
                 last_dead_error: Some("http_401".into()),
             }),
             disk_gate: None,
-            rows_dropped_total: None,
+            storage: Default::default(),
         };
         let json = serde_json::to_string(&dead).unwrap();
         assert_eq!(

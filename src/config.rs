@@ -119,49 +119,75 @@ pub(crate) static MAX_RESULT_ROWS: Envar<usize> =
 pub(crate) static SELF_PROFILING: Envar<String> =
     Envar::on_startup("SIGIRO_SELF_PROFILING", || EnvarDef::Default(String::new()));
 
-/// Flush interval for per-project flusher tasks (seconds). Default: 60s.
-/// Controls how often buffered rows are flushed to DuckDB, even if the row
-/// threshold hasn't been reached. Lower values reduce data-loss window on
-/// crashes; higher values reduce I/O overhead.
+/// Routine DuckLake maintenance interval per project, in seconds. Default:
+/// 3600.
 ///
-/// This timer only decides flush cadence for LOW-traffic projects: under load
-/// `FLUSH_ROW_THRESHOLD` (10k rows) or `FLUSH_BYTE_THRESHOLD` (8 MiB) fires
-/// first, so the buffer stays bounded regardless of this value.
+/// Each project's writer runs `CHECKPOINT lake` (DuckLake's flush of inlined
+/// rows, snapshot expiry, compaction and file cleanup) this often while it is
+/// active, and once more when it goes idle. It runs sooner when the writer
+/// has created more Parquet files than a quarter of the open-files limit
+/// allows, and a failed checkpoint is retried after 30s, doubling up to this
+/// interval. Ingest never waits for or depends on it.
 ///
-/// This was 60 for part of 2026-08-24, on the theory that a 1s timer made quiet
-/// projects emit one tiny Parquet file per second. **Measured on production, it
-/// did not work.** Over a 15-hour window the file rate went from 612-910/day to
-/// 407/day, and average file size moved 11 KiB to 12 KiB. The theory was wrong
-/// about the mechanism: at ~0.5 rows/s telemetry arrives in bursts every few
-/// minutes and the flusher skips entirely when the buffer is empty, so file
-/// count tracks the ARRIVAL PATTERN, not this timer. 60s therefore bought
-/// almost nothing and cost up to 60s before a span became queryable.
-///
-/// Keep this low. The small-file problem is real but this is the wrong lever;
-/// see roadmap #89 for the two that are not (accumulation-triggered
-/// materialization of DuckLake inlined data, and `ducklake_merge_adjacent_files`
-/// compaction). Do not raise it again without measuring file SIZE, not count.
-pub(crate) static FLUSH_INTERVAL_SECS: Envar<u64> =
-    Envar::on_startup("SIGIRO_FLUSH_INTERVAL_SECS", || EnvarDef::Default(1));
+/// There is no flush interval or row threshold: every request is committed
+/// before it is acknowledged, and DuckLake inlines small commits into the
+/// catalog instead of writing a Parquet file per commit (#228). The old 1s
+/// flush timer wrote about 1,750 files of 9 KB an hour on a local install;
+/// raising it did not help, because file count followed the arrival pattern.
+static CHECKPOINT_INTERVAL_SECS: Envar<u64> =
+    Envar::on_startup("SIGIRO_CHECKPOINT_INTERVAL_SECS", || {
+        EnvarDef::Default(3600)
+    });
 
-/// Row count threshold that triggers an immediate flush. Default: 10_000.
-/// When this many rows are buffered across all signal tables, the flusher
-/// writes them to DuckDB without waiting for the timer.
-pub(crate) static FLUSH_ROW_THRESHOLD: Envar<usize> =
-    Envar::on_startup("SIGIRO_FLUSH_ROW_THRESHOLD", || EnvarDef::Default(10_000));
+pub(crate) fn checkpoint_interval_secs() -> Result<u64> {
+    let secs = CHECKPOINT_INTERVAL_SECS.value()?;
+    anyhow::ensure!(
+        secs > 0,
+        "SIGIRO_CHECKPOINT_INTERVAL_SECS must be greater than zero"
+    );
+    Ok(secs)
+}
 
-/// How long `InsertRouter::shutdown_and_wait` gives each project's flusher to
-/// drain before aborting it. Default: 5s.
+/// Decoded ingest bytes that may wait for a commit, across all projects.
+/// Default: 134_217_728 (128 MiB). A request that cannot fit within 2s is
+/// rejected with 503 and `Retry-After`, so a slow disk turns into
+/// backpressure on senders instead of memory growth (#188).
+static INGEST_QUEUE_BYTES: Envar<usize> = Envar::on_startup("SIGIRO_INGEST_QUEUE_BYTES", || {
+    EnvarDef::Default(134_217_728)
+});
+
+/// The share of `SIGIRO_INGEST_QUEUE_BYTES` one project may hold. Default:
+/// 33_554_432 (32 MiB), so one busy project cannot hold the whole budget.
+static INGEST_PROJECT_QUEUE_BYTES: Envar<usize> =
+    Envar::on_startup("SIGIRO_INGEST_PROJECT_QUEUE_BYTES", || {
+        EnvarDef::Default(33_554_432)
+    });
+
+pub(crate) fn ingest_queue_bytes() -> Result<usize> {
+    let bytes = INGEST_QUEUE_BYTES.value()?;
+    anyhow::ensure!(
+        bytes > 0,
+        "SIGIRO_INGEST_QUEUE_BYTES must be greater than zero"
+    );
+    Ok(bytes)
+}
+
+pub(crate) fn ingest_project_queue_bytes() -> Result<usize> {
+    let bytes = INGEST_PROJECT_QUEUE_BYTES.value()?;
+    anyhow::ensure!(
+        bytes > 0,
+        "SIGIRO_INGEST_PROJECT_QUEUE_BYTES must be greater than zero"
+    );
+    Ok(bytes)
+}
+
+/// One deadline, in seconds, for every project's writer to stop at shutdown.
+/// Default: 5.
 ///
-/// The budget is wall-clock but the work is not: the flusher hands a Shutdown
-/// command to a BLOCKING writer thread that drains into DuckDB, and that thread
-/// competes for CPU and disk with everything else on the box. Five seconds is a
-/// sound production budget — raising it globally would make a real shutdown hang
-/// slower to detect — but a loaded machine can exceed it for reasons unrelated
-/// to the code under test.
-///
-/// Operators draining a large buffer onto slow disk have the same problem and
-/// the same lever.
+/// Writers commit the requests already queued, then return their
+/// connections. A writer still running at the deadline has its DuckDB
+/// statement interrupted and is reported; its queued requests were never
+/// acknowledged, so their senders retry them (#192).
 pub(crate) static SHUTDOWN_TIMEOUT_SECS: Envar<u64> =
     Envar::on_startup("SIGIRO_SHUTDOWN_TIMEOUT_SECS", || EnvarDef::Default(5));
 
@@ -172,34 +198,6 @@ pub(crate) fn shutdown_timeout_secs() -> Result<u64> {
         "SIGIRO_SHUTDOWN_TIMEOUT_SECS must be greater than zero"
     );
     Ok(secs)
-}
-
-/// Backpressure policy when the per-project channel is full. Default: "block".
-/// - "block": sender awaits space (preserves data, may slow ingest)
-/// - "drop-newest": drops the incoming message (prevents stalls, loses newest data)
-pub(crate) static BACKPRESSURE_POLICY: Envar<String> =
-    Envar::on_startup("SIGIRO_BACKPRESSURE_POLICY", || {
-        EnvarDef::Default("block".to_string())
-    });
-
-/// Backpressure policy for per-project ingest channels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackpressurePolicy {
-    /// Block the sender until space is available. Guarantees no data loss but may
-    /// cause backpressure on the OTLP client.
-    Block,
-    /// Drop the incoming message when the channel is full.
-    DropNewest,
-}
-
-pub(crate) fn backpressure_policy() -> Result<BackpressurePolicy> {
-    match BACKPRESSURE_POLICY.value()?.as_str() {
-        "block" => Ok(BackpressurePolicy::Block),
-        "drop-newest" => Ok(BackpressurePolicy::DropNewest),
-        other => anyhow::bail!(
-            "unknown SIGIRO_BACKPRESSURE_POLICY: {other}. Expected 'block' or 'drop-newest'"
-        ),
-    }
 }
 
 pub(crate) fn duckdb_threads() -> Result<NonZeroUsize> {
@@ -231,15 +229,6 @@ pub(crate) fn max_result_rows() -> Result<usize> {
     anyhow::ensure!(rows > 0, "SIGIRO_MAX_RESULT_ROWS must be greater than zero");
     Ok(rows)
 }
-
-/// Byte-size threshold that triggers an immediate flush. Default: 8_388_608 (8 MiB).
-/// When the total buffered bytes across all signal tables reaches this limit,
-/// the flusher writes to DuckDB without waiting for the row threshold or timer.
-/// This prevents unbounded memory growth when individual rows are large.
-pub(crate) static FLUSH_BYTE_THRESHOLD: Envar<usize> =
-    Envar::on_startup("SIGIRO_FLUSH_BYTE_THRESHOLD", || {
-        EnvarDef::Default(8_388_608)
-    });
 
 /// Max ingest request body size in bytes (OTLP HTTP `DefaultBodyLimit`, and
 /// the matching gRPC `max_decoding_message_size` — see `crate::ingest`).
@@ -293,27 +282,6 @@ static DISK_SAMPLE_SECONDS: Envar<u64> =
 
 pub fn max_disk_bytes() -> Result<u64> {
     MAX_DISK_BYTES.value().map_err(anyhow::Error::from)
-}
-
-/// Consecutive DuckLake `CHECKPOINT` failures on one project's writer before
-/// its ingest is shed with 503 / `unavailable`.
-///
-/// A failed checkpoint materialises nothing: telemetry keeps accumulating in
-/// the catalog while no Parquet is written. In distributed mode that catalog is
-/// an external Postgres which `SIGIRO_MAX_DISK_BYTES` never samples, so the
-/// disk gate cannot see the growth — sustained checkpoint failure is the only
-/// signal available.
-///
-/// The default of 3 rides out a transient blip (one failed cycle recovers on
-/// the next, and any success resets the count) while still bounding how long a
-/// genuinely wedged storage backend can absorb unmaterialisable writes. Set 0
-/// to disable shedding: failures are still counted and reported by `/health`,
-/// but ingest keeps being accepted.
-pub(crate) static MAX_CHECKPOINT_FAILURES: Envar<u32> =
-    Envar::on_startup("SIGIRO_MAX_CHECKPOINT_FAILURES", || EnvarDef::Default(3));
-
-pub(crate) fn max_checkpoint_failures() -> Result<u32> {
-    MAX_CHECKPOINT_FAILURES.value().map_err(anyhow::Error::from)
 }
 
 pub(crate) fn disk_sample_seconds() -> Result<NonZeroU64> {
